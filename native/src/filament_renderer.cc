@@ -207,16 +207,23 @@ void FilamentRenderer::writeMasks() {
     if (maskMaterial_ == nullptr || masks_.empty()) {
         return;
     }
-    // `masks_` is ordered coarsest first, so a child's quad is drawn after its parent's and
-    // overwrites the stencil where they overlap. That overlap is exactly the region the parent
-    // must not paint.
-    std::uint8_t next = 1;
+    // The reference is the tile's *zoom*, not a serial number, and the masks are banded by zoom
+    // so the coarse ones are drawn first. Iteration order alone is not enough: Filament orders
+    // within a priority band as it likes, so nine masks all at priority zero land in an order
+    // nobody chose -- and the whole scheme depends on a child's quad overwriting its parent's.
+    //
+    // With the zoom as the value, a pixel ends up holding the finest zoom that covers it, and a
+    // drawable testing equal to its own zoom draws only where nothing finer replaced it. Tiles of
+    // one zoom are disjoint, so sharing a value between them costs nothing.
+    std::uint8_t coarsest = 255;
     for (const auto& [tile, matrix] : masks_) {
-        if (next == 255) {
-            break;
-        }
-        const std::uint8_t reference = next++;
+        coarsest = std::min(coarsest, tile.overscaled_z);
+    }
+    for (const auto& [tile, matrix] : masks_) {
+        const std::uint8_t reference = tile.overscaled_z;
         references_[tile] = reference;
+        const auto band = static_cast<std::uint8_t>(
+            std::min<int>(3, static_cast<int>(tile.overscaled_z) - coarsest));
 
         auto* instance = maskMaterial_->createInstance();
         maskInstances_.push_back(instance);
@@ -230,7 +237,7 @@ void FilamentRenderer::writeMasks() {
         filament::RenderableManager::Builder builder(1);
         builder.boundingBox({{0, 0, 0}, {8192, 8192, 8192}})
             .culling(false)
-            .priority(0)
+            .priority(band)
             .material(0, instance)
             .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES, maskVertices_,
                       maskIndices_, 0, 6);
@@ -446,8 +453,10 @@ void FilamentRenderer::issue(const Batch& batch) {
     // any geometry tests against it. Sharing a band with the background left the order between
     // them unspecified, which is not a thing to leave to chance when one writes what the other
     // reads.
+    // Bands four to seven: zero to three belong to the mask pass, which must have written every
+    // clip before any geometry tests against it.
     const auto band = static_cast<std::uint8_t>(
-        1 + std::min<std::uint32_t>(6, batch.layerIndex / 16));
+        4 + std::min<std::uint32_t>(3, batch.layerIndex / 32));
 
     for (std::size_t i = 0; i < batch.geometries.size(); i++) {
         const auto mesh = meshes_.find(batch.geometries[i]);
