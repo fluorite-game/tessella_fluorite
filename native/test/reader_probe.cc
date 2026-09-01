@@ -10,9 +10,11 @@
 //
 //   tessella-reader-probe <ring.bin> <slabs.bin>
 
+#include <tsf/drawlist.h>
 #include <tsf/reader.h>
 
 #include <cstdio>
+#include <vector>
 #include <cstdlib>
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -31,6 +33,7 @@ public:
     }
 
     void onDrawableAdd(const tsf::DrawableAdd& add) override {
+        drawlist.observe(add);
         drawables++;
         vertices += add.vertexCount;
         indices += add.indexCount();
@@ -52,6 +55,9 @@ public:
         if (gone.view) {
             releases++;
         } else {
+            // A release names a view; a remove retires the geometry itself, and only then is
+            // there nothing left to batch.
+            drawlist.forget(gone.id);
             removes++;
         }
     }
@@ -96,6 +102,39 @@ public:
     void onFrameOrder(const tsf::FrameOrder& order) override {
         orders++;
         order_entries += order.entries.size();
+
+        // What §11.7 asks the consumer to do with an order, done here so the count is taken on a
+        // real frame rather than on a fixture shaped to flatter it.
+        const std::vector<tsf::Batch> batches = drawlist.build(order);
+        batch_count += batches.size();
+        for (const tsf::Batch& batch : batches) {
+            batched_geometries += batch.geometries.size();
+            if (batch.uboIndexes.size() != batch.geometries.size()) {
+                batch_slots_mismatched++;
+            }
+            if (tsf::DrawList::isSymbol(batch.builtinShader) && batch.merged()) {
+                symbols_collapsed++;
+            }
+        }
+
+        // The picture a batched frame draws must be the one the order described: same geometries,
+        // same sequence. Flattening the batches back out has to reproduce the order exactly,
+        // minus entries whose geometry this consumer never saw.
+        std::vector<std::uint64_t> flattened;
+        for (const tsf::Batch& batch : batches) {
+            for (std::uint64_t id : batch.geometries) {
+                flattened.push_back(id);
+            }
+        }
+        std::vector<std::uint64_t> expected;
+        for (const tsl_order_entry& entry : order.entries) {
+            if (drawlist.knows(entry.geometry)) {
+                expected.push_back(entry.geometry);
+            }
+        }
+        if (flattened != expected) {
+            order_diverged++;
+        }
         if (order.camera) {
             cameras++;
             // An order delivered without the camera that commits it would mean the epoch pairing
@@ -123,6 +162,18 @@ public:
     std::uint64_t textures = 0, texture_bytes = 0, texture_bad = 0, rects = 0, whole_texture = 0;
     std::uint64_t stencils = 0, stencil_tiles = 0;
     std::uint64_t orders = 0, order_entries = 0, cameras = 0, epoch_mismatch = 0, orphan_orders = 0;
+
+    /// What §11.7's batching produced, and the three ways it could be wrong.
+    tsf::DrawList drawlist;
+    std::uint64_t batch_count = 0, batched_geometries = 0;
+    /// A batch whose slot list does not match its geometry list -- the two are parallel by
+    /// construction, so a mismatch means a run was extended without its UBO index.
+    std::uint64_t batch_slots_mismatched = 0;
+    /// A symbol that got collapsed, which R-9 forbids until the collapse is measured.
+    std::uint64_t symbols_collapsed = 0;
+    /// A frame whose batches, flattened, are not the order that was delivered. The property the
+    /// whole design exists to keep.
+    std::uint64_t order_diverged = 0;
     std::uint64_t declares = 0, undeclares = 0, meshes = 0, mesh_bytes = 0;
 };
 
@@ -171,6 +222,11 @@ int main(int argc, char** argv) {
     std::printf("unresolved_indexes %llu\n", (unsigned long long)sink.unresolved_indexes);
     std::printf("joined_badly %llu\n", (unsigned long long)sink.joined_badly);
     std::printf("removes %llu\n", (unsigned long long)sink.removes);
+    std::printf("batches %llu\n", (unsigned long long)sink.batch_count);
+    std::printf("batched_geometries %llu\n", (unsigned long long)sink.batched_geometries);
+    std::printf("batch_slots_mismatched %llu\n", (unsigned long long)sink.batch_slots_mismatched);
+    std::printf("symbols_collapsed %llu\n", (unsigned long long)sink.symbols_collapsed);
+    std::printf("order_diverged %llu\n", (unsigned long long)sink.order_diverged);
     std::printf("releases %llu\n", (unsigned long long)sink.releases);
     std::printf("ubos %llu\n", (unsigned long long)sink.ubos);
     std::printf("ubo_bytes %llu\n", (unsigned long long)sink.ubo_bytes);
