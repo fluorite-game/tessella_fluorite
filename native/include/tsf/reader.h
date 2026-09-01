@@ -57,6 +57,18 @@ public:
     /// Resolves a slab reference into borrowed bytes, or an empty range.
     [[nodiscard]] Bytes resolve(tsl_slab_ref ref) const noexcept;
 
+    /// Points the reader at the producer's ranges again, keeping everything it has read.
+    ///
+    /// The slab range moves: the producer repacks its table after each frame that allocates, so
+    /// the pointer a consumer was given last frame is not the one to resolve against this frame.
+    /// Safe to do mid-stream because nothing the reader remembers points into either range --
+    /// a geometry announcement's spans are copied out when it arrives, precisely so that a view
+    /// using it many frames later does not read bytes the producer has since reused.
+    void rebind(Region ring, Region slabs) noexcept {
+        ring_ = ring;
+        slabs_ = slabs;
+    }
+
 private:
     void dispatch(const tsl_record_header& header,
                   const std::uint8_t* fixed,
