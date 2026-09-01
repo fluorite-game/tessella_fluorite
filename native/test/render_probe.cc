@@ -13,6 +13,7 @@
 #include <tsf/host.h>
 
 #include <filament/Camera.h>
+#include <math/mat4.h>
 #include <filament/Renderer.h>
 #include <filament/Scene.h>
 #include <filament/SwapChain.h>
@@ -91,9 +92,19 @@ int main(int argc, char** argv) {
     view->setScene(scene);
     view->setCamera(camera);
     view->setViewport({0, 0, W, H});
-    // Identity: the drawable's own matrix carries tile-local to clip, projection included, so a
-    // camera transform here would apply a second one. See fill.mat on `vertexDomain : device`.
-    camera->setProjection(filament::Camera::Projection::ORTHO, -1, 1, -1, 1, -1, 1);
+    // Identity view *and* identity projection, which is load-bearing rather than tidy.
+    //
+    // With `vertexDomain : device` Filament reads `getPosition()` as clip space and turns it into
+    // world with `worldFromClip` -- and then the pipeline projects world back to clip with
+    // viewProj. A material that writes `material.worldPosition` is writing the input to that
+    // second projection, so tessella's matrix (which already carries tile-local all the way to
+    // clip) was being applied and then transformed again by the camera. Every fill landed
+    // somewhere off screen; the background survived only because its own matrix happened to.
+    //
+    // Making viewProj the identity is what reduces `clip = viewProj * worldPosition` to
+    // `clip = matrix * position`, which is the arrangement the capture stream assumes.
+    camera->setCustomProjection(filament::math::mat4(), -1.0, 1.0);
+    camera->setModelMatrix(filament::math::mat4f());
     renderer->setClearOptions({.clearColor = {0.0f, 0.0f, 0.0f, 1.0f}, .clear = true});
 
     // Owned rather than stacked, so it can be released *before* the engine. A stack object here

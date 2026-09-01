@@ -25,7 +25,11 @@ material {
 
 vertex {
     void materialVertex(inout MaterialVertexInputs material) {
-        vec4 clip = materialParams.matrix * getPosition();
+        // Explicitly (x, y, 0, 1). The attribute is a two-component i16 tile coordinate, and
+        // what `getPosition()` puts in z and w for a SHORT2 is Filament's business rather than
+        // something to inherit: a w of zero turns the matrix's translation column into noise and
+        // every triangle comes out covering the viewport.
+        vec4 clip = materialParams.matrix * vec4(getPosition().xy, 0.0, 1.0);
         // The map is flat and depth is off, so the only thing z can do here is clip geometry
         // away: mbgl's matrix carries a depth range of its own and nothing downstream reads it.
         // Pinned inside the volume rather than trusted.
