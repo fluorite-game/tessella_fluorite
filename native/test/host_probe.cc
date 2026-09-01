@@ -89,9 +89,16 @@ void pause_ms(long ms) {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: %s <style.json>\n", argv[0]);
+        std::fprintf(stderr, "usage: %s <style.json> [lat lon zoom]\n", argv[0]);
         return 2;
     }
+    // The camera decides the inventory as much as the style does: a style with symbol and
+    // fill-extrusion layers draws neither when it is pointed at a zoom whose tiles carry no
+    // labels and no buildings. Left as an argument rather than fixed, because "which shaders
+    // does this style need" is not a question a style answers on its own.
+    const double lat = argc > 2 ? std::atof(argv[2]) : 51.505;
+    const double lon = argc > 3 ? std::atof(argv[3]) : -0.11;
+    const double zoom = argc > 4 ? std::atof(argv[4]) : 4.0;
 
     std::FILE* file = std::fopen(argv[1], "rb");
     if (file == nullptr) {
@@ -113,7 +120,7 @@ int main(int argc, char** argv) {
     config.ring_capacity = 1u << 22;
 
     std::string error;
-    std::unique_ptr<tsf::Host> host = tsf::Host::create(config, 51.505, -0.11, 4.0, &error);
+    std::unique_ptr<tsf::Host> host = tsf::Host::create(config, lat, lon, zoom, &error);
     std::printf("created %d\n", host ? 1 : 0);
     if (!host) {
         std::fprintf(stderr, "probe: %s\n", error.c_str());
@@ -138,10 +145,15 @@ int main(int argc, char** argv) {
     // everything -- tiles land one at a time -- and an inventory taken at the first batch would
     // list whichever shaders happened to win the race. These are cheap: a settled map emits
     // nothing and each of these walks no records.
-    for (int settle = 0; settle < 100; settle++) {
+    // Long enough for the *second* wave. Tiles land first and glyphs only after them -- which
+    // glyphs a style needs is a property of the data, so nothing can be asked for until the
+    // tiles that name them have arrived -- and a symbol bucket is withheld until its glyphs are
+    // in hand. A settle that only outlasts the tiles reports a style as needing no symbol
+    // shaders when what it needed was another second.
+    for (int settle = 0; settle < 400; settle++) {
         seen = host->tick(renderer);
         host->retire(seen);
-        pause_ms(2);
+        pause_ms(10);
     }
 
     std::string reason;
