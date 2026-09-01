@@ -16,13 +16,14 @@ material {
     name : tessella_fill,
     shadingModel : unlit,
     blending : transparent,
-    depthWrite : false,
+    depthWrite : true,
     culling : none,
     vertexDomain : device,
     parameters : [
         { type : mat4,   name : matrix },
         { type : float4, name : color },
-        { type : float,  name : opacity }
+        { type : float,  name : opacity },
+        { type : float,  name : order }
     ],
     requires : [ position ]
 }
@@ -33,7 +34,12 @@ vertex {
         // The map is flat and depth is off, so the only thing z can do here is clip geometry
         // away: mbgl's matrix carries a depth range of its own and nothing downstream reads it.
         // Pinned inside the volume rather than trusted.
-        material.worldPosition = vec4(clip.xy, 0.0, clip.w);
+        // Depth carries the order, and the order is front-to-back. `order.rs` says why: the depth
+        // slot runs opposite the style index because mbgl walks its layer list reversed in the
+        // opaque pass, so the topmost layer is drawn *first* and the depth buffer rejects what is
+        // behind it. A consumer that treats that sequence as painter order draws the map upside
+        // down -- which is what put liberty's background over everything.
+        material.worldPosition = vec4(clip.xy, materialParams.order * clip.w, clip.w);
     }
 }
 

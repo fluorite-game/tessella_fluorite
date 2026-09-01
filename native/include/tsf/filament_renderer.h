@@ -73,6 +73,10 @@ public:
     [[nodiscard]] std::uint64_t renderables() const noexcept { return renderables_; }
     /// How many primitives those renderables carry.
     [[nodiscard]] std::uint64_t primitives() const noexcept { return primitives_; }
+    /// Instances made this frame, and how many of them got a paint colour.
+    [[nodiscard]] std::uint64_t made() const noexcept { return made_; }
+    [[nodiscard]] std::uint64_t coloured() const noexcept { return coloured_; }
+
     /// How many materials were loaded.
     [[nodiscard]] std::size_t materials() const noexcept { return materials_.size(); }
 
@@ -103,6 +107,9 @@ private:
 
     std::uint64_t missing_ = 0;
     std::vector<std::int32_t> missingFamilies_;
+    std::uint64_t ordered_ = 0;
+    std::uint64_t made_ = 0;
+    std::uint64_t coloured_ = 0;
     std::uint64_t renderables_ = 0;
     std::uint64_t primitives_ = 0;
 };

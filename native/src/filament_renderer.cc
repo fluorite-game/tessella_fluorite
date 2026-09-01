@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -49,6 +50,27 @@ std::int32_t familyOf(const std::string& stem) {
 constexpr std::uint32_t kDrawableSlot = 2;
 /// And which carries the layer's evaluated paint.
 constexpr std::uint32_t kPropsSlot = 5;
+
+/// Where a family's evaluated-paint block keeps its opacity.
+///
+/// Every one of them opens with `color[4]`, which is why the colour read is family-agnostic. What
+/// follows differs: background is colour then opacity, fill puts `outline_color[4]` between them.
+/// Reading fill's layout out of a background block overruns a 32-byte buffer, and the size check
+/// that caught it was silently costing the background its colour -- twelve of seventy-seven
+/// instances drew fully transparent.
+std::size_t opacityOffset(std::int32_t family, std::size_t bytes) {
+    switch (family) {
+        case TSL_BUILTIN_FILL_SHADER:
+        case TSL_BUILTIN_FILL_OUTLINE_SHADER:
+            return offsetof(tsl_fill_evaluated_props_ubo, opacity);
+        case TSL_BUILTIN_BACKGROUND_SHADER:
+            return offsetof(tsl_background_props_ubo, opacity);
+        default:
+            // Unknown layouts still open with a colour; the opacity is left at one rather than
+            // read from an offset nothing has checked.
+            return bytes;
+    }
+}
 
 /// Filament's attribute type for what the wire declares.
 ///
@@ -132,6 +154,9 @@ void FilamentRenderer::beginFrame(std::uint64_t) {
     clearScene();
     renderables_ = 0;
     primitives_ = 0;
+    made_ = 0;
+    coloured_ = 0;
+    ordered_ = 0;
 }
 
 void FilamentRenderer::endFrame(std::uint64_t) {}
@@ -284,6 +309,21 @@ void FilamentRenderer::onBatch(const Batch& batch) {
     for (std::size_t i = 0; i < parts.size(); i++) {
         auto* instance = material->second->createInstance();
         instances_.push_back(instance);
+        made_++;
+        // Depth from the *layer index*, not from arrival order.
+        //
+        // The order the producer sends is neither ascending nor descending: the opaque pass comes
+        // first, then the translucent one front-to-back, so liberty arrives as background, 83, 19,
+        // 18 ... 2. Reproducing that sequence with blending draws the map inside out. The layer
+        // index is the painter order by definition, so it is what decides depth: a higher layer
+        // sits nearer and wins the depth test against everything below it.
+        //
+        // Larger is *nearer*: Filament runs a reversed depth buffer, so the bottom layer wants the
+        // smallest value. Getting this backwards puts the background nearest, where it wins every
+        // depth test and the map renders as one flat sheet of #f8f4f0 -- which is exactly what it
+        // did, through six other changes that could not shift it.
+        instance->setParameter(
+            "order", 0.05f + static_cast<float>(batch.layerIndex) * (0.9f / 256.0f));
 
         if (layer != uniforms_.end()) {
             const auto drawables = layer->second.find(kDrawableSlot);
@@ -302,14 +342,20 @@ void FilamentRenderer::onBatch(const Batch& batch) {
                 }
             }
             const auto props = layer->second.find(kPropsSlot);
-            if (props != layer->second.end() &&
-                props->second.size() >= sizeof(tsl_fill_evaluated_props_ubo)) {
-                tsl_fill_evaluated_props_ubo paint{};
-                std::memcpy(&paint, props->second.data(), sizeof paint);
+            if (props != layer->second.end() && props->second.size() >= sizeof(float) * 4) {
+                float colour[4] = {0, 0, 0, 0};
+                std::memcpy(colour, props->second.data(), sizeof colour);
+                coloured_++;
                 instance->setParameter(
-                    "color", filament::math::float4{paint.color[0], paint.color[1],
-                                                    paint.color[2], paint.color[3]});
-                instance->setParameter("opacity", paint.opacity);
+                    "color",
+                    filament::math::float4{colour[0], colour[1], colour[2], colour[3]});
+
+                float opacity = 1.0f;
+                const std::size_t at = opacityOffset(batch.builtinShader, props->second.size());
+                if (at + sizeof(float) <= props->second.size()) {
+                    std::memcpy(&opacity, props->second.data() + at, sizeof opacity);
+                }
+                instance->setParameter("opacity", opacity);
             }
         }
 
@@ -324,6 +370,7 @@ void FilamentRenderer::onBatch(const Batch& batch) {
     scene_->addEntity(entity);
     entities_.push_back(entity);
     renderables_++;
+    ordered_++;
     primitives_ += parts.size();
 }
 

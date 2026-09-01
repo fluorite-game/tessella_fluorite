@@ -154,6 +154,8 @@ int main(int argc, char** argv) {
     std::printf("readiness %d\n", (int)host->readiness(&reason));
     std::printf("renderables %llu\n", (unsigned long long)backend.renderables());
     std::printf("primitives %llu\n", (unsigned long long)backend.primitives());
+    std::printf("instances_made %llu\n", (unsigned long long)backend.made());
+    std::printf("instances_coloured %llu\n", (unsigned long long)backend.coloured());
     std::printf("missing_batches %llu\n", (unsigned long long)backend.missing());
     for (std::int32_t family : backend.missingFamilies()) {
         std::printf("missing_family_%d 1\n", family);
