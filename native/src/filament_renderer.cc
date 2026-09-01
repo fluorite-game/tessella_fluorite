@@ -219,8 +219,17 @@ void FilamentRenderer::writeMasks() {
     for (const auto& [tile, matrix] : masks_) {
         coarsest = std::min(coarsest, tile.overscaled_z);
     }
+    // A reference *per tile*, not per zoom. Keying it by zoom is vacuous whenever the cover is one
+    // zoom -- every mask writes the same value, every drawable tests for it, and the test passes
+    // everywhere. Per tile it does the work it exists for: a tile's geometry runs well past its
+    // own edge into the buffer that hides seams, and the mask is what stops that overhang painting
+    // over the neighbour it overlaps.
+    std::uint8_t next = 1;
     for (const auto& [tile, matrix] : masks_) {
-        const std::uint8_t reference = tile.overscaled_z;
+        if (next == 255) {
+            break;
+        }
+        const std::uint8_t reference = next++;
         references_[tile] = reference;
         const auto band = static_cast<std::uint8_t>(
             std::min<int>(3, static_cast<int>(tile.overscaled_z) - coarsest));
@@ -297,6 +306,7 @@ void FilamentRenderer::beginFrame(std::uint64_t) {
     overZooms_.clear();
     slotsThisFrame_.clear();
     placements_.clear();
+    scales_.clear();
     sharedSlots_ = 0;
     drawnThisFrame_.clear();
     passes_.clear();
@@ -499,6 +509,7 @@ void FilamentRenderer::issue(const Batch& batch) {
         std::memcpy(&transform, drawables->second.data() + at, sizeof(float) * 16);
 
         placements_.insert({transform[3][0], transform[3][1], transform[0][0]});
+        scales_[transform[0][0]]++;
         // One instance per (layer, shader, tile slot). Keyed by the tile because the scissor is a
         // property of the instance and the clip is a property of the tile; still bounded by the
         // cover rather than one per primitive per frame.

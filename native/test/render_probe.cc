@@ -178,6 +178,9 @@ int main(int argc, char** argv) {
     std::printf("placements %zu\n", backend.placements());
     std::printf("shared_slots %llu\n", (unsigned long long)backend.sharedSlots());
     std::printf("unmasked %llu\n", (unsigned long long)backend.unmasked());
+    for (const auto& [scale, n] : backend.scales()) {
+        std::printf("scale %.5f %llu\n", scale, (unsigned long long)n);
+    }
     std::printf("masked %llu\n", (unsigned long long)backend.masked());
     std::printf("scissored %llu\n", (unsigned long long)backend.scissored());
     std::printf("unplaced %llu\n", (unsigned long long)backend.unplaced());

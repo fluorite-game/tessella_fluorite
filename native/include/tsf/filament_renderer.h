@@ -123,6 +123,10 @@ public:
     /// Drawables whose tile matched no mask, so nothing clipped them.
     [[nodiscard]] std::uint64_t unmasked() const noexcept { return unmasked_; }
 
+    /// How many drawables were placed at each matrix scale. One scale means one zoom; several
+    /// means drawables are carrying other tiles' matrices.
+    [[nodiscard]] const std::map<float, std::uint64_t>& scales() const noexcept { return scales_; }
+
     /// How many clip masks were written this frame.
     [[nodiscard]] std::uint64_t masked() const noexcept { return masked_; }
 
@@ -207,6 +211,7 @@ private:
     std::set<std::pair<std::uint32_t, std::uint32_t>> slotsThisFrame_;
     std::uint64_t sharedSlots_ = 0;
     std::set<std::tuple<float, float, float>> placements_;
+    std::map<float, std::uint64_t> scales_;
     std::unordered_set<std::uint64_t> drawnThisFrame_;
     std::uint64_t redrawn_ = 0;
     std::map<std::uint8_t, std::uint64_t> passes_;
