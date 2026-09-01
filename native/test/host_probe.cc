@@ -117,7 +117,10 @@ int main(int argc, char** argv) {
     config.style_json = style.c_str();
     config.width = 1024;
     config.height = 768;
-    config.ring_capacity = 1u << 22;
+    // A style's first frame is as big as the style. liberty draws a hundred and eleven layers
+    // over two dozen tiles, and four megabytes does not hold it -- see TSF_PROBE_RING_MB.
+    const int ringMb = std::getenv("TSF_PROBE_RING_MB") ? std::atoi(std::getenv("TSF_PROBE_RING_MB")) : 4;
+    config.ring_capacity = (size_t)ringMb << 20;
 
     std::string error;
     std::unique_ptr<tsf::Host> host = tsf::Host::create(config, lat, lon, zoom, &error);
@@ -132,13 +135,23 @@ int main(int argc, char** argv) {
 
     // The loop a consumer runs: tick, draw what came, release what the driver is done with. This
     // one is done the moment the call returns, because it copied nothing and holds nothing.
-    for (int spin = 0; spin < 600; spin++) {
+    // A deadline rather than a spin count, because how long a style takes to draw its first
+    // frame is a property of the style. demotiles is eight layers over small tiles and lands in
+    // well under a second; OpenFreeMap's liberty is a hundred and eleven layers over tiles of
+    // several hundred kilobytes each, and a spin count tuned for the first reports the second as
+    // drawing nothing at all.
+    const int budgetMs = std::getenv("TSF_PROBE_BUDGET_MS")
+                             ? std::atoi(std::getenv("TSF_PROBE_BUDGET_MS"))
+                             : 60000;
+    int waited = 0;
+    while (waited < budgetMs) {
         seen = host->tick(renderer);
         host->retire(seen);
         if (renderer.batches > 0 && host->readiness() == TESSELLA_READY) {
             break;
         }
         pause_ms(5);
+        waited += 5;
     }
 
     // Then kept going. The first frame that draws anything is not the frame that draws
@@ -150,7 +163,7 @@ int main(int argc, char** argv) {
     // tiles that name them have arrived -- and a symbol bucket is withheld until its glyphs are
     // in hand. A settle that only outlasts the tiles reports a style as needing no symbol
     // shaders when what it needed was another second.
-    for (int settle = 0; settle < 400; settle++) {
+    for (int settle = 0; settle < 600; settle++) {
         seen = host->tick(renderer);
         host->retire(seen);
         pause_ms(10);
