@@ -174,6 +174,13 @@ int main(int argc, char** argv) {
     std::printf("shader_permutations %llu\n", (unsigned long long)permutations);
     for (const auto& entry : renderer.shaders) {
         std::printf("shader_%d %zu\n", entry.first, entry.second.size());
+        // The keys themselves, not just how many. A permutation key is a bitmask over the
+        // family's attribute ids saying which paint properties reached the shader as uniforms
+        // rather than as vertex attributes -- so its *value* is what says whether two styles need
+        // the same material or two different ones.
+        for (std::uint64_t key : entry.second) {
+            std::printf("permutation_%d_%llu 1\n", entry.first, (unsigned long long)key);
+        }
     }
     if (!reason.empty()) {
         std::fprintf(stderr, "probe: readiness reason: %s\n", reason.c_str());
