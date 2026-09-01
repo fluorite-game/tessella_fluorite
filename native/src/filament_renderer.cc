@@ -605,6 +605,30 @@ void FilamentRenderer::issue(const Batch& batch) {
                 instance->setParameter("ratio", ratio);
                 instance->setParameter("matrix", transform);
             }
+
+            // An extrusion needs its base and height, its light, and the height factor that turns
+            // metres into the tile's own units -- the last from the drawable block, the rest from
+            // the layer's paint.
+            if (batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER) {
+                tsl_fill_extrusion_props_ubo paint{};
+                if (props->second.size() >= sizeof paint) {
+                    std::memcpy(&paint, props->second.data(), sizeof paint);
+                }
+                instance->setParameter("base", paint.base);
+                instance->setParameter("height", paint.height);
+                instance->setParameter("lightIntensity", paint.light_intensity);
+                instance->setParameter(
+                    "lightColor", filament::math::float3{paint.light_color[0],
+                                                         paint.light_color[1],
+                                                         paint.light_color[2]});
+
+                tsl_fill_extrusion_drawable_ubo block{};
+                if (at + sizeof block <= drawables->second.size()) {
+                    std::memcpy(&block, drawables->second.data() + at, sizeof block);
+                }
+                instance->setParameter("heightFactor", block.height_factor);
+                instance->setParameter("matrix", transform);
+            }
         }
 
         // The tile's own clip, as a stencil test. A parent's geometry passes only where the
@@ -681,10 +705,10 @@ void FilamentRenderer::issue(const Batch& batch) {
         // A line places itself: it must extrude in tile units before the tile-to-clip transform,
         // so it takes the matrix as a parameter and its renderable carries the identity. Everything
         // else lets Filament apply the transform, which is cheaper and needs no vertex hook.
+        const bool placesItself = batch.builtinShader == TSL_BUILTIN_LINE_SHADER ||
+                                  batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER;
         transforms.setTransform(transforms.getInstance(entity),
-                                batch.builtinShader == TSL_BUILTIN_LINE_SHADER
-                                    ? filament::math::mat4f()
-                                    : transform);
+                                placesItself ? filament::math::mat4f() : transform);
 
         scene_->addEntity(entity);
         entities_.push_back(entity);
