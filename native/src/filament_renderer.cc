@@ -125,6 +125,10 @@ FilamentRenderer::FilamentRenderer(filament::Engine* engine,
 
 FilamentRenderer::~FilamentRenderer() {
     clearScene();
+    for (auto& [key, instance] : instances_) {
+        engine_->destroy(instance);
+    }
+    instances_.clear();
     for (auto& [id, mesh] : meshes_) {
         engine_->destroy(mesh.vertices);
         engine_->destroy(mesh.indices);
@@ -141,10 +145,6 @@ void FilamentRenderer::clearScene() {
         utils::EntityManager::get().destroy(entity);
     }
     entities_.clear();
-    for (filament::MaterialInstance* instance : instances_) {
-        engine_->destroy(instance);
-    }
-    instances_.clear();
 }
 
 void FilamentRenderer::beginFrame(std::uint64_t) {
@@ -155,7 +155,6 @@ void FilamentRenderer::beginFrame(std::uint64_t) {
     pending_.clear();
     renderables_ = 0;
     primitives_ = 0;
-    made_ = 0;
     coloured_ = 0;
     ordered_ = 0;
 }
@@ -179,9 +178,9 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
         return;
     }
 
-    auto builder = filament::VertexBuffer::Builder()
-                       .vertexCount(static_cast<std::uint32_t>(add.vertexCount))
-                       .bufferCount(static_cast<std::uint8_t>(usable.size()));
+    filament::VertexBuffer::Builder builder;
+    builder.vertexCount(static_cast<std::uint32_t>(add.vertexCount))
+        .bufferCount(static_cast<std::uint8_t>(usable.size()));
     for (std::size_t i = 0; i < usable.size(); i++) {
         filament::VertexBuffer::AttributeType type{};
         attributeType(usable[i]->desc.data_type, type);
@@ -273,6 +272,16 @@ void FilamentRenderer::endFrame(std::uint64_t) {
 }
 
 void FilamentRenderer::issue(const Batch& batch) {
+    // Diagnostics: draw one layer, or drop the background, so a frame can be compared against the
+    // oracle rendering the same subset.
+    if (const char* only = std::getenv("TSF_ONLY_LAYER")) {
+        if (batch.layerIndex != static_cast<std::uint32_t>(std::atoi(only))) {
+            return;
+        }
+    }
+    if (std::getenv("TSF_SKIP_BACKGROUND") && batch.builtinShader == TSL_BUILTIN_BACKGROUND_SHADER) {
+        return;
+    }
     const auto material = materials_.find(batch.builtinShader);
     if (material == materials_.end()) {
         missing_++;
@@ -299,7 +308,10 @@ void FilamentRenderer::issue(const Batch& batch) {
 
     const auto layer = uniforms_.find(static_cast<std::int32_t>(batch.layerIndex));
 
-    auto builder = filament::RenderableManager::Builder(parts.size());
+    // Constructed, not copied out of a temporary. `Builder`'s chaining methods return a
+    // reference, so `auto builder = Builder(n).boundingBox(...)` copies the builder while the
+    // temporary it refers to dies at the end of the statement.
+    filament::RenderableManager::Builder builder(parts.size());
     // Tile-local coordinates, so the box is the tile. Culling is off because the matrix that
     // places this geometry lives in the material rather than in a transform Filament can see.
     //
@@ -328,15 +340,16 @@ void FilamentRenderer::issue(const Batch& batch) {
     // box is used only for sorting here: culling is off, and the geometry's real position comes
     // from the drawable's own matrix in the shader.
     const float depth = static_cast<float>(batch.layerIndex) - 256.0f;
-    builder
-        .boundingBox({{0, 0, depth}, {8192, 8192, 1}})
-        .culling(false)
-        .priority(band);
+    builder.boundingBox({{0, 0, depth}, {8192, 8192, 1}}).culling(false).priority(band);
 
     for (std::size_t i = 0; i < parts.size(); i++) {
-        auto* instance = material->second->createInstance();
-        instances_.push_back(instance);
-        made_++;
+        const auto key = std::make_pair(batch.layerIndex, batch.builtinShader);
+        auto found = instances_.find(key);
+        if (found == instances_.end()) {
+            found = instances_.emplace(key, material->second->createInstance()).first;
+            made_++;
+        }
+        auto* instance = found->second;
         // Depth from the *layer index*, not from arrival order.
         //
         // The order the producer sends is neither ascending nor descending: the opaque pass comes

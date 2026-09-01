@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <string>
+#include <map>
 #include <unordered_map>
 #include <vector>
 
@@ -112,9 +113,15 @@ private:
     /// first, which is the painter order blending needs.
     std::vector<Batch> pending_;
 
-    /// Everything created for the frame being built, torn down at the next `beginFrame`.
+    /// Entities for the frame being built, torn down at the next `beginFrame`.
     std::vector<utils::Entity> entities_;
-    std::vector<filament::MaterialInstance*> instances_;
+
+    /// One instance per (layer, shader), kept across frames.
+    ///
+    /// Not one per primitive per frame: a frame of liberty makes seventy-seven, and rebuilding
+    /// them every tick churns thousands of instances through the engine for parameters that have
+    /// not changed. A layer's paint is a property of the layer, so the instance is too.
+    std::map<std::pair<std::uint32_t, std::int32_t>, filament::MaterialInstance*> instances_;
 
     std::uint64_t missing_ = 0;
     std::vector<std::int32_t> missingFamilies_;

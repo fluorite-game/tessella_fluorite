@@ -164,6 +164,18 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "probe: %s\n", reason.c_str());
     }
 
+    // Rendered once before the capture. A headless swap chain hands out buffers in rotation, and
+    // reading back on the very first frame returns one nothing has drawn into -- which produced a
+    // constant image that did not move when the scene, the materials, or even the clear colour
+    // changed, and cost a long detour before it was noticed.
+    for (int warm = 0; warm < 2; warm++) {
+        if (renderer->beginFrame(swapChain)) {
+            renderer->render(view);
+            renderer->endFrame();
+        }
+        engine->flushAndWait();
+    }
+
     std::vector<uint8_t> pixels(W * H * 4);
     filament::backend::PixelBufferDescriptor pb(pixels.data(), pixels.size(),
                                                 filament::backend::PixelDataFormat::RGBA,
