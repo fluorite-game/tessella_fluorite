@@ -87,6 +87,9 @@ public:
         return zooms_;
     }
 
+    /// Drawables skipped because their matrix slot was past the end of the layer's buffer.
+    [[nodiscard]] std::uint64_t unplaced() const noexcept { return unplaced_; }
+
     /// How many materials were loaded.
     [[nodiscard]] std::size_t materials() const noexcept { return materials_.size(); }
 
@@ -134,6 +137,7 @@ private:
     std::vector<std::int32_t> missingFamilies_;
     std::map<std::uint8_t, std::uint64_t> zooms_;
     std::uint64_t ordered_ = 0;
+    std::uint64_t unplaced_ = 0;
     std::uint64_t made_ = 0;
     std::uint64_t coloured_ = 0;
     std::uint64_t renderables_ = 0;

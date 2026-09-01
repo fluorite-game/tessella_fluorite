@@ -105,6 +105,11 @@ int main(int argc, char** argv) {
     // `clip = matrix * position`, which is the arrangement the capture stream assumes.
     camera->setCustomProjection(filament::math::mat4(), -1.0, 1.0);
     camera->setModelMatrix(filament::math::mat4f());
+    // No post-processing. Filament tone maps for photographic rendering by default -- ACES, plus
+    // bloom and dithering -- and a map is not a photograph: the style already says exactly what
+    // colour each thing is, so anything applied on top of that is a deviation from the oracle by
+    // construction. It is what left the first correct frame looking bleached.
+    view->setPostProcessingEnabled(false);
     renderer->setClearOptions({.clearColor = {0.0f, 0.0f, 0.0f, 1.0f}, .clear = true});
 
     // Owned rather than stacked, so it can be released *before* the engine. A stack object here
@@ -159,6 +164,7 @@ int main(int argc, char** argv) {
     for (const auto& [z, n] : backend.zooms()) {
         std::printf("zoom_%u %llu\n", (unsigned)z, (unsigned long long)n);
     }
+    std::printf("unplaced %llu\n", (unsigned long long)backend.unplaced());
     std::printf("missing_batches %llu\n", (unsigned long long)backend.missing());
     for (std::int32_t family : backend.missingFamilies()) {
         std::printf("missing_family_%d 1\n", family);

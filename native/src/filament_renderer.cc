@@ -49,6 +49,29 @@ std::int32_t familyOf(const std::string& stem) {
 /// own layout rather than a global numbering. A family is always known here, so the collision
 /// costs nothing.
 constexpr std::uint32_t kDrawableSlot = 2;
+
+/// What separates consecutive drawable blocks in a layer's consolidated buffer.
+///
+/// The *union's* stride, not the block's. `ubo.rs` says why, and predicted this bug exactly: a
+/// plain fill writes an 80-byte `FillDrawableUBO` into a 96-byte slot because the pattern variants
+/// are larger and set the stride for everyone. Reading at `sizeof` puts every entry after the
+/// first at the wrong offset -- a layer whose tiles are drawn with each other's matrices, which is
+/// plausible-looking output no size check catches, and duly was not caught until the picture
+/// showed one tile's streets where four tiles' should have been.
+std::size_t drawableStride(std::int32_t family) {
+    switch (family) {
+        case TSL_BUILTIN_BACKGROUND_SHADER:
+        case TSL_BUILTIN_BACKGROUND_PATTERN_SHADER:
+            return TSL_STRIDE_BACKGROUND_DRAWABLE_UNION_UBO;
+        case TSL_BUILTIN_LINE_SHADER:
+        case TSL_BUILTIN_LINE_GRADIENT_SHADER:
+        case TSL_BUILTIN_LINE_PATTERN_SHADER:
+        case TSL_BUILTIN_LINE_SDFSHADER:
+            return TSL_STRIDE_LINE_DRAWABLE_UNION_UBO;
+        default:
+            return TSL_STRIDE_FILL_DRAWABLE_UNION_UBO;
+    }
+}
 /// And which carries the layer's evaluated paint.
 constexpr std::uint32_t kPropsSlot = 5;
 
@@ -158,6 +181,7 @@ void FilamentRenderer::beginFrame(std::uint64_t) {
     primitives_ = 0;
     coloured_ = 0;
     ordered_ = 0;
+    unplaced_ = 0;
     zooms_.clear();
 }
 
@@ -341,18 +365,24 @@ void FilamentRenderer::issue(const Batch& batch) {
         }
 
         zooms_[mesh->second.zoom]++;
-        filament::math::mat4f transform(1.0f);
-        if (layer != uniforms_.end()) {
-            const auto drawables = layer->second.find(kDrawableSlot);
-            if (drawables != layer->second.end()) {
-                const std::size_t stride = sizeof(tsl_fill_drawable_ubo);
-                const std::size_t at = static_cast<std::size_t>(batch.uboIndexes[i]) * stride;
-                if (at + sizeof(float) * 16 <= drawables->second.size()) {
-                    std::memcpy(&transform, drawables->second.data() + at, sizeof(float) * 16);
-
-                }
-            }
+        // The matrix this drawable is placed by. Skipped rather than defaulted when it cannot be
+        // read: identity is not a neutral choice here -- it puts tile-local coordinates straight
+        // into clip space, where they cover the viewport and look like a bug somewhere else.
+        if (layer == uniforms_.end()) {
+            continue;
         }
+        const auto drawables = layer->second.find(kDrawableSlot);
+        if (drawables == layer->second.end()) {
+            continue;
+        }
+        const std::size_t at =
+            static_cast<std::size_t>(batch.uboIndexes[i]) * drawableStride(batch.builtinShader);
+        if (at + sizeof(float) * 16 > drawables->second.size()) {
+            unplaced_++;
+            continue;
+        }
+        filament::math::mat4f transform;
+        std::memcpy(&transform, drawables->second.data() + at, sizeof(float) * 16);
 
         filament::RenderableManager::Builder builder(1);
         builder.boundingBox({{0, 0, 0}, {8192, 8192, 8192}})
