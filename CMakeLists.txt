@@ -48,7 +48,7 @@ if (NOT TESSELLA_LIB)
 endif ()
 
 add_library(tsf_consumer STATIC
-        native/src/consumer.cc)
+        native/src/reader.cc)
 
 target_include_directories(tsf_consumer
         PUBLIC
