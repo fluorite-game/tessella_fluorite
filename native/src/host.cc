@@ -35,6 +35,7 @@ public:
     }
 
     void onUboUpdate(const UboUpdate& update) override { renderer_.onUniforms(update); }
+    void onStencilTiles(const StencilTiles& tiles) override { renderer_.onStencilTiles(tiles); }
     void onTextureUpdate(const TextureUpdate& update) override { renderer_.onTexture(update); }
 
     void onFrameOrder(const FrameOrder& order) override {

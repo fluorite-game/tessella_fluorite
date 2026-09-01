@@ -72,6 +72,7 @@ public:
     /// Builds one batch into the scene. Called from `endFrame`, in painter order.
     void issue(const Batch& batch);
     void onUniforms(const UboUpdate& update) override;
+    void onStencilTiles(const StencilTiles& tiles) override;
 
     /// How many batches were skipped for want of a material.
     [[nodiscard]] std::uint64_t missing() const noexcept { return missing_; }
@@ -119,6 +120,12 @@ public:
     /// per tile of the cover if the cover is what is being drawn.
     [[nodiscard]] std::size_t placements() const noexcept { return placements_.size(); }
 
+    /// Drawables whose tile matched no mask, so nothing clipped them.
+    [[nodiscard]] std::uint64_t unmasked() const noexcept { return unmasked_; }
+
+    /// How many clip masks were written this frame.
+    [[nodiscard]] std::uint64_t masked() const noexcept { return masked_; }
+
     /// How many drawables were clipped to their own tile.
     [[nodiscard]] std::uint64_t scissored() const noexcept { return scissored_; }
 
@@ -134,12 +141,32 @@ private:
         std::int32_t layerIndex = -1;
         std::uint8_t zoom = 0;
         std::uint8_t overscaledZoom = 0;
+        TileID tile{};
     };
 
     /// One layer's uniform blocks, by slot.
     using Blocks = std::unordered_map<std::uint32_t, std::vector<std::uint8_t>>;
 
     void clearScene();
+
+    /// Draws the clip masks for this frame and assigns each tile its stencil reference.
+    ///
+    /// Coarse first, so a child's mask overwrites its parent's where they overlap and the parent
+    /// is left owning only what the child does not cover.
+    void writeMasks();
+
+    /// The stencil reference a tile's geometry tests against, or zero if it has no mask.
+    [[nodiscard]] std::uint8_t referenceFor(const TileID& tile) const;
+
+    /// The mask set the producer named, newest wins, keyed by tile.
+    std::map<TileID, filament::math::mat4f> masks_;
+    std::map<TileID, std::uint8_t> references_;
+    filament::Material* maskMaterial_ = nullptr;
+    std::vector<filament::MaterialInstance*> maskInstances_;
+    filament::VertexBuffer* maskVertices_ = nullptr;
+    filament::IndexBuffer* maskIndices_ = nullptr;
+    std::uint64_t masked_ = 0;
+    std::uint64_t unmasked_ = 0;
 
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;

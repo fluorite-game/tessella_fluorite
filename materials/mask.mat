@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The clip mask. Writes the stencil buffer and nothing else.
+//
+// One quad per renderable tile, drawn coarse-to-fine so a child's mask overwrites its parent's
+// where the two overlap. A tile's geometry is then drawn testing equal to its own reference, so a
+// parent paints only where no child replaced it -- which is the whole of mbgl's arrangement, and
+// what stops an ancestor compositing over the children that superseded it.
+material {
+    name : tessella_mask,
+    shadingModel : unlit,
+    blending : opaque,
+    culling : none,
+    parameters : [
+        { type : float4, name : color },
+        { type : float,  name : opacity }
+    ],
+    requires : [ position ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = vec4(0.0);
+    }
+}

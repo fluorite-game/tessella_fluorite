@@ -48,6 +48,13 @@ public:
 
     /// Pixels for a texture, whole or in rects.
     virtual void onTexture(const TextureUpdate& /*update*/) {}
+
+    /// The tiles a layer group wants clipped to.
+    ///
+    /// §11.7's clip obligation. A parent tile is drawn to fill what its children have not covered
+    /// yet, and this is the mask that confines it to that region -- without it the parent paints
+    /// its whole extent, over the children that replaced it.
+    virtual void onStencilTiles(const StencilTiles& /*tiles*/) {}
 };
 
 /// Owns a map and turns its ticks into batched draws.

@@ -148,6 +148,100 @@ FilamentRenderer::FilamentRenderer(filament::Engine* engine,
             materials_[family] = material;
         }
     }
+
+    // The mask material is not a family: it draws the clip quads and writes only the stencil.
+    const auto maskPath = std::filesystem::path(materialDir) / "mask.filamat";
+    if (std::filesystem::exists(maskPath, ec)) {
+        std::ifstream file(maskPath, std::ios::binary);
+        const std::vector<std::uint8_t> package((std::istreambuf_iterator<char>(file)),
+                                                std::istreambuf_iterator<char>());
+        if (!package.empty()) {
+            maskMaterial_ =
+                filament::Material::Builder().package(package.data(), package.size()).build(*engine_);
+        }
+    }
+
+    // One unit quad, reused by every mask: the tile's matrix is what places it.
+    const std::int16_t quad[8] = {0, 0, 8192, 0, 8192, 8192, 0, 8192};
+    const std::uint16_t tris[6] = {0, 1, 2, 0, 2, 3};
+    maskVertices_ = filament::VertexBuffer::Builder()
+                        .vertexCount(4)
+                        .bufferCount(1)
+                        .attribute(filament::VertexAttribute::POSITION, 0,
+                                   filament::VertexBuffer::AttributeType::SHORT2, 0,
+                                   sizeof(std::int16_t) * 2)
+                        .build(*engine_);
+    auto* qv = static_cast<std::uint8_t*>(std::malloc(sizeof quad));
+    std::memcpy(qv, quad, sizeof quad);
+    maskVertices_->setBufferAt(*engine_, 0,
+                               filament::VertexBuffer::BufferDescriptor(
+                                   qv, sizeof quad,
+                                   [](void* b, std::size_t, void*) { std::free(b); }));
+    maskIndices_ = filament::IndexBuffer::Builder()
+                       .indexCount(6)
+                       .bufferType(filament::IndexBuffer::IndexType::USHORT)
+                       .build(*engine_);
+    auto* qi = static_cast<std::uint8_t*>(std::malloc(sizeof tris));
+    std::memcpy(qi, tris, sizeof tris);
+    maskIndices_->setBuffer(*engine_, filament::IndexBuffer::BufferDescriptor(
+                                          qi, sizeof tris,
+                                          [](void* b, std::size_t, void*) { std::free(b); }));
+}
+
+void FilamentRenderer::onStencilTiles(const StencilTiles& tiles) {
+    for (const tsl_stencil_tile& tile : tiles.tiles) {
+        TileID id{tile.tile.z, tile.tile.x, tile.tile.y, tile.tile.wrap, tile.tile.overscaled_z};
+        filament::math::mat4f matrix;
+        std::memcpy(&matrix, tile.matrix, sizeof matrix);
+        masks_[id] = matrix;
+    }
+}
+
+std::uint8_t FilamentRenderer::referenceFor(const TileID& tile) const {
+    const auto found = references_.find(tile);
+    return found == references_.end() ? 0 : found->second;
+}
+
+void FilamentRenderer::writeMasks() {
+    references_.clear();
+    if (maskMaterial_ == nullptr || masks_.empty()) {
+        return;
+    }
+    // `masks_` is ordered coarsest first, so a child's quad is drawn after its parent's and
+    // overwrites the stencil where they overlap. That overlap is exactly the region the parent
+    // must not paint.
+    std::uint8_t next = 1;
+    for (const auto& [tile, matrix] : masks_) {
+        if (next == 255) {
+            break;
+        }
+        const std::uint8_t reference = next++;
+        references_[tile] = reference;
+
+        auto* instance = maskMaterial_->createInstance();
+        maskInstances_.push_back(instance);
+        instance->setColorWrite(false);
+        instance->setDepthWrite(false);
+        instance->setStencilWrite(true);
+        instance->setStencilReferenceValue(reference);
+        instance->setStencilCompareFunction(filament::MaterialInstance::StencilCompareFunc::A);
+        instance->setStencilOpDepthStencilPass(filament::MaterialInstance::StencilOperation::REPLACE);
+
+        filament::RenderableManager::Builder builder(1);
+        builder.boundingBox({{0, 0, 0}, {8192, 8192, 8192}})
+            .culling(false)
+            .priority(0)
+            .material(0, instance)
+            .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES, maskVertices_,
+                      maskIndices_, 0, 6);
+        utils::Entity entity = utils::EntityManager::get().create();
+        builder.build(*engine_, entity);
+        auto& transforms = engine_->getTransformManager();
+        transforms.setTransform(transforms.getInstance(entity), matrix);
+        scene_->addEntity(entity);
+        entities_.push_back(entity);
+        masked_++;
+    }
 }
 
 FilamentRenderer::~FilamentRenderer() {
@@ -172,6 +266,10 @@ void FilamentRenderer::clearScene() {
         utils::EntityManager::get().destroy(entity);
     }
     entities_.clear();
+    for (filament::MaterialInstance* instance : maskInstances_) {
+        engine_->destroy(instance);
+    }
+    maskInstances_.clear();
 }
 
 void FilamentRenderer::beginFrame(std::uint64_t) {
@@ -186,6 +284,8 @@ void FilamentRenderer::beginFrame(std::uint64_t) {
     ordered_ = 0;
     unplaced_ = 0;
     scissored_ = 0;
+    masked_ = 0;
+    unmasked_ = 0;
     zooms_.clear();
     overZooms_.clear();
     slotsThisFrame_.clear();
@@ -279,7 +379,8 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
     onRetire(add.id);
     meshes_[add.id] = Mesh{vertices, indices, indexCount, add.layerIndex,
                            add.tileID ? add.tileID->z : std::uint8_t{0},
-                           add.tileID ? add.tileID->overscaled_z : std::uint8_t{0}};
+                           add.tileID ? add.tileID->overscaled_z : std::uint8_t{0},
+                           add.tileID ? *add.tileID : TileID{}};
 }
 
 void FilamentRenderer::onRetire(std::uint64_t id) {
@@ -304,6 +405,8 @@ void FilamentRenderer::onBatch(const Batch& batch) {
 }
 
 void FilamentRenderer::endFrame(std::uint64_t) {
+    // The clip masks first, so every drawable issued below has a reference to test against.
+    writeMasks();
     // Reversed: see `pending_`. The producer's order is front-to-back and this pass blends.
     for (auto it = pending_.rbegin(); it != pending_.rend(); ++it) {
         issue(*it);
@@ -339,8 +442,12 @@ void FilamentRenderer::issue(const Batch& batch) {
     // carries its own matrix -- different tiles do not share one. That gives up the multi-primitive
     // batching `DrawList` groups for; recovering it means splitting a batch by matrix, which is
     // worth doing once there is a picture to measure it against.
+    // Bands one to seven: zero belongs to the mask pass alone, so every clip is written before
+    // any geometry tests against it. Sharing a band with the background left the order between
+    // them unspecified, which is not a thing to leave to chance when one writes what the other
+    // reads.
     const auto band = static_cast<std::uint8_t>(
-        batch.layerIndex == 0 ? 0 : 1 + std::min<std::uint32_t>(6, batch.layerIndex / 16));
+        1 + std::min<std::uint32_t>(6, batch.layerIndex / 16));
 
     for (std::size_t i = 0; i < batch.geometries.size(); i++) {
         const auto mesh = meshes_.find(batch.geometries[i]);
@@ -411,7 +518,23 @@ void FilamentRenderer::issue(const Batch& batch) {
             instance->setParameter("opacity", opacity);
         }
 
-        // The tile's own clip. §11.7 asks a consumer to honour the stencil tiles the producer
+        // The tile's own clip, as a stencil test. A parent's geometry passes only where the
+        // parent's own mask survived -- that is, where no child overwrote it -- which is what
+        // stops an ancestor compositing over the children that replaced it.
+        const std::uint8_t reference = referenceFor(mesh->second.tile);
+        if (reference == 0) {
+            unmasked_++;
+        }
+        if (reference != 0) {
+            instance->setStencilWrite(false);
+            instance->setStencilReferenceValue(reference);
+            instance->setStencilCompareFunction(filament::MaterialInstance::StencilCompareFunc::E);
+        }
+
+        // The bounding-box scissor below is a coarser thing than the mask and does not replace it:
+        // an ancestor's box is its whole extent, so clipping to it clips nothing. Kept because it
+        // costs nothing and bounds what the stencil then refines.
+        // §11.7 asks a consumer to honour the stencil tiles the producer
         // sends; this is that obligation met with a scissor. MVT geometry runs past its tile's
         // edge by design, into the buffer that exists to hide seams, so without a clip a tile
         // paints into its neighbour and what is already there blends a second time. That was the

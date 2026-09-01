@@ -60,6 +60,16 @@ struct TileID {
     std::int32_t wrap = 0;
     std::uint8_t overscaled_z = 0;
 
+    /// Ordered so a tile can key a map, coarsest first: the mask pass depends on drawing a
+    /// parent before its children, so that a child's mask overwrites it.
+    bool operator<(const TileID& other) const noexcept {
+        if (z != other.z) return z < other.z;
+        if (overscaled_z != other.overscaled_z) return overscaled_z < other.overscaled_z;
+        if (wrap != other.wrap) return wrap < other.wrap;
+        if (x != other.x) return x < other.x;
+        return y < other.y;
+    }
+
     /// Two addresses are the same tile when every field agrees, `wrap` included.
     ///
     /// A wrap is a different place on a repeating plane -- the same patch drawn either side of

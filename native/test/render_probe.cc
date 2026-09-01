@@ -83,7 +83,9 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "probe: no engine\n");
         return 1;
     }
-    auto* swapChain = engine->createSwapChain(W, H, filament::SwapChain::CONFIG_READABLE);
+    auto* swapChain = engine->createSwapChain(
+        W, H,
+        filament::SwapChain::CONFIG_READABLE | filament::SwapChain::CONFIG_HAS_STENCIL_BUFFER);
     auto* renderer = engine->createRenderer();
     auto* scene = engine->createScene();
     auto* view = engine->createView();
@@ -110,6 +112,8 @@ int main(int argc, char** argv) {
     // colour each thing is, so anything applied on top of that is a deviation from the oracle by
     // construction. It is what left the first correct frame looking bleached.
     view->setPostProcessingEnabled(false);
+    // The clip masks need somewhere to go.
+    view->setStencilBufferEnabled(true);
     renderer->setClearOptions({.clearColor = {0.0f, 0.0f, 0.0f, 1.0f}, .clear = true});
 
     // Owned rather than stacked, so it can be released *before* the engine. A stack object here
@@ -173,6 +177,8 @@ int main(int argc, char** argv) {
     }
     std::printf("placements %zu\n", backend.placements());
     std::printf("shared_slots %llu\n", (unsigned long long)backend.sharedSlots());
+    std::printf("unmasked %llu\n", (unsigned long long)backend.unmasked());
+    std::printf("masked %llu\n", (unsigned long long)backend.masked());
     std::printf("scissored %llu\n", (unsigned long long)backend.scissored());
     std::printf("unplaced %llu\n", (unsigned long long)backend.unplaced());
     std::printf("missing_batches %llu\n", (unsigned long long)backend.missing());
