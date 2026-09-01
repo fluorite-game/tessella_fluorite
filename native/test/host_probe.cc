@@ -15,6 +15,8 @@
 #include <cstring>
 #include <ctime>
 #include <string>
+#include <map>
+#include <set>
 #include <unordered_set>
 
 namespace {
@@ -41,6 +43,7 @@ public:
 
     void onBatch(const tsf::Batch& batch) override {
         batches++;
+        shaders[batch.builtinShader].insert(batch.permutationKey);
         drawn += batch.geometries.size();
         if (batch.geometries.size() != batch.uboIndexes.size()) {
             malformed++;
@@ -56,6 +59,7 @@ public:
     }
 
     void onUniforms(const tsf::UboUpdate&) override { uniforms++; }
+
     void onTexture(const tsf::TextureUpdate&) override { textures++; }
 
     std::uint64_t frames = 0, framesEnded = 0;
@@ -63,6 +67,15 @@ public:
     std::uint64_t batches = 0, drawn = 0, malformed = 0, unknownInBatch = 0;
     std::uint64_t uniforms = 0, textures = 0;
     std::unordered_set<std::uint64_t> live;
+
+    /// Every distinct (shader, permutation) a frame asked for.
+    ///
+    /// This is the material inventory, measured rather than guessed: a Filament backend needs one
+    /// material per shader family and a parameterisation per permutation, so what a real style
+    /// actually emits is the list of things that have to be authored. The ABI declares
+    /// thirty-five shader families; a given style uses a handful, and knowing which handful is
+    /// the difference between porting everything and porting what is needed.
+    std::map<std::int32_t, std::set<std::uint64_t>> shaders;
 };
 
 void pause_ms(long ms) {
@@ -121,6 +134,16 @@ int main(int argc, char** argv) {
         pause_ms(5);
     }
 
+    // Then kept going. The first frame that draws anything is not the frame that draws
+    // everything -- tiles land one at a time -- and an inventory taken at the first batch would
+    // list whichever shaders happened to win the race. These are cheap: a settled map emits
+    // nothing and each of these walks no records.
+    for (int settle = 0; settle < 100; settle++) {
+        seen = host->tick(renderer);
+        host->retire(seen);
+        pause_ms(2);
+    }
+
     std::string reason;
     const tessella_readiness readiness = host->readiness(&reason);
 
@@ -140,6 +163,18 @@ int main(int argc, char** argv) {
     std::printf("uniforms %llu\n", (unsigned long long)renderer.uniforms);
     std::printf("textures %llu\n", (unsigned long long)renderer.textures);
     std::printf("cursor_advanced %d\n", seen > 0 ? 1 : 0);
+
+    // The inventory. Counted first so a caller can assert on the totals, then listed so a reader
+    // can see which families they are.
+    std::uint64_t permutations = 0;
+    for (const auto& entry : renderer.shaders) {
+        permutations += entry.second.size();
+    }
+    std::printf("shader_families %zu\n", renderer.shaders.size());
+    std::printf("shader_permutations %llu\n", (unsigned long long)permutations);
+    for (const auto& entry : renderer.shaders) {
+        std::printf("shader_%d %zu\n", entry.first, entry.second.size());
+    }
     if (!reason.empty()) {
         std::fprintf(stderr, "probe: readiness reason: %s\n", reason.c_str());
     }
