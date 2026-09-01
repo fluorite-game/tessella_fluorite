@@ -1,0 +1,37 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The background family, plain-colour permutation.
+//
+// The simplest of them: `tsl_background_drawable_ubo` is a matrix and nothing else, and
+// `tsl_background_props_ubo` a colour and an opacity. There is no per-vertex paint here at all,
+// which is why the family declares one attribute and has exactly one non-pattern permutation.
+//
+// vertexDomain is device for the reason fill.mat gives: the matrix is mbgl's and already carries
+// projection, so Filament's camera is identity and the transform happens here.
+material {
+    name : tessella_background,
+    shadingModel : unlit,
+    blending : transparent,
+    depthWrite : false,
+    culling : none,
+    vertexDomain : device,
+    parameters : [
+        { type : mat4,   name : matrix },
+        { type : float4, name : color },
+        { type : float,  name : opacity }
+    ],
+    requires : [ position ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        material.worldPosition = materialParams.matrix * getPosition();
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = materialParams.color * materialParams.opacity;
+    }
+}

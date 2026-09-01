@@ -1,0 +1,41 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The fill family, constant-paint permutation.
+//
+// Mirrors mbgl's fill shader over tessella's own blocks: `tsl_fill_drawable_ubo` supplies the
+// tile-local-to-clip matrix per drawable, `tsl_fill_evaluated_props_ubo` the layer's colour and
+// opacity. The permutation this compiles for is the one where colour and opacity arrive as
+// uniforms rather than as vertex attributes -- the key measured as 62 for a style whose
+// `fill-color` is a constant.
+//
+// vertexDomain is device because the matrix is mbgl's, carrying the whole tile-local-to-clip
+// transform including projection. Letting Filament apply its camera on top would project twice;
+// the camera is identity and this does the transform, which is the same arrangement the capture
+// stream already assumes.
+material {
+    name : tessella_fill,
+    shadingModel : unlit,
+    blending : transparent,
+    depthWrite : false,
+    culling : none,
+    vertexDomain : device,
+    parameters : [
+        { type : mat4,   name : matrix },
+        { type : float4, name : color },
+        { type : float,  name : opacity }
+    ],
+    requires : [ position ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        material.worldPosition = materialParams.matrix * getPosition();
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = materialParams.color * materialParams.opacity;
+    }
+}
