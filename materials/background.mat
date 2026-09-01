@@ -25,7 +25,11 @@ material {
 
 vertex {
     void materialVertex(inout MaterialVertexInputs material) {
-        material.worldPosition = materialParams.matrix * getPosition();
+        vec4 clip = materialParams.matrix * getPosition();
+        // The map is flat and depth is off, so the only thing z can do here is clip geometry
+        // away: mbgl's matrix carries a depth range of its own and nothing downstream reads it.
+        // Pinned inside the volume rather than trusted.
+        material.worldPosition = vec4(clip.xy, 0.0, clip.w);
     }
 }
 
