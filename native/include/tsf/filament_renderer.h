@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <string>
 #include <map>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -50,9 +51,13 @@ namespace tsf {
 class FilamentRenderer final : public Renderer {
 public:
     /// Loads every `.filamat` in `materialDir`, named for the shader family it serves.
+    /// `width` and `height` are the view's, needed to turn a tile's clip-space box into the
+    /// scissor rectangle that keeps its geometry inside its own tile.
     FilamentRenderer(filament::Engine* engine,
                      filament::Scene* scene,
-                     const std::string& materialDir);
+                     const std::string& materialDir,
+                     std::uint32_t width,
+                     std::uint32_t height);
     ~FilamentRenderer() override;
 
     FilamentRenderer(const FilamentRenderer&) = delete;
@@ -100,6 +105,19 @@ public:
         return passes_;
     }
 
+    /// The overscaled zoom of what was drawn, beside the source zoom. They differ when a
+    /// coarse tile stands in for a finer one, and a consumer that reads only one of them cannot
+    /// tell a z10 tile serving z13 from a z13 tile.
+    [[nodiscard]] const std::map<std::uint8_t, std::uint64_t>& overZooms() const noexcept {
+        return overZooms_;
+    }
+
+    /// Drawables that reused a (layer, matrix slot) another drawable already used this frame.
+    [[nodiscard]] std::uint64_t sharedSlots() const noexcept { return sharedSlots_; }
+
+    /// How many drawables were clipped to their own tile.
+    [[nodiscard]] std::uint64_t scissored() const noexcept { return scissored_; }
+
     /// How many materials were loaded.
     [[nodiscard]] std::size_t materials() const noexcept { return materials_.size(); }
 
@@ -111,6 +129,7 @@ private:
         std::uint32_t indexCount = 0;
         std::int32_t layerIndex = -1;
         std::uint8_t zoom = 0;
+        std::uint8_t overscaledZoom = 0;
     };
 
     /// One layer's uniform blocks, by slot.
@@ -136,18 +155,26 @@ private:
     /// Entities for the frame being built, torn down at the next `beginFrame`.
     std::vector<utils::Entity> entities_;
 
-    /// One instance per (layer, shader), kept across frames.
+    /// One instance per (layer, shader, tile slot), kept across frames.
     ///
-    /// Not one per primitive per frame: a frame of liberty makes seventy-seven, and rebuilding
-    /// them every tick churns thousands of instances through the engine for parameters that have
-    /// not changed. A layer's paint is a property of the layer, so the instance is too.
-    std::map<std::pair<std::uint32_t, std::int32_t>, filament::MaterialInstance*> instances_;
+    /// Keyed by the tile as well as the layer because the scissor is a property of the instance
+    /// and the clip is a property of the tile. Still bounded by the cover -- a handful of tiles
+    /// times the layers that draw -- rather than one per primitive per frame.
+    std::map<std::tuple<std::uint32_t, std::int32_t, std::uint32_t>, filament::MaterialInstance*>
+        instances_;
+
+    std::uint32_t width_ = 0;
+    std::uint32_t height_ = 0;
 
     std::uint64_t missing_ = 0;
     std::vector<std::int32_t> missingFamilies_;
     std::map<std::uint8_t, std::uint64_t> zooms_;
+    std::map<std::uint8_t, std::uint64_t> overZooms_;
     std::uint64_t ordered_ = 0;
     std::uint64_t unplaced_ = 0;
+    std::uint64_t scissored_ = 0;
+    std::set<std::pair<std::uint32_t, std::uint32_t>> slotsThisFrame_;
+    std::uint64_t sharedSlots_ = 0;
     std::unordered_set<std::uint64_t> drawnThisFrame_;
     std::uint64_t redrawn_ = 0;
     std::map<std::uint8_t, std::uint64_t> passes_;

@@ -12,6 +12,7 @@
 #include <utils/EntityManager.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstddef>
 #include <cstdlib>
@@ -122,8 +123,10 @@ bool attributeType(std::uint8_t wire, filament::VertexBuffer::AttributeType& out
 
 FilamentRenderer::FilamentRenderer(filament::Engine* engine,
                                    filament::Scene* scene,
-                                   const std::string& materialDir)
-    : engine_(engine), scene_(scene) {
+                                   const std::string& materialDir,
+                                   std::uint32_t width,
+                                   std::uint32_t height)
+    : engine_(engine), scene_(scene), width_(width), height_(height) {
     std::error_code ec;
     for (const auto& entry : std::filesystem::directory_iterator(materialDir, ec)) {
         if (entry.path().extension() != ".filamat") {
@@ -182,7 +185,11 @@ void FilamentRenderer::beginFrame(std::uint64_t) {
     coloured_ = 0;
     ordered_ = 0;
     unplaced_ = 0;
+    scissored_ = 0;
     zooms_.clear();
+    overZooms_.clear();
+    slotsThisFrame_.clear();
+    sharedSlots_ = 0;
     drawnThisFrame_.clear();
     passes_.clear();
     redrawn_ = 0;
@@ -270,7 +277,8 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
 
     onRetire(add.id);
     meshes_[add.id] = Mesh{vertices, indices, indexCount, add.layerIndex,
-                           add.tileID ? add.tileID->z : std::uint8_t{0}};
+                           add.tileID ? add.tileID->z : std::uint8_t{0},
+                           add.tileID ? add.tileID->overscaled_z : std::uint8_t{0}};
 }
 
 void FilamentRenderer::onRetire(std::uint64_t id) {
@@ -326,34 +334,6 @@ void FilamentRenderer::issue(const Batch& batch) {
 
     const auto layer = uniforms_.find(static_cast<std::int32_t>(batch.layerIndex));
 
-    // The layer's paint, shared by every drawable in it. One instance per (layer, shader), kept
-    // across frames: a layer's colour is a property of the layer, not of a frame.
-    const auto key = std::make_pair(batch.layerIndex, batch.builtinShader);
-    auto found = instances_.find(key);
-    if (found == instances_.end()) {
-        found = instances_.emplace(key, material->second->createInstance()).first;
-        made_++;
-    }
-    auto* instance = found->second;
-
-    if (layer != uniforms_.end()) {
-        const auto props = layer->second.find(kPropsSlot);
-        if (props != layer->second.end() && props->second.size() >= sizeof(float) * 4) {
-            float colour[4] = {0, 0, 0, 0};
-            std::memcpy(colour, props->second.data(), sizeof colour);
-            coloured_++;
-            instance->setParameter(
-                "color", filament::math::float4{colour[0], colour[1], colour[2], colour[3]});
-
-            float opacity = 1.0f;
-            const std::size_t at = opacityOffset(batch.builtinShader, props->second.size());
-            if (at + sizeof(float) <= props->second.size()) {
-                std::memcpy(&opacity, props->second.data() + at, sizeof opacity);
-            }
-            instance->setParameter("opacity", opacity);
-        }
-    }
-
     // One renderable per drawable, because a renderable carries one transform and each drawable
     // carries its own matrix -- different tiles do not share one. That gives up the multi-primitive
     // batching `DrawList` groups for; recovering it means splitting a batch by matrix, which is
@@ -368,6 +348,12 @@ void FilamentRenderer::issue(const Batch& batch) {
         }
 
         zooms_[mesh->second.zoom]++;
+        overZooms_[mesh->second.overscaledZoom]++;
+        // Two drawables of one layer sharing a matrix slot would be stacked on the same tile,
+        // compositing there again and again.
+        if (!slotsThisFrame_.insert({batch.layerIndex, batch.uboIndexes[i]}).second) {
+            sharedSlots_++;
+        }
         // Counted, not skipped. The same geometry legitimately appears many times in a frame:
         // the background is one quad shared by every tile of the cover and drawn once per tile,
         // with that tile's matrix. Deduplicating by geometry id collapses those into one and the
@@ -394,6 +380,75 @@ void FilamentRenderer::issue(const Batch& batch) {
         }
         filament::math::mat4f transform;
         std::memcpy(&transform, drawables->second.data() + at, sizeof(float) * 16);
+
+        // One instance per (layer, shader, tile slot). Keyed by the tile because the scissor is a
+        // property of the instance and the clip is a property of the tile; still bounded by the
+        // cover rather than one per primitive per frame.
+        const auto key =
+            std::make_tuple(batch.layerIndex, batch.builtinShader, batch.uboIndexes[i]);
+        auto found = instances_.find(key);
+        if (found == instances_.end()) {
+            found = instances_.emplace(key, material->second->createInstance()).first;
+            made_++;
+        }
+        auto* instance = found->second;
+
+        if (const auto props = layer->second.find(kPropsSlot);
+            props != layer->second.end() && props->second.size() >= sizeof(float) * 4) {
+            float colour[4] = {0, 0, 0, 0};
+            std::memcpy(colour, props->second.data(), sizeof colour);
+            coloured_++;
+            instance->setParameter(
+                "color", filament::math::float4{colour[0], colour[1], colour[2], colour[3]});
+
+            float opacity = 1.0f;
+            const std::size_t off = opacityOffset(batch.builtinShader, props->second.size());
+            if (off + sizeof(float) <= props->second.size()) {
+                std::memcpy(&opacity, props->second.data() + off, sizeof opacity);
+            }
+            instance->setParameter("opacity", opacity);
+        }
+
+        // The tile's own clip. §11.7 asks a consumer to honour the stencil tiles the producer
+        // sends; this is that obligation met with a scissor. MVT geometry runs past its tile's
+        // edge by design, into the buffer that exists to hide seams, so without a clip a tile
+        // paints into its neighbour and what is already there blends a second time. That was the
+        // banding: 122,097 pixels of a building grey composited twice, a colour the oracle never
+        // produces.
+        //
+        // The rectangle comes from the drawable's own matrix rather than from the stencil record,
+        // because the matrix already says where the tile's 0..8192 box lands and a screen-space
+        // box is what a scissor takes. Exact while the map is north-up; a rotated or pitched view
+        // needs the stencil buffer proper, which is why the record exists.
+        {
+            float minX = 1e30f, minY = 1e30f, maxX = -1e30f, maxY = -1e30f;
+            const float corners[4][2] = {{0, 0}, {8192, 0}, {8192, 8192}, {0, 8192}};
+            for (const auto& corner : corners) {
+                const filament::math::float4 clip =
+                    transform * filament::math::float4{corner[0], corner[1], 0.0f, 1.0f};
+                if (clip.w == 0.0f) {
+                    continue;
+                }
+                minX = std::min(minX, clip.x / clip.w);
+                maxX = std::max(maxX, clip.x / clip.w);
+                minY = std::min(minY, clip.y / clip.w);
+                maxY = std::max(maxY, clip.y / clip.w);
+            }
+            const auto toPixels = [](float ndc, std::uint32_t extent) {
+                return (ndc * 0.5f + 0.5f) * static_cast<float>(extent);
+            };
+            const float l = std::max(0.0f, std::floor(toPixels(minX, width_)));
+            const float b = std::max(0.0f, std::floor(toPixels(minY, height_)));
+            const float r = std::min(static_cast<float>(width_), std::ceil(toPixels(maxX, width_)));
+            const float t =
+                std::min(static_cast<float>(height_), std::ceil(toPixels(maxY, height_)));
+            if (r > l && t > b) {
+                instance->setScissor(
+                    static_cast<std::uint32_t>(l), static_cast<std::uint32_t>(b),
+                    static_cast<std::uint32_t>(r - l), static_cast<std::uint32_t>(t - b));
+                scissored_++;
+            }
+        }
 
         filament::RenderableManager::Builder builder(1);
         builder.boundingBox({{0, 0, 0}, {8192, 8192, 8192}})

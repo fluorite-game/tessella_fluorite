@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
     // is destroyed at the end of main, which is after `Engine::destroy` has already freed every
     // buffer it created -- and the second destroy is a precondition panic that names a vertex
     // buffer rather than the ordering that caused it.
-    auto backendOwned = std::make_unique<tsf::FilamentRenderer>(engine, scene, materialDir);
+    auto backendOwned = std::make_unique<tsf::FilamentRenderer>(engine, scene, materialDir, W, H);
     tsf::FilamentRenderer& backend = *backendOwned;
     std::printf("materials %zu\n", backend.materials());
 
@@ -168,6 +168,11 @@ int main(int argc, char** argv) {
         std::printf("pass_%u %llu\n", (unsigned)pass, (unsigned long long)n);
     }
     std::printf("redrawn %llu\n", (unsigned long long)backend.redrawn());
+    for (const auto& [z, n] : backend.overZooms()) {
+        std::printf("overzoom_%u %llu\n", (unsigned)z, (unsigned long long)n);
+    }
+    std::printf("shared_slots %llu\n", (unsigned long long)backend.sharedSlots());
+    std::printf("scissored %llu\n", (unsigned long long)backend.scissored());
     std::printf("unplaced %llu\n", (unsigned long long)backend.unplaced());
     std::printf("missing_batches %llu\n", (unsigned long long)backend.missing());
     for (std::int32_t family : backend.missingFamilies()) {
