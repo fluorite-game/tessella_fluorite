@@ -30,10 +30,11 @@ material {
 
 vertex {
     void materialVertex(inout MaterialVertexInputs material) {
-        vec4 clip = materialParams.matrix * getPosition();
-        // The map is flat and depth is off, so the only thing z can do here is clip geometry
-        // away: mbgl's matrix carries a depth range of its own and nothing downstream reads it.
-        // Pinned inside the volume rather than trusted.
+        // Built explicitly as (x, y, 0, 1). The attribute is a two-component i16 tile coordinate
+        // and what `getPosition()` leaves in z and w is Filament's business, not something to
+        // inherit: the matrix's translation column is reached through w, so a w that is not one
+        // silently discards it.
+        vec4 clip = materialParams.matrix * vec4(getPosition().xy, 0.0, 1.0);
         // Depth carries the order, and the order is front-to-back. `order.rs` says why: the depth
         // slot runs opposite the style index because mbgl walks its layer list reversed in the
         // opaque pass, so the topmost layer is drawn *first* and the depth buffer rejects what is
