@@ -256,7 +256,7 @@ void FilamentRenderer::writeMasks() {
             .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES, maskVertices_,
                       maskIndices_, 0, 6);
         utils::Entity entity = utils::EntityManager::get().create();
-        builder.build(*engine_, entity);
+        const auto built = builder.build(*engine_, entity);
         auto& transforms = engine_->getTransformManager();
         transforms.setTransform(transforms.getInstance(entity), matrix);
         scene_->addEntity(entity);
@@ -438,6 +438,9 @@ void FilamentRenderer::endFrame(std::uint64_t) {
 }
 
 void FilamentRenderer::issue(const Batch& batch) {
+    if (std::getenv("TSF_ONLY_MASKS")) {
+        return;
+    }
     // Diagnostics: draw one layer, or drop the background, so a frame can be compared against the
     // oracle rendering the same subset.
     if (const char* only = std::getenv("TSF_ONLY_LAYER")) {
@@ -553,7 +556,7 @@ void FilamentRenderer::issue(const Batch& batch) {
         }
         if (reference != 0) {
             instance->setStencilWrite(false);
-            instance->setStencilReferenceValue(reference);
+            instance->setStencilReferenceValue(std::getenv("TSF_IMPOSSIBLE_REF") ? 200 : reference);
             instance->setStencilCompareFunction(filament::MaterialInstance::StencilCompareFunc::E);
         }
 
