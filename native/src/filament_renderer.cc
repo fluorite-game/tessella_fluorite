@@ -442,7 +442,7 @@ void FilamentRenderer::issue(const Batch& batch) {
             const float r = std::min(static_cast<float>(width_), std::ceil(toPixels(maxX, width_)));
             const float t =
                 std::min(static_cast<float>(height_), std::ceil(toPixels(maxY, height_)));
-            if (r > l && t > b) {
+            if (r > l && t > b && !std::getenv("TSF_NO_SCISSOR")) {
                 instance->setScissor(
                     static_cast<std::uint32_t>(l), static_cast<std::uint32_t>(b),
                     static_cast<std::uint32_t>(r - l), static_cast<std::uint32_t>(t - b));
