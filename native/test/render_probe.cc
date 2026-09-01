@@ -156,6 +156,9 @@ int main(int argc, char** argv) {
     std::printf("primitives %llu\n", (unsigned long long)backend.primitives());
     std::printf("instances_made %llu\n", (unsigned long long)backend.made());
     std::printf("instances_coloured %llu\n", (unsigned long long)backend.coloured());
+    for (const auto& [z, n] : backend.zooms()) {
+        std::printf("zoom_%u %llu\n", (unsigned)z, (unsigned long long)n);
+    }
     std::printf("missing_batches %llu\n", (unsigned long long)backend.missing());
     for (std::int32_t family : backend.missingFamilies()) {
         std::printf("missing_family_%d 1\n", family);

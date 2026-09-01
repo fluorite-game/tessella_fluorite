@@ -6,6 +6,7 @@
 
 #include <filament/IndexBuffer.h>
 #include <filament/RenderableManager.h>
+#include <filament/TransformManager.h>
 #include <filament/VertexBuffer.h>
 #include <math/mat4.h>
 #include <utils/EntityManager.h>
@@ -157,9 +158,11 @@ void FilamentRenderer::beginFrame(std::uint64_t) {
     primitives_ = 0;
     coloured_ = 0;
     ordered_ = 0;
+    zooms_.clear();
 }
 
 void FilamentRenderer::onGeometry(const DrawableAdd& add) {
+
     if (add.vertexCount == 0 || add.indexes.empty()) {
         return;
     }
@@ -239,7 +242,8 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
                            [](void* buffer, std::size_t, void*) { std::free(buffer); }));
 
     onRetire(add.id);
-    meshes_[add.id] = Mesh{vertices, indices, indexCount, add.layerIndex};
+    meshes_[add.id] = Mesh{vertices, indices, indexCount, add.layerIndex,
+                           add.tileID ? add.tileID->z : std::uint8_t{0}};
 }
 
 void FilamentRenderer::onRetire(std::uint64_t id) {
@@ -282,6 +286,7 @@ void FilamentRenderer::issue(const Batch& batch) {
     if (std::getenv("TSF_SKIP_BACKGROUND") && batch.builtinShader == TSL_BUILTIN_BACKGROUND_SHADER) {
         return;
     }
+
     const auto material = materials_.find(batch.builtinShader);
     if (material == materials_.end()) {
         missing_++;
@@ -292,126 +297,85 @@ void FilamentRenderer::issue(const Batch& batch) {
         return;
     }
 
-    // The drawables this batch names that actually have buffers. A batch may name geometry that
-    // arrived with nothing usable in it, and a renderable with zero primitives is refused by
-    // Filament rather than drawn empty.
-    std::vector<std::pair<const Mesh*, std::uint32_t>> parts;
-    for (std::size_t i = 0; i < batch.geometries.size(); i++) {
-        const auto mesh = meshes_.find(batch.geometries[i]);
-        if (mesh != meshes_.end()) {
-            parts.emplace_back(&mesh->second, batch.uboIndexes[i]);
-        }
-    }
-    if (parts.empty()) {
-        return;
-    }
-
     const auto layer = uniforms_.find(static_cast<std::int32_t>(batch.layerIndex));
 
-    // Constructed, not copied out of a temporary. `Builder`'s chaining methods return a
-    // reference, so `auto builder = Builder(n).boundingBox(...)` copies the builder while the
-    // temporary it refers to dies at the end of the statement.
-    filament::RenderableManager::Builder builder(parts.size());
-    // Tile-local coordinates, so the box is the tile. Culling is off because the matrix that
-    // places this geometry lives in the material rather than in a transform Filament can see.
-    //
-    // Priority carries the painter order across. Filament draws by its own rules -- material,
-    // then distance for blended objects -- and every drawable here sits at the same depth, so
-    // without this the layer order the whole capture stream works to preserve is discarded at
-    // the last step: liberty's water and roads drew *under* its background and the frame came
-    // out a flat sheet of #f8f4f0.
-    //
-    // Eight levels for a hundred and eleven layers is lossy, and deliberately the coarse version
-    // of the answer: it separates background from fill from line from symbol, which is what makes
-    // a frame legible. Exact within-band order needs the depth buffer carrying the layer index,
-    // which is a change to every material rather than to this.
+    // The layer's paint, shared by every drawable in it. One instance per (layer, shader), kept
+    // across frames: a layer's colour is a property of the layer, not of a frame.
+    const auto key = std::make_pair(batch.layerIndex, batch.builtinShader);
+    auto found = instances_.find(key);
+    if (found == instances_.end()) {
+        found = instances_.emplace(key, material->second->createInstance()).first;
+        made_++;
+    }
+    auto* instance = found->second;
+
+    if (layer != uniforms_.end()) {
+        const auto props = layer->second.find(kPropsSlot);
+        if (props != layer->second.end() && props->second.size() >= sizeof(float) * 4) {
+            float colour[4] = {0, 0, 0, 0};
+            std::memcpy(colour, props->second.data(), sizeof colour);
+            coloured_++;
+            instance->setParameter(
+                "color", filament::math::float4{colour[0], colour[1], colour[2], colour[3]});
+
+            float opacity = 1.0f;
+            const std::size_t at = opacityOffset(batch.builtinShader, props->second.size());
+            if (at + sizeof(float) <= props->second.size()) {
+                std::memcpy(&opacity, props->second.data() + at, sizeof opacity);
+            }
+            instance->setParameter("opacity", opacity);
+        }
+    }
+
+    // One renderable per drawable, because a renderable carries one transform and each drawable
+    // carries its own matrix -- different tiles do not share one. That gives up the multi-primitive
+    // batching `DrawList` groups for; recovering it means splitting a batch by matrix, which is
+    // worth doing once there is a picture to measure it against.
     const auto band = static_cast<std::uint8_t>(
         batch.layerIndex == 0 ? 0 : 1 + std::min<std::uint32_t>(6, batch.layerIndex / 16));
 
-    // The bounding box carries the layer order, because that is what Filament actually sorts on.
-    //
-    // Translucent renderables are ordered back-to-front by their box's distance from the camera,
-    // not by anything the vertex shader writes -- so identical boxes tie, the sort falls back to
-    // submission order, and submission order is the producer's *front-to-back* sequence with the
-    // background last. That is why the frame came out as a flat sheet of background: it was drawn
-    // last over everything, and no amount of shader-side depth could move it.
-    //
-    // Centred at z = layerIndex - 256, so the bottom layer is farthest and the top nearest. The
-    // box is used only for sorting here: culling is off, and the geometry's real position comes
-    // from the drawable's own matrix in the shader.
-    const float depth = static_cast<float>(batch.layerIndex) - 256.0f;
-    builder.boundingBox({{0, 0, depth}, {8192, 8192, 1}}).culling(false).priority(band);
-
-    for (std::size_t i = 0; i < parts.size(); i++) {
-        const auto key = std::make_pair(batch.layerIndex, batch.builtinShader);
-        auto found = instances_.find(key);
-        if (found == instances_.end()) {
-            found = instances_.emplace(key, material->second->createInstance()).first;
-            made_++;
+    for (std::size_t i = 0; i < batch.geometries.size(); i++) {
+        const auto mesh = meshes_.find(batch.geometries[i]);
+        if (mesh == meshes_.end()) {
+            continue;
         }
-        auto* instance = found->second;
-        // Depth from the *layer index*, not from arrival order.
-        //
-        // The order the producer sends is neither ascending nor descending: the opaque pass comes
-        // first, then the translucent one front-to-back, so liberty arrives as background, 83, 19,
-        // 18 ... 2. Reproducing that sequence with blending draws the map inside out. The layer
-        // index is the painter order by definition, so it is what decides depth: a higher layer
-        // sits nearer and wins the depth test against everything below it.
-        //
-        // Larger is *nearer*: Filament runs a reversed depth buffer, so the bottom layer wants the
-        // smallest value. Getting this backwards puts the background nearest, where it wins every
-        // depth test and the map renders as one flat sheet of #f8f4f0 -- which is exactly what it
-        // did, through six other changes that could not shift it.
-        instance->setParameter(
-            "order", 0.05f + static_cast<float>(batch.layerIndex) * (0.9f / 256.0f));
 
+        zooms_[mesh->second.zoom]++;
+        filament::math::mat4f transform(1.0f);
         if (layer != uniforms_.end()) {
             const auto drawables = layer->second.find(kDrawableSlot);
             if (drawables != layer->second.end()) {
-                // The per-drawable block, indexed by the slot the order carries. mbgl packs one
-                // of these per drawable into the layer's consolidated buffer, and `ubo_index` is
-                // which one this drawable is.
                 const std::size_t stride = sizeof(tsl_fill_drawable_ubo);
-                const std::size_t at = static_cast<std::size_t>(parts[i].second) * stride;
-                if (at + stride <= drawables->second.size()) {
-                    tsl_fill_drawable_ubo block{};
-                    std::memcpy(&block, drawables->second.data() + at, stride);
-                    filament::math::mat4f matrix;
-                    std::memcpy(&matrix, block.matrix, sizeof block.matrix);
-                    instance->setParameter("matrix", matrix);
-                }
-            }
-            const auto props = layer->second.find(kPropsSlot);
-            if (props != layer->second.end() && props->second.size() >= sizeof(float) * 4) {
-                float colour[4] = {0, 0, 0, 0};
-                std::memcpy(colour, props->second.data(), sizeof colour);
-                coloured_++;
-                instance->setParameter(
-                    "color",
-                    filament::math::float4{colour[0], colour[1], colour[2], colour[3]});
+                const std::size_t at = static_cast<std::size_t>(batch.uboIndexes[i]) * stride;
+                if (at + sizeof(float) * 16 <= drawables->second.size()) {
+                    std::memcpy(&transform, drawables->second.data() + at, sizeof(float) * 16);
 
-                float opacity = 1.0f;
-                const std::size_t at = opacityOffset(batch.builtinShader, props->second.size());
-                if (at + sizeof(float) <= props->second.size()) {
-                    std::memcpy(&opacity, props->second.data() + at, sizeof opacity);
                 }
-                instance->setParameter("opacity", opacity);
             }
         }
 
-        builder.material(i, instance)
-            .geometry(i, filament::RenderableManager::PrimitiveType::TRIANGLES,
-                      parts[i].first->vertices, parts[i].first->indices, 0,
-                      parts[i].first->indexCount);
-    }
+        filament::RenderableManager::Builder builder(1);
+        builder.boundingBox({{0, 0, 0}, {8192, 8192, 8192}})
+            .culling(false)
+            .priority(band)
+            .material(0, instance)
+            .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                      mesh->second.vertices, mesh->second.indices, 0, mesh->second.indexCount);
 
-    utils::Entity entity = utils::EntityManager::get().create();
-    builder.build(*engine_, entity);
-    scene_->addEntity(entity);
-    entities_.push_back(entity);
-    renderables_++;
-    ordered_++;
-    primitives_ += parts.size();
+        utils::Entity entity = utils::EntityManager::get().create();
+        builder.build(*engine_, entity);
+
+        // The transform Filament applies itself. This is the whole reason the matrix left the
+        // material: a worldPosition write in a vertex hook does not move anything.
+        auto& transforms = engine_->getTransformManager();
+        transforms.setTransform(transforms.getInstance(entity), transform);
+
+        scene_->addEntity(entity);
+        entities_.push_back(entity);
+        renderables_++;
+        ordered_++;
+        primitives_++;
+    }
 }
 
 } // namespace tsf

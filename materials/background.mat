@@ -1,46 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The background family, plain-colour permutation.
+// The background family, constant-paint permutation.
 //
-// The simplest of them: `tsl_background_drawable_ubo` is a matrix and nothing else, and
-// `tsl_background_props_ubo` a colour and an opacity. There is no per-vertex paint here at all,
-// which is why the family declares one attribute and has exactly one non-pattern permutation.
-//
-// vertexDomain is device for the reason fill.mat gives: the matrix is mbgl's and already carries
-// projection, so Filament's camera is identity and the transform happens here.
+// No vertex hook and no matrix parameter. A material that writes `material.worldPosition` does not
+// move its geometry -- proved in the two-quad harness, under both vertex domains, with the vertex
+// stage demonstrably reading the parameter -- so tessella's tile-local-to-clip matrix goes onto
+// the renderable's own transform through `TransformManager`, which Filament does apply. The
+// camera is identity in view and projection, so `clip = transform * position` is the whole of it.
 material {
     name : tessella_background,
     shadingModel : unlit,
     blending : transparent,
-    depthWrite : true,
     culling : none,
-    vertexDomain : device,
     parameters : [
-        { type : mat4,   name : matrix },
         { type : float4, name : color },
-        { type : float,  name : opacity },
-        { type : float,  name : order }
+        { type : float,  name : opacity }
     ],
     requires : [ position ]
-}
-
-vertex {
-    void materialVertex(inout MaterialVertexInputs material) {
-        // Explicitly (x, y, 0, 1). The attribute is a two-component i16 tile coordinate, and
-        // what `getPosition()` puts in z and w for a SHORT2 is Filament's business rather than
-        // something to inherit: a w of zero turns the matrix's translation column into noise and
-        // every triangle comes out covering the viewport.
-        vec4 clip = materialParams.matrix * vec4(getPosition().xy, 0.0, 1.0);
-        // The map is flat and depth is off, so the only thing z can do here is clip geometry
-        // away: mbgl's matrix carries a depth range of its own and nothing downstream reads it.
-        // Pinned inside the volume rather than trusted.
-        // Depth carries the order, and the order is front-to-back. `order.rs` says why: the depth
-        // slot runs opposite the style index because mbgl walks its layer list reversed in the
-        // opaque pass, so the topmost layer is drawn *first* and the depth buffer rejects what is
-        // behind it. A consumer that treats that sequence as painter order draws the map upside
-        // down -- which is what put liberty's background over everything.
-        material.worldPosition = vec4(clip.xy, materialParams.order * clip.w, clip.w);
-    }
 }
 
 fragment {

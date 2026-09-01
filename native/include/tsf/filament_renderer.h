@@ -81,6 +81,12 @@ public:
     [[nodiscard]] std::uint64_t made() const noexcept { return made_; }
     [[nodiscard]] std::uint64_t coloured() const noexcept { return coloured_; }
 
+    /// How many geometries arrived at each tile zoom, so a frame drawing coarse ancestors
+    /// beside the tiles that replaced them is visible rather than inferred.
+    [[nodiscard]] const std::map<std::uint8_t, std::uint64_t>& zooms() const noexcept {
+        return zooms_;
+    }
+
     /// How many materials were loaded.
     [[nodiscard]] std::size_t materials() const noexcept { return materials_.size(); }
 
@@ -91,6 +97,7 @@ private:
         filament::IndexBuffer* indices = nullptr;
         std::uint32_t indexCount = 0;
         std::int32_t layerIndex = -1;
+        std::uint8_t zoom = 0;
     };
 
     /// One layer's uniform blocks, by slot.
@@ -125,6 +132,7 @@ private:
 
     std::uint64_t missing_ = 0;
     std::vector<std::int32_t> missingFamilies_;
+    std::map<std::uint8_t, std::uint64_t> zooms_;
     std::uint64_t ordered_ = 0;
     std::uint64_t made_ = 0;
     std::uint64_t coloured_ = 0;
