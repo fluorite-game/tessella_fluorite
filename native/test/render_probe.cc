@@ -171,6 +171,7 @@ int main(int argc, char** argv) {
     for (const auto& [z, n] : backend.overZooms()) {
         std::printf("overzoom_%u %llu\n", (unsigned)z, (unsigned long long)n);
     }
+    std::printf("placements %zu\n", backend.placements());
     std::printf("shared_slots %llu\n", (unsigned long long)backend.sharedSlots());
     std::printf("scissored %llu\n", (unsigned long long)backend.scissored());
     std::printf("unplaced %llu\n", (unsigned long long)backend.unplaced());

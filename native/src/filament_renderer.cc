@@ -189,6 +189,7 @@ void FilamentRenderer::beginFrame(std::uint64_t) {
     zooms_.clear();
     overZooms_.clear();
     slotsThisFrame_.clear();
+    placements_.clear();
     sharedSlots_ = 0;
     drawnThisFrame_.clear();
     passes_.clear();
@@ -381,6 +382,7 @@ void FilamentRenderer::issue(const Batch& batch) {
         filament::math::mat4f transform;
         std::memcpy(&transform, drawables->second.data() + at, sizeof(float) * 16);
 
+        placements_.insert({transform[3][0], transform[3][1], transform[0][0]});
         // One instance per (layer, shader, tile slot). Keyed by the tile because the scissor is a
         // property of the instance and the clip is a property of the tile; still bounded by the
         // cover rather than one per primitive per frame.

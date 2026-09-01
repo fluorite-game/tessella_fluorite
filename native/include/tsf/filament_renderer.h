@@ -115,6 +115,10 @@ public:
     /// Drawables that reused a (layer, matrix slot) another drawable already used this frame.
     [[nodiscard]] std::uint64_t sharedSlots() const noexcept { return sharedSlots_; }
 
+    /// Distinct tile placements drawn: translation and scale of each drawable's matrix. One
+    /// per tile of the cover if the cover is what is being drawn.
+    [[nodiscard]] std::size_t placements() const noexcept { return placements_.size(); }
+
     /// How many drawables were clipped to their own tile.
     [[nodiscard]] std::uint64_t scissored() const noexcept { return scissored_; }
 
@@ -175,6 +179,7 @@ private:
     std::uint64_t scissored_ = 0;
     std::set<std::pair<std::uint32_t, std::uint32_t>> slotsThisFrame_;
     std::uint64_t sharedSlots_ = 0;
+    std::set<std::tuple<float, float, float>> placements_;
     std::unordered_set<std::uint64_t> drawnThisFrame_;
     std::uint64_t redrawn_ = 0;
     std::map<std::uint8_t, std::uint64_t> passes_;
