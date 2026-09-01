@@ -189,6 +189,11 @@ FilamentRenderer::FilamentRenderer(filament::Engine* engine,
 }
 
 void FilamentRenderer::onStencilTiles(const StencilTiles& tiles) {
+    // Kept for this frame only. The producer names the tile set a layer group wants clipped *now*;
+    // holding onto earlier frames' tiles leaves stale masks overlapping the live ones, and since
+    // the reference is assigned by walking the set, every tile's reference also shifts as the set
+    // grows. Both are silent: the masks are all written and every drawable still gets a reference,
+    // so nothing counts wrong -- the clip simply stops meaning anything.
     for (const tsl_stencil_tile& tile : tiles.tiles) {
         TileID id{tile.tile.z, tile.tile.x, tile.tile.y, tile.tile.wrap, tile.tile.overscaled_z};
         filament::math::mat4f matrix;
@@ -236,7 +241,7 @@ void FilamentRenderer::writeMasks() {
 
         auto* instance = maskMaterial_->createInstance();
         maskInstances_.push_back(instance);
-        instance->setColorWrite(false);
+        instance->setColorWrite(std::getenv("TSF_SHOW_MASKS") != nullptr);
         instance->setDepthWrite(false);
         instance->setStencilWrite(true);
         instance->setStencilReferenceValue(reference);
@@ -293,6 +298,7 @@ void FilamentRenderer::beginFrame(std::uint64_t) {
     // what the producer works to avoid resending -- but which of them are drawn, in what sequence,
     // and against which uniforms is the frame's own answer.
     clearScene();
+    masks_.clear();
     pending_.clear();
     renderables_ = 0;
     primitives_ = 0;
