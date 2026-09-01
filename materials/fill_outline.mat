@@ -1,0 +1,27 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The fill-outline family.
+//
+// The same vertices as its fill, with its own indices over them, drawn as lines rather than
+// triangles -- the ABI carries no topology, so the family implies it, which is what mbgl's own
+// fill-outline does with gfx::DrawMode::Lines. Its colour is the layer's `outline_color`, a
+// separate float4 in the evaluated-paint block, not the fill's own.
+material {
+    name : tessella_fill_outline,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        { type : float4, name : color },
+        { type : float,  name : opacity }
+    ],
+    requires : [ position ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        // Straight through: the colour arrives premultiplied and Filament composites it that way.
+        material.baseColor = materialParams.color * materialParams.opacity;
+    }
+}

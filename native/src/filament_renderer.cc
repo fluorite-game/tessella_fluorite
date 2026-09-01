@@ -76,6 +76,37 @@ std::size_t drawableStride(std::int32_t family) {
 /// And which carries the layer's evaluated paint.
 constexpr std::uint32_t kPropsSlot = 5;
 
+/// Which primitive a family's indices describe.
+///
+/// The ABI carries no topology, and it does not need to: the family settles it. A fill outline is
+/// the same vertices as its fill with its own indices over them, and those indices are pairs --
+/// mbgl draws them with `gfx::DrawMode::Lines`. Drawing them as triangles produces geometry that
+/// is wrong in a way that still fills pixels, which is the kind of wrong worth naming.
+filament::RenderableManager::PrimitiveType primitiveFor(std::int32_t family) {
+    switch (family) {
+        case TSL_BUILTIN_FILL_OUTLINE_SHADER:
+        case TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER:
+        case TSL_BUILTIN_FILL_OUTLINE_TRIANGULATED_SHADER:
+            return filament::RenderableManager::PrimitiveType::LINES;
+        default:
+            return filament::RenderableManager::PrimitiveType::TRIANGLES;
+    }
+}
+
+/// Where a family's evaluated-paint block keeps its colour.
+///
+/// Every block opens with `color[4]`, except that an outline wants the *outline* colour, which the
+/// fill block keeps immediately after it.
+std::size_t colourOffset(std::int32_t family) {
+    switch (family) {
+        case TSL_BUILTIN_FILL_OUTLINE_SHADER:
+        case TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER:
+            return offsetof(tsl_fill_evaluated_props_ubo, outline_color);
+        default:
+            return 0;
+    }
+}
+
 /// Where a family's evaluated-paint block keeps its opacity.
 ///
 /// Every one of them opens with `color[4]`, which is why the colour read is family-agnostic. What
@@ -537,9 +568,11 @@ void FilamentRenderer::issue(const Batch& batch) {
         auto* instance = found->second;
 
         if (const auto props = layer->second.find(kPropsSlot);
-            props != layer->second.end() && props->second.size() >= sizeof(float) * 4) {
+            props != layer->second.end() &&
+            props->second.size() >= colourOffset(batch.builtinShader) + sizeof(float) * 4) {
             float colour[4] = {0, 0, 0, 0};
-            std::memcpy(colour, props->second.data(), sizeof colour);
+            std::memcpy(colour, props->second.data() + colourOffset(batch.builtinShader),
+                        sizeof colour);
             coloured_++;
             instance->setParameter(
                 "color", filament::math::float4{colour[0], colour[1], colour[2], colour[3]});
@@ -550,6 +583,28 @@ void FilamentRenderer::issue(const Batch& batch) {
                 std::memcpy(&opacity, props->second.data() + off, sizeof opacity);
             }
             instance->setParameter("opacity", opacity);
+
+            // A line also needs its width, from the layer's paint, and the drawable's own ratio,
+            // which is what keeps a road at a constant pixel width as the tile scales.
+            if (batch.builtinShader == TSL_BUILTIN_LINE_SHADER) {
+                float lineWidth = 1.0f;
+                if (offsetof(tsl_line_evaluated_props_ubo, width) + sizeof(float) <=
+                    props->second.size()) {
+                    std::memcpy(&lineWidth,
+                                props->second.data() +
+                                    offsetof(tsl_line_evaluated_props_ubo, width),
+                                sizeof lineWidth);
+                }
+                instance->setParameter("width", lineWidth);
+
+                float ratio = 1.0f;
+                const std::size_t ratioAt = at + offsetof(tsl_line_drawable_ubo, ratio);
+                if (ratioAt + sizeof(float) <= drawables->second.size()) {
+                    std::memcpy(&ratio, drawables->second.data() + ratioAt, sizeof ratio);
+                }
+                instance->setParameter("ratio", ratio);
+                instance->setParameter("matrix", transform);
+            }
         }
 
         // The tile's own clip, as a stencil test. A parent's geometry passes only where the
@@ -614,8 +669,8 @@ void FilamentRenderer::issue(const Batch& batch) {
             .culling(false)
             .priority(band)
             .material(0, instance)
-            .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
-                      mesh->second.vertices, mesh->second.indices, 0, mesh->second.indexCount);
+            .geometry(0, primitiveFor(batch.builtinShader), mesh->second.vertices,
+                      mesh->second.indices, 0, mesh->second.indexCount);
 
         utils::Entity entity = utils::EntityManager::get().create();
         builder.build(*engine_, entity);
@@ -623,7 +678,13 @@ void FilamentRenderer::issue(const Batch& batch) {
         // The transform Filament applies itself. This is the whole reason the matrix left the
         // material: a worldPosition write in a vertex hook does not move anything.
         auto& transforms = engine_->getTransformManager();
-        transforms.setTransform(transforms.getInstance(entity), transform);
+        // A line places itself: it must extrude in tile units before the tile-to-clip transform,
+        // so it takes the matrix as a parameter and its renderable carries the identity. Everything
+        // else lets Filament apply the transform, which is cheaper and needs no vertex hook.
+        transforms.setTransform(transforms.getInstance(entity),
+                                batch.builtinShader == TSL_BUILTIN_LINE_SHADER
+                                    ? filament::math::mat4f()
+                                    : transform);
 
         scene_->addEntity(entity);
         entities_.push_back(entity);

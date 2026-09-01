@@ -1,0 +1,65 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The line family.
+//
+// A line arrives as a strip of quads that carry their own extrusion: each vertex holds the centre
+// position with the normal packed into its low bit, and a byte pair saying which way and how far
+// to push. The shader does the pushing, in tile units, scaled by the drawable's `ratio` -- which
+// is what makes a road hold its pixel width as the camera zooms rather than growing with the tile.
+//
+// Mirrors mbgl's line vertex shader:
+//   pos    = floor(a_pos_normal * 0.5)
+//   normal = a_pos_normal - 2 * pos, with y remapped to [-1, 1]
+//   extrude = a_data.xy - 128
+//   offset  = halfwidth * extrude / EXTRUDE_SCALE / ratio
+// Blur, dash patterns, gap width, line offset and the round/square caps are not here yet; a solid
+// line of the right width in the right place is the first thing worth having.
+material {
+    name : tessella_line,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        { type : mat4,   name : matrix },
+        { type : float4, name : color },
+        { type : float,  name : opacity },
+        { type : float,  name : width },
+        { type : float,  name : ratio }
+    ],
+    requires : [ position, custom0 ],
+    variables : [ tileNormal ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        // EXTRUDE_SCALE is mbgl's: the byte pair encodes a unit vector over 63.
+        const float EXTRUDE_SCALE = 63.0;
+
+        vec2 posNormal = getPosition().xy;
+        vec2 centre = floor(posNormal * 0.5);
+        vec2 normal = posNormal - 2.0 * centre;
+        normal.y = normal.y * 2.0 - 1.0;
+
+        // a_data arrives as four unsigned bytes; the first two are the extrusion, biased by 128.
+        // Raw bytes, not normalised: the vertex buffer declares UBYTE4 without a normalize
+        // flag, so the shader sees 0..255 rather than 0..1.
+        vec2 extrude = getCustom0().xy - 128.0;
+
+        float halfwidth = materialParams.width * 0.5;
+        vec2 offset = halfwidth * extrude / EXTRUDE_SCALE / max(materialParams.ratio, 1e-6);
+
+        // The matrix is applied here rather than by the renderable's transform, because the
+        // extrusion has to happen in tile units *before* the tile-to-clip step. `worldPosition` is
+        // already past that transform in the object domain, so a line's renderable is given the
+        // identity and does the whole placement itself.
+        material.tileNormal = vec4(normal, 0.0, 0.0);
+        material.worldPosition = materialParams.matrix * vec4(centre + offset, 0.0, 1.0);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = materialParams.color * materialParams.opacity;
+    }
+}
