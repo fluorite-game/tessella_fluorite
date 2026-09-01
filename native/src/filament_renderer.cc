@@ -242,6 +242,11 @@ void FilamentRenderer::writeMasks() {
         auto* instance = maskMaterial_->createInstance();
         maskInstances_.push_back(instance);
         instance->setColorWrite(std::getenv("TSF_SHOW_MASKS") != nullptr);
+        // Each mask painted by its own reference, so the stencil's layout can be looked at.
+        instance->setParameter("color", filament::math::float4{
+            static_cast<float>(reference) / 8.0f,
+            static_cast<float>(tile.overscaled_z % 4) / 4.0f, 0.5f, 1.0f});
+        instance->setParameter("opacity", 1.0f);
         instance->setDepthWrite(false);
         instance->setStencilWrite(true);
         instance->setStencilReferenceValue(reference);
@@ -554,7 +559,7 @@ void FilamentRenderer::issue(const Batch& batch) {
         if (reference == 0) {
             unmasked_++;
         }
-        if (reference != 0) {
+        if (reference != 0 && !std::getenv("TSF_NO_STENCIL")) {
             instance->setStencilWrite(false);
             instance->setStencilReferenceValue(std::getenv("TSF_IMPOSSIBLE_REF") ? 200 : reference);
             instance->setStencilCompareFunction(filament::MaterialInstance::StencilCompareFunc::E);

@@ -22,9 +22,11 @@ material {
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        // Premultiplied, which is what Filament's transparent blending expects: it composites
-        // src + dst*(1-a), so the colour must already carry its own alpha.
-        float a = materialParams.color.a * materialParams.opacity;
-        material.baseColor = vec4(materialParams.color.rgb * a, a);
+        // Straight alpha. Filament's transparent mode composites the source already multiplied,
+        // so multiplying here as well darkens the result once per composite -- invisible where a
+        // single layer covers a pixel and compounding wherever layers stack, which is what the
+        // banding across liberty was: 133,033 pixels of a grey the oracle never produces, gone the
+        // moment this stopped double-multiplying.
+        material.baseColor = materialParams.color * materialParams.opacity;
     }
 }
