@@ -164,6 +164,10 @@ int main(int argc, char** argv) {
     for (const auto& [z, n] : backend.zooms()) {
         std::printf("zoom_%u %llu\n", (unsigned)z, (unsigned long long)n);
     }
+    for (const auto& [pass, n] : backend.passes()) {
+        std::printf("pass_%u %llu\n", (unsigned)pass, (unsigned long long)n);
+    }
+    std::printf("redrawn %llu\n", (unsigned long long)backend.redrawn());
     std::printf("unplaced %llu\n", (unsigned long long)backend.unplaced());
     std::printf("missing_batches %llu\n", (unsigned long long)backend.missing());
     for (std::int32_t family : backend.missingFamilies()) {

@@ -17,6 +17,7 @@
 #include <string>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace tsf {
@@ -90,6 +91,15 @@ public:
     /// Drawables skipped because their matrix slot was past the end of the layer's buffer.
     [[nodiscard]] std::uint64_t unplaced() const noexcept { return unplaced_; }
 
+    /// Geometries issued more than once in a frame. Each extra draw blends again, so a
+    /// translucent fill drawn twice is visibly darker than the same fill drawn once.
+    [[nodiscard]] std::uint64_t redrawn() const noexcept { return redrawn_; }
+
+    /// How many drawables were issued in each render pass.
+    [[nodiscard]] const std::map<std::uint8_t, std::uint64_t>& passes() const noexcept {
+        return passes_;
+    }
+
     /// How many materials were loaded.
     [[nodiscard]] std::size_t materials() const noexcept { return materials_.size(); }
 
@@ -138,6 +148,9 @@ private:
     std::map<std::uint8_t, std::uint64_t> zooms_;
     std::uint64_t ordered_ = 0;
     std::uint64_t unplaced_ = 0;
+    std::unordered_set<std::uint64_t> drawnThisFrame_;
+    std::uint64_t redrawn_ = 0;
+    std::map<std::uint8_t, std::uint64_t> passes_;
     std::uint64_t made_ = 0;
     std::uint64_t coloured_ = 0;
     std::uint64_t renderables_ = 0;

@@ -183,6 +183,9 @@ void FilamentRenderer::beginFrame(std::uint64_t) {
     ordered_ = 0;
     unplaced_ = 0;
     zooms_.clear();
+    drawnThisFrame_.clear();
+    passes_.clear();
+    redrawn_ = 0;
 }
 
 void FilamentRenderer::onGeometry(const DrawableAdd& add) {
@@ -365,6 +368,14 @@ void FilamentRenderer::issue(const Batch& batch) {
         }
 
         zooms_[mesh->second.zoom]++;
+        // Counted, not skipped. The same geometry legitimately appears many times in a frame:
+        // the background is one quad shared by every tile of the cover and drawn once per tile,
+        // with that tile's matrix. Deduplicating by geometry id collapses those into one and the
+        // cover goes dark, which is how this was found.
+        if (!drawnThisFrame_.insert(batch.geometries[i]).second) {
+            redrawn_++;
+        }
+        passes_[batch.pass]++;
         // The matrix this drawable is placed by. Skipped rather than defaulted when it cannot be
         // read: identity is not a neutral choice here -- it puts tile-local coordinates straight
         // into clip space, where they cover the viewport and look like a bug somewhere else.
