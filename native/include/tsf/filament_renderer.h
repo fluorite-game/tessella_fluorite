@@ -61,6 +61,9 @@ public:
     void onGeometry(const DrawableAdd& add) override;
     void onRetire(std::uint64_t id) override;
     void onBatch(const Batch& batch) override;
+
+    /// Builds one batch into the scene. Called from `endFrame`, in painter order.
+    void issue(const Batch& batch);
     void onUniforms(const UboUpdate& update) override;
 
     /// How many batches were skipped for want of a material.
@@ -100,6 +103,14 @@ private:
     std::unordered_map<std::int32_t, filament::Material*> materials_;
     std::unordered_map<std::uint64_t, Mesh> meshes_;
     std::unordered_map<std::int32_t, Blocks> uniforms_;
+
+    /// This frame's batches, held until `endFrame`.
+    ///
+    /// The producer sends front-to-back -- topmost layer first, background last -- because that is
+    /// what a depth-buffered renderer wants. Submitting in that sequence to a translucent pass
+    /// paints the map inside out, so the batches are collected and issued in reverse: bottom layer
+    /// first, which is the painter order blending needs.
+    std::vector<Batch> pending_;
 
     /// Everything created for the frame being built, torn down at the next `beginFrame`.
     std::vector<utils::Entity> entities_;

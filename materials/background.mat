@@ -46,6 +46,9 @@ vertex {
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        material.baseColor = materialParams.color * materialParams.opacity;
+        // Premultiplied, which is what Filament's transparent blending expects: it composites
+        // src + dst*(1-a), so the colour must already carry its own alpha.
+        float a = materialParams.color.a * materialParams.opacity;
+        material.baseColor = vec4(materialParams.color.rgb * a, a);
     }
 }

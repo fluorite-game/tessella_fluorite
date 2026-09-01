@@ -152,14 +152,13 @@ void FilamentRenderer::beginFrame(std::uint64_t) {
     // what the producer works to avoid resending -- but which of them are drawn, in what sequence,
     // and against which uniforms is the frame's own answer.
     clearScene();
+    pending_.clear();
     renderables_ = 0;
     primitives_ = 0;
     made_ = 0;
     coloured_ = 0;
     ordered_ = 0;
 }
-
-void FilamentRenderer::endFrame(std::uint64_t) {}
 
 void FilamentRenderer::onGeometry(const DrawableAdd& add) {
     if (add.vertexCount == 0 || add.indexes.empty()) {
@@ -262,6 +261,18 @@ void FilamentRenderer::onUniforms(const UboUpdate& update) {
 }
 
 void FilamentRenderer::onBatch(const Batch& batch) {
+    pending_.push_back(batch);
+}
+
+void FilamentRenderer::endFrame(std::uint64_t) {
+    // Reversed: see `pending_`. The producer's order is front-to-back and this pass blends.
+    for (auto it = pending_.rbegin(); it != pending_.rend(); ++it) {
+        issue(*it);
+    }
+    pending_.clear();
+}
+
+void FilamentRenderer::issue(const Batch& batch) {
     const auto material = materials_.find(batch.builtinShader);
     if (material == materials_.end()) {
         missing_++;
@@ -304,7 +315,23 @@ void FilamentRenderer::onBatch(const Batch& batch) {
     // which is a change to every material rather than to this.
     const auto band = static_cast<std::uint8_t>(
         batch.layerIndex == 0 ? 0 : 1 + std::min<std::uint32_t>(6, batch.layerIndex / 16));
-    builder.boundingBox({{0, 0, 0}, {8192, 8192, 8192}}).culling(false).priority(band);
+
+    // The bounding box carries the layer order, because that is what Filament actually sorts on.
+    //
+    // Translucent renderables are ordered back-to-front by their box's distance from the camera,
+    // not by anything the vertex shader writes -- so identical boxes tie, the sort falls back to
+    // submission order, and submission order is the producer's *front-to-back* sequence with the
+    // background last. That is why the frame came out as a flat sheet of background: it was drawn
+    // last over everything, and no amount of shader-side depth could move it.
+    //
+    // Centred at z = layerIndex - 256, so the bottom layer is farthest and the top nearest. The
+    // box is used only for sorting here: culling is off, and the geometry's real position comes
+    // from the drawable's own matrix in the shader.
+    const float depth = static_cast<float>(batch.layerIndex) - 256.0f;
+    builder
+        .boundingBox({{0, 0, depth}, {8192, 8192, 1}})
+        .culling(false)
+        .priority(band);
 
     for (std::size_t i = 0; i < parts.size(); i++) {
         auto* instance = material->second->createInstance();
