@@ -51,7 +51,7 @@ material {
         { type : float,     name : pixelRatio },
         { type : sampler2d, name : atlas }
     ],
-    requires : [ position, custom0, custom1, custom2, custom3 ],
+    requires : [ position, custom0, custom1, custom2 ],
     variables : [ glyph, glyphGamma ]
 }
 
@@ -67,9 +67,12 @@ vertex {
         float a_size_min = floor(a_size.x * 0.5);
 
         vec2 a_pxoffset = getCustom1().xy;
-        vec3 projPos = getCustom2().xyz;
+        // Position and fade in one attribute: the consumer packs them together, because a fifth
+        // custom slot did not bind here and a fade of zero multiplies every glyph away.
+        vec4 placed = getCustom2();
+        vec3 projPos = placed.xyz;
         float segment_angle = -projPos.z;
-        float packedFade = getCustom3().x;
+        float packedFade = placed.w;
 
         float size;
         if (materialParams.isSizeZoomConstant < 0.5

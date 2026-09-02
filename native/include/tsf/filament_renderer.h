@@ -194,6 +194,9 @@ private:
     /// constant. See the definition for why that is not the generic path.
     bool buildRoof(const DrawableAdd& add);
 
+    /// Builds a symbol drawable, keyed by attribute id, folding the fade into the float channel.
+    bool buildSymbol(const DrawableAdd& add);
+
     /// Draws the clip masks for this frame and assigns each tile its stencil reference.
     ///
     /// Coarse first, so a child's mask overwrites its parent's where they overlap and the parent

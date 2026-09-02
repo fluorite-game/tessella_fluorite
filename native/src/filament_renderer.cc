@@ -845,6 +845,120 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
     return true;
 }
 
+/// Builds a symbol drawable, keyed by attribute id, with the fade folded into the float channel.
+///
+/// A symbol carries five attributes, which is one more custom slot than the generic path gets a
+/// working binding for here: the fifth arrived as zero however the wire described it, and a fade
+/// opacity of zero multiplies every glyph away. Rather than leave labels dependent on that, the
+/// projected position and the fade travel together in one `FLOAT4` -- the position needs three
+/// components and the fade one, and they are both per-vertex floats, so the pair costs nothing
+/// over sending them apart.
+bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
+    const Attribute* posOffset = nullptr;
+    const Attribute* data = nullptr;
+    const Attribute* pixelOffset = nullptr;
+    const Attribute* projected = nullptr;
+    const Attribute* fade = nullptr;
+    for (const Attribute& a : add.attrs) {
+        switch (a.desc.attr_id) {
+            case TSL_UBO_ID_SYMBOL_POS_OFFSET_VERTEX_ATTRIBUTE: posOffset = &a; break;
+            case TSL_UBO_ID_SYMBOL_DATA_VERTEX_ATTRIBUTE: data = &a; break;
+            case TSL_UBO_ID_SYMBOL_PIXEL_OFFSET_VERTEX_ATTRIBUTE: pixelOffset = &a; break;
+            case TSL_UBO_ID_SYMBOL_PROJECTED_POS_VERTEX_ATTRIBUTE: projected = &a; break;
+            case TSL_UBO_ID_SYMBOL_FADE_OPACITY_VERTEX_ATTRIBUTE: fade = &a; break;
+            default: break;
+        }
+    }
+    if (posOffset == nullptr || data == nullptr || pixelOffset == nullptr || projected == nullptr) {
+        return false;
+    }
+    const auto count = static_cast<std::uint32_t>(add.vertexCount);
+    if (count == 0) {
+        return false;
+    }
+
+    // Position and fade, interleaved. A label the producer has not placed carries no fade, and
+    // full opacity is the right reading of that: the alternative is a map that draws no labels.
+    std::vector<float> placed(static_cast<std::size_t>(count) * 4, 0.0f);
+    for (std::uint32_t i = 0; i < count; i++) {
+        float xyz[3] = {0, 0, 0};
+        std::memcpy(xyz, projected->data.data + i * projected->desc.stride + projected->desc.offset,
+                    sizeof xyz);
+        float packed = 255.0f;
+        if (fade != nullptr) {
+            std::memcpy(&packed, fade->data.data + i * fade->desc.stride + fade->desc.offset,
+                        sizeof packed);
+        }
+        placed[i * 4 + 0] = xyz[0];
+        placed[i * 4 + 1] = xyz[1];
+        placed[i * 4 + 2] = xyz[2];
+        placed[i * 4 + 3] = packed;
+    }
+
+    auto* vertices = filament::VertexBuffer::Builder()
+                         .vertexCount(count)
+                         .bufferCount(4)
+                         .attribute(filament::VertexAttribute::POSITION, 0,
+                                    filament::VertexBuffer::AttributeType::SHORT4,
+                                    posOffset->desc.offset, posOffset->desc.stride)
+                         .attribute(filament::VertexAttribute::CUSTOM0, 1,
+                                    filament::VertexBuffer::AttributeType::USHORT4,
+                                    data->desc.offset, data->desc.stride)
+                         .attribute(filament::VertexAttribute::CUSTOM1, 2,
+                                    filament::VertexBuffer::AttributeType::SHORT4,
+                                    pixelOffset->desc.offset, pixelOffset->desc.stride)
+                         .attribute(filament::VertexAttribute::CUSTOM2, 3,
+                                    filament::VertexBuffer::AttributeType::FLOAT4, 0, 16)
+                         .build(*engine_);
+    if (vertices == nullptr) {
+        return false;
+    }
+    const auto upload = [&](std::uint8_t slot, const void* from, std::size_t bytes) {
+        auto* owned = static_cast<std::uint8_t*>(std::malloc(bytes));
+        if (owned == nullptr) {
+            return;
+        }
+        std::memcpy(owned, from, bytes);
+        vertices->setBufferAt(*engine_, slot,
+                              filament::VertexBuffer::BufferDescriptor(
+                                  owned, bytes,
+                                  [](void* buffer, std::size_t, void*) { std::free(buffer); }));
+    };
+    upload(0, posOffset->data.data, posOffset->data.size);
+    upload(1, data->data.data, data->data.size);
+    upload(2, pixelOffset->data.data, pixelOffset->data.size);
+    upload(3, placed.data(), placed.size() * sizeof(float));
+
+    const auto indexCount = static_cast<std::uint32_t>(add.indexes.size / sizeof(std::uint16_t));
+    auto* indices = filament::IndexBuffer::Builder()
+                        .indexCount(indexCount)
+                        .bufferType(filament::IndexBuffer::IndexType::USHORT)
+                        .build(*engine_);
+    if (indices == nullptr) {
+        engine_->destroy(vertices);
+        return false;
+    }
+    auto* ownedIndexes = static_cast<std::uint8_t*>(std::malloc(add.indexes.size));
+    if (ownedIndexes == nullptr) {
+        engine_->destroy(indices);
+        engine_->destroy(vertices);
+        return false;
+    }
+    std::memcpy(ownedIndexes, add.indexes.data, add.indexes.size);
+    indices->setBuffer(*engine_,
+                       filament::IndexBuffer::BufferDescriptor(
+                           ownedIndexes, add.indexes.size,
+                           [](void* buffer, std::size_t, void*) { std::free(buffer); }));
+
+    onRetire(add.id);
+    meshes_[add.id] = Mesh{vertices, indices, indexCount, add.layerIndex,
+                           add.tileID ? add.tileID->z : std::uint8_t{0},
+                           add.tileID ? add.tileID->overscaled_z : std::uint8_t{0},
+                           add.tileID ? *add.tileID : TileID{},
+                           textureFor(add)};
+    return true;
+}
+
 void FilamentRenderer::onGeometry(const DrawableAdd& add) {
 
     if (add.vertexCount == 0 || add.indexes.empty()) {
@@ -858,6 +972,10 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
     }
     if (add.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER) {
         buildRoof(add);
+        return;
+    }
+    if (add.builtinShader == TSL_BUILTIN_SYMBOL_SDFSHADER) {
+        buildSymbol(add);
         return;
     }
 
