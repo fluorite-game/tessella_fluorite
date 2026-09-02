@@ -1,0 +1,93 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The raster family: a tile's picture, with the style's colour adjustments.
+//
+// Two samplers, not one. A raster source cross-fades between the tile it wants and the parent it
+// is standing on while the finer one loads, so both are bound and `fadeT` mixes them; with no fade
+// in progress the producer binds the same picture to both and the mix is a no-op. Binding only the
+// first would leave the second sampling whatever was last there.
+//
+// The adjustments are mbgl's, in mbgl's order -- spin, saturation, contrast, brightness -- and the
+// order is not arbitrary: contrast is applied about 0.5 and brightness interpolates between two
+// levels, so swapping them changes the picture. Transcribed from `RasterShader`, Vulkan variant.
+material {
+    name : tessella_raster,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        { type : mat4,      name : matrix },
+        { type : float4,    name : spinWeights },
+        { type : float2,    name : tlParent },
+        { type : float,     name : scaleParent },
+        { type : float,     name : bufferScale },
+        { type : float,     name : fadeT },
+        { type : float,     name : opacity },
+        { type : float,     name : brightnessLow },
+        { type : float,     name : brightnessHigh },
+        { type : float,     name : saturationFactor },
+        { type : float,     name : contrastFactor },
+        { type : sampler2d, name : image0 },
+        { type : sampler2d, name : image1 }
+    ],
+    requires : [ position, custom0 ],
+    variables : [ rasterUv ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec2 position = getPosition().xy;
+        // The texture coordinates are int16 over 8192 rather than normalised floats, which is what
+        // gives a raster tile enough precision to be sampled at a fraction of a texel. 8192 is the
+        // same EXTENT the position coordinates use, so the two scale together.
+        vec2 texel = getCustom0().xy;
+
+        vec2 position0 = (((texel / 8192.0) - 0.5) / materialParams.bufferScale) + 0.5;
+        vec2 position1 = (position0 * materialParams.scaleParent) + materialParams.tlParent;
+        material.rasterUv = vec4(position0, position1);
+
+        material.worldPosition = materialParams.matrix * vec4(position, 0.0, 1.0);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // Un-premultiplied before mixing: the two pictures are blended against each other, not
+        // composited, so they have to be in the same space first.
+        vec4 color0 = texture(materialParams_image0, variable_rasterUv.xy);
+        vec4 color1 = texture(materialParams_image1, variable_rasterUv.zw);
+        if (color0.a > 0.0) {
+            color0.rgb = color0.rgb / color0.a;
+        }
+        if (color1.a > 0.0) {
+            color1.rgb = color1.rgb / color1.a;
+        }
+        vec4 color = mix(color0, color1, materialParams.fadeT);
+        color.a *= materialParams.opacity;
+        vec3 rgb = color.rgb;
+
+        // Spin, as a rotation of the channels against each other.
+        rgb = vec3(dot(rgb, materialParams.spinWeights.xyz),
+                   dot(rgb, materialParams.spinWeights.zxy),
+                   dot(rgb, materialParams.spinWeights.yzx));
+
+        // Saturation, toward or away from the pixel's own grey.
+        float average = (color.r + color.g + color.b) / 3.0;
+        rgb += (average - rgb) * materialParams.saturationFactor;
+
+        // Contrast, about the middle.
+        rgb = (rgb - 0.5) * materialParams.contrastFactor + 0.5;
+
+        // Brightness, as an interpolation between the two levels the style names. mbgl passes
+        // `low` into the vector it calls high and vice versa, and that is copied rather than
+        // corrected: the two are the ends of a mix and swapping them is what inverts the ramp.
+        vec3 high = vec3(materialParams.brightnessLow);
+        vec3 low = vec3(materialParams.brightnessHigh);
+        vec3 adjusted = mix(high, low, rgb);
+
+        // Premultiplied on the way out, which is the blending this is configured for.
+        material.baseColor = vec4(adjusted * color.a, color.a);
+    }
+}

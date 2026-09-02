@@ -180,6 +180,8 @@ private:
         /// The atlas this drawable samples, or zero. Held with the mesh because the reference
         /// arrives with the geometry and is needed when the batch that draws it is issued.
         std::uint64_t texture = 0;
+        /// The second picture, for a raster tile fading from its parent.
+        std::uint64_t texture1 = 0;
     };
 
     /// One layer's uniform blocks, by slot.

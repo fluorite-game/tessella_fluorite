@@ -72,6 +72,10 @@ std::size_t drawableStride(std::int32_t family) {
         case TSL_BUILTIN_LINE_PATTERN_SHADER:
         case TSL_BUILTIN_LINE_SDFSHADER:
             return TSL_STRIDE_LINE_DRAWABLE_UNION_UBO;
+        case TSL_BUILTIN_RASTER_SHADER:
+            // A matrix and nothing else, where a fill's block is 96. Falling through to the
+            // fill's stride read every raster drawable after the first at the wrong offset.
+            return sizeof(tsl_raster_drawable_ubo);
         case TSL_BUILTIN_SYMBOL_SDFSHADER:
         case TSL_BUILTIN_SYMBOL_ICON_SHADER:
         case TSL_BUILTIN_SYMBOL_TEXT_AND_ICON_SHADER:
@@ -522,9 +526,9 @@ namespace {
 ///
 /// Slot zero is the image texture for every family that has one -- a glyph atlas for text, a
 /// sprite atlas for a pattern -- and a drawable that samples nothing simply lists no reference.
-std::uint64_t textureFor(const DrawableAdd& add) {
+std::uint64_t textureFor(const DrawableAdd& add, std::uint32_t want = 0) {
     for (const auto& [slot, id] : add.textureRefs) {
-        if (slot == TSL_UBO_ID_SYMBOL_IMAGE_TEXTURE) {
+        if (slot == want) {
             return id;
         }
     }
@@ -1058,7 +1062,8 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
                            add.tileID ? add.tileID->z : std::uint8_t{0},
                            add.tileID ? add.tileID->overscaled_z : std::uint8_t{0},
                            add.tileID ? *add.tileID : TileID{},
-                           textureFor(add)};
+                           textureFor(add),
+                           textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE)};
 }
 
 void FilamentRenderer::onRetire(std::uint64_t id) {
@@ -1192,7 +1197,8 @@ void FilamentRenderer::issue(const Batch& batch) {
             // A symbol has no single colour: it carries a fill and a halo, and which of them
             // applies is a property of the pass rather than of the layer. Its own block below
             // sets both, so the shared path would only be setting a uniform it does not declare.
-            const bool sharedColour = batch.builtinShader != TSL_BUILTIN_SYMBOL_SDFSHADER;
+            const bool sharedColour = batch.builtinShader != TSL_BUILTIN_SYMBOL_SDFSHADER
+                                      && batch.builtinShader != TSL_BUILTIN_RASTER_SHADER;
             if (sharedColour) {
                 float colour[4] = {0, 0, 0, 0};
                 std::memcpy(colour, props->second.data() + colourOffset(batch.builtinShader),
@@ -1241,6 +1247,57 @@ void FilamentRenderer::issue(const Batch& batch) {
                                        filament::math::float2{static_cast<float>(width_) * 0.5f,
                                                               -static_cast<float>(height_) * 0.5f});
                 instance->setParameter("matrix", transform);
+            }
+
+            // A raster tile needs its own placement, the style's colour adjustments, and both
+            // pictures: the tile's own and the parent it is fading from.
+            if (batch.builtinShader == TSL_BUILTIN_RASTER_SHADER) {
+                tsl_raster_evaluated_props_ubo paint{};
+                if (props->second.size() >= sizeof paint) {
+                    std::memcpy(&paint, props->second.data(), sizeof paint);
+                }
+                instance->setParameter(
+                    "spinWeights",
+                    filament::math::float4{paint.spin_weights[0], paint.spin_weights[1],
+                                           paint.spin_weights[2], paint.spin_weights[3]});
+                instance->setParameter(
+                    "tlParent", filament::math::float2{paint.tl_parent[0], paint.tl_parent[1]});
+                instance->setParameter("scaleParent", paint.scale_parent);
+                // A zero buffer scale would divide the texture coordinates into infinity; the
+                // producer sends one, and this is the guard rather than the assumption.
+                instance->setParameter("bufferScale",
+                                       paint.buffer_scale > 0.0f ? paint.buffer_scale : 1.0f);
+                instance->setParameter("fadeT", paint.fade_t);
+                instance->setParameter("opacity", paint.opacity);
+                instance->setParameter("brightnessLow", paint.brightness_low);
+                instance->setParameter("brightnessHigh", paint.brightness_high);
+                instance->setParameter("saturationFactor", paint.saturation_factor);
+                instance->setParameter("contrastFactor", paint.contrast_factor);
+
+                tsl_raster_drawable_ubo block{};
+                if (at + sizeof block <= drawables->second.size()) {
+                    std::memcpy(&block, drawables->second.data() + at, sizeof block);
+                }
+                filament::math::mat4f placement;
+                std::memcpy(&placement, block.matrix, sizeof block.matrix);
+                instance->setParameter("matrix", placement);
+
+                const auto first = textures_.find(mesh->second.texture);
+                if (first == textures_.end()) {
+                    missingAtlas_++;
+                    continue;
+                }
+                // The second picture falls back to the first, which is what "no fade in
+                // progress" means and what keeps the sampler from reading whatever was last
+                // bound to it.
+                const auto held = textures_.find(mesh->second.texture1);
+                auto* second =
+                    held == textures_.end() ? first->second : held->second;
+                const filament::TextureSampler sampler(
+                    filament::TextureSampler::MinFilter::LINEAR,
+                    filament::TextureSampler::MagFilter::LINEAR);
+                instance->setParameter("image0", first->second, sampler);
+                instance->setParameter("image1", second, sampler);
             }
 
             // A symbol needs three matrices, the atlas it samples, the layer's text paint, and
@@ -1468,7 +1525,8 @@ void FilamentRenderer::issue(const Batch& batch) {
         // A line places itself: it must extrude in tile units before the tile-to-clip transform,
         // so it takes the matrix as a parameter and its renderable carries the identity. Everything
         // else lets Filament apply the transform, which is cheaper and needs no vertex hook.
-        const bool placesItself = batch.builtinShader == TSL_BUILTIN_SYMBOL_SDFSHADER ||
+        const bool placesItself = batch.builtinShader == TSL_BUILTIN_RASTER_SHADER ||
+                                  batch.builtinShader == TSL_BUILTIN_SYMBOL_SDFSHADER ||
                                   batch.builtinShader == TSL_BUILTIN_LINE_SHADER ||
                                   batch.builtinShader ==
                                       TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER ||
