@@ -1470,9 +1470,13 @@ void FilamentRenderer::issue(const Batch& batch) {
                 // pixels. That is a second arrangement of the same three matrices, and this
                 // shader implements the viewport one; drawing an on-map label through it puts the
                 // offsets in the wrong space. Counted and skipped until it is written.
+                // Drawn, not skipped. The two arrangements differ only in the three matrices the
+                // producer builds, and the shader's arithmetic is the same for both -- so once a
+                // line label's glyphs are walked along its road and its plane matrix is honestly
+                // the identity, there is nothing here to branch on. Still counted, because a
+                // label laid out in the map's plane is what a pitched camera exercises first.
                 if (block.pitch_with_map) {
                     pitchedLabels_++;
-                    continue;
                 }
 
                 // Without the atlas there is nothing to read a distance out of, so the batch is
