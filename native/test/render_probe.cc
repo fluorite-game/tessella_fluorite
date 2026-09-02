@@ -141,13 +141,37 @@ int main(int argc, char** argv) {
         pause_ms(5);
         waited += 5;
     }
-    // Then long enough for the rest to land, since the first frame that draws is not the frame
-    // that draws everything.
-    for (int settle = 0; settle < 600; settle++) {
+    // Then until the map goes quiet, rather than for a fixed number of ticks.
+    //
+    // A fixed count captures whatever had arrived when it ran out, and what has arrived decides
+    // what is drawn: tiles land in whatever order the network returns them, glyphs fill their
+    // atlas as labels ask for them, and symbol placement is a function of both. The same frame
+    // measured three times gave 6,502, 8,654 and 9,885 pixels of text -- a spread wide enough to
+    // hide any change worth making. Quiescence is the condition that makes it one frame: the
+    // producer has stopped emitting records, so there is nothing further to arrive.
+    //
+    // Bounded, and it says whether it got there. A run that times out is still measurable; it is
+    // just not comparable, and saying so beats reporting the number as if it were.
+    const int quietTicks = std::getenv("TSF_PROBE_QUIET")
+                               ? std::atoi(std::getenv("TSF_PROBE_QUIET"))
+                               : 200;
+    std::uint64_t held = 0;
+    int quiet = 0;
+    int settled = 0;
+    for (; settled < 6000 && quiet < quietTicks; settled++) {
         const std::uint64_t seen = host->tick(backend);
         host->retire(seen);
-        pause_ms(10);
+        if (host->records() == held) {
+            quiet++;
+        } else {
+            held = host->records();
+            quiet = 0;
+        }
+        pause_ms(5);
     }
+    std::printf("quiescent %d\n", quiet >= quietTicks ? 1 : 0);
+    std::printf("settle_ticks %d\n", settled);
+    std::printf("records %llu\n", (unsigned long long)host->records());
 
     std::string reason;
     std::printf("readiness %d\n", (int)host->readiness(&reason));
