@@ -584,18 +584,21 @@ void FilamentRenderer::issue(const Batch& batch) {
             }
             instance->setParameter("opacity", opacity);
 
-            // A line also needs its width, from the layer's paint, and the drawable's own ratio,
-            // which is what keeps a road at a constant pixel width as the tile scales.
+            // A line needs the widths from the layer's paint and the drawable's own ratio, which
+            // is what keeps a road at a constant pixel width as the tile scales.
             if (batch.builtinShader == TSL_BUILTIN_LINE_SHADER) {
-                float lineWidth = 1.0f;
-                if (offsetof(tsl_line_evaluated_props_ubo, width) + sizeof(float) <=
-                    props->second.size()) {
-                    std::memcpy(&lineWidth,
-                                props->second.data() +
-                                    offsetof(tsl_line_evaluated_props_ubo, width),
-                                sizeof lineWidth);
+                // The whole block rather than one field: width, gap width, offset and blur all
+                // feed the same edge arithmetic, and a shader given some of them from this frame
+                // and the rest from a default draws a line of a width nothing asked for.
+                tsl_line_evaluated_props_ubo paint{};
+                paint.width = 1.0f;
+                if (props->second.size() >= sizeof paint) {
+                    std::memcpy(&paint, props->second.data(), sizeof paint);
                 }
-                instance->setParameter("width", lineWidth);
+                instance->setParameter("width", paint.width);
+                instance->setParameter("gapwidth", paint.gapwidth);
+                instance->setParameter("offset", paint.offset);
+                instance->setParameter("blur", paint.blur);
 
                 float ratio = 1.0f;
                 const std::size_t ratioAt = at + offsetof(tsl_line_drawable_ubo, ratio);
@@ -603,6 +606,15 @@ void FilamentRenderer::issue(const Batch& batch) {
                     std::memcpy(&ratio, drawables->second.data() + ratioAt, sizeof ratio);
                 }
                 instance->setParameter("ratio", ratio);
+                // One device pixel per rendered pixel: the probe's swap chain is the view's own
+                // size. A host on a HiDPI display passes its scale and the feather narrows to
+                // match, which is the whole reason mbgl divides by this rather than fixing 1px.
+                instance->setParameter("pixelRatio", 1.0f);
+                // Clip space spans [-1, 1] across the viewport, so half the extent per unit. Only
+                // read to measure how far perspective stretched an edge.
+                instance->setParameter("unitsToPixels",
+                                       filament::math::float2{static_cast<float>(width_) * 0.5f,
+                                                              -static_cast<float>(height_) * 0.5f});
                 instance->setParameter("matrix", transform);
             }
 
