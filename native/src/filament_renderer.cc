@@ -1151,14 +1151,17 @@ void FilamentRenderer::issue(const Batch& batch) {
     // carries its own matrix -- different tiles do not share one. That gives up the multi-primitive
     // batching `DrawList` groups for; recovering it means splitting a batch by matrix, which is
     // worth doing once there is a picture to measure it against.
-    // Bands one to seven: zero belongs to the mask pass alone, so every clip is written before
-    // any geometry tests against it. Sharing a band with the background left the order between
-    // them unspecified, which is not a thing to leave to chance when one writes what the other
-    // reads.
     // Bands four to seven: zero to three belong to the mask pass, which must have written every
     // clip before any geometry tests against it.
+    //
+    // Then by render pass, which is the coarse half of painter order: mbgl draws the opaque pass
+    // and then the translucent one, and a layer whose mask names both -- a background does --
+    // appears in each. This read `layerIndex / 32`, which put every layer of any style under
+    // thirty-two layers in one band and left Filament to sort them as it saw fit. Two things
+    // came of that: roads painted over the labels naming them, and the background's opaque-pass
+    // drawable, which the producer emits after the rest, landed wherever it landed.
     const auto band = static_cast<std::uint8_t>(
-        4 + std::min<std::uint32_t>(3, batch.layerIndex / 32));
+        batch.pass == static_cast<std::uint8_t>(TSL_RENDER_PASS_OPAQUE) ? 4 : 5);
 
     for (std::size_t i = 0; i < batch.geometries.size(); i++) {
         const auto mesh = meshes_.find(batch.geometries[i]);
@@ -1644,6 +1647,30 @@ void FilamentRenderer::issue(const Batch& batch) {
         builder.boundingBox({{0, 0, 0}, {8192, 8192, 8192}})
             .culling(false)
             .priority(band)
+            // Painter order within the pass, enforced rather than hoped for.
+            //
+            // `priority` is three bits and is spent on the pass above, so it cannot also carry
+            // the order of a style's layers -- and left to itself Filament sorts blended
+            // primitives within a band as it sees fit, which is how roads came to paint over
+            // the labels naming them. `blendOrder` is fifteen bits and, made global, orders
+            // blended primitives across the whole scene, with priority still taking precedence.
+            // So: pass in the band, layer order here.
+            //
+            // `ordered_` counts this frame's renderables in the order the producer sent them,
+            // which *is* painter order -- `DrawList` never reorders, by construction. Lower is
+            // drawn first, so the count goes in as it stands.
+            //
+            // Counting it down was tried first, on a reading that the key sorts like a distance
+            // and a larger value means farther and so earlier. It does not: what looked like an
+            // inverted frame was the background's opaque-pass drawable, which the producer emits
+            // after every translucent one and which the old band left free to land anywhere.
+            //
+            // Clamped rather than wrapped. Past 32,767 drawables in one frame the tail all sorts
+            // together, which loses order within the tail; wrapping would move it to the other
+            // end and paint the frame inside out.
+            .blendOrder(0, static_cast<std::uint16_t>(
+                               std::min<std::uint64_t>(ordered_, 0x7FFF)))
+            .globalBlendOrderEnabled(0, true)
             .material(0, instance)
             .geometry(0, primitiveFor(batch.builtinShader), mesh->second.vertices,
                       mesh->second.indices, 0, mesh->second.indexCount);
@@ -1668,6 +1695,14 @@ void FilamentRenderer::issue(const Batch& batch) {
         transforms.setTransform(transforms.getInstance(entity),
                                 placesItself ? filament::math::mat4f() : transform);
 
+        // The order actually issued, which is what settled this: the background's opaque-pass
+        // drawable arriving *after* every translucent one is not a thing to deduce from a
+        // picture. Alongside `TSF_NO_SCISSOR` and `TSF_NO_STENCIL` for the same reason.
+        if (std::getenv("TSF_ORDER_LOG")) {
+            std::fprintf(stderr, "order %llu shader %d layer %u pass %u band %u\n",
+                         (unsigned long long)ordered_, (int)batch.builtinShader,
+                         (unsigned)batch.layerIndex, (unsigned)batch.pass, (unsigned)band);
+        }
         scene_->addEntity(entity);
         entities_.push_back(entity);
         renderables_++;
