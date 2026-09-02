@@ -175,6 +175,9 @@ int main(int argc, char** argv) {
     std::printf("scissored %llu\n", (unsigned long long)backend.scissored());
     std::printf("unplaced %llu\n", (unsigned long long)backend.unplaced());
     std::printf("wall_triangles %llu\n", (unsigned long long)backend.walls());
+    std::printf("textures %zu\n", backend.textures());
+    std::printf("texture_uploads %llu\n", (unsigned long long)backend.textureUploads());
+    std::printf("texture_skipped %llu\n", (unsigned long long)backend.textureSkipped());
     std::printf("missing_batches %llu\n", (unsigned long long)backend.missing());
     for (std::int32_t family : backend.missingFamilies()) {
         std::printf("missing_family_%d 1\n", family);

@@ -8,6 +8,7 @@
 #include <filament/IndexBuffer.h>
 #include <filament/RenderableManager.h>
 #include <filament/TransformManager.h>
+#include <filament/Texture.h>
 #include <filament/VertexBuffer.h>
 #include <math/mat4.h>
 #include <utils/EntityManager.h>
@@ -231,6 +232,110 @@ FilamentRenderer::FilamentRenderer(filament::Engine* engine,
                                           [](void* b, std::size_t, void*) { std::free(b); }));
 }
 
+void FilamentRenderer::onTexture(const TextureUpdate& update) {
+    // An atlas arrives whole the first time and in rects afterwards, as glyphs and sprites are
+    // added to it. Both are the same call: a whole upload is the rect covering everything, and
+    // the producer sends no rects for it.
+    if (update.width == 0 || update.height == 0 || update.pixels.data == nullptr) {
+        return;
+    }
+    filament::Texture::InternalFormat internal{};
+    filament::Texture::Format format{};
+    switch (update.format) {
+        case TSL_TEXTURE_PIXEL_TYPE_RGBA:
+            internal = filament::Texture::InternalFormat::RGBA8;
+            format = filament::Texture::Format::RGBA;
+            break;
+        case TSL_TEXTURE_PIXEL_TYPE_ALPHA:
+        case TSL_TEXTURE_PIXEL_TYPE_LUMINANCE:
+            // A glyph atlas is one channel: the SDF distance. Filament has no ALPHA8, so it goes
+            // in R8 and the shader reads `.r` -- which is what mbgl's own GL backend does once
+            // ALPHA textures stop existing in core profiles.
+            internal = filament::Texture::InternalFormat::R8;
+            format = filament::Texture::Format::R;
+            break;
+        default:
+            // Depth and stencil are not something a layer samples, and guessing a format here
+            // would upload whatever bytes happened to arrive as colour.
+            textureSkipped_++;
+            return;
+    }
+
+    auto found = textures_.find(update.id);
+    // An atlas is announced before it has anything in it -- a 1x1 placeholder, so that a drawable
+    // naming the slot samples something defined rather than whatever was last bound -- and the
+    // real pixels arrive later at the real size. A Filament texture cannot be resized, so the
+    // placeholder is replaced rather than written into. Both of those uploads are whole-texture,
+    // so nothing is lost; a *rect* update that disagreed with the held size would be, and there is
+    // no sensible way to honour one, since the bytes for the rest of the atlas never arrive twice.
+    if (found != textures_.end() && (found->second->getWidth() != update.width ||
+                                     found->second->getHeight() != update.height)) {
+        if (!update.rects.empty()) {
+            textureSkipped_++;
+            return;
+        }
+        engine_->destroy(found->second);
+        textures_.erase(found);
+        found = textures_.end();
+    }
+    if (found == textures_.end()) {
+        auto* built = filament::Texture::Builder()
+                          .width(update.width)
+                          .height(update.height)
+                          .levels(1)
+                          .sampler(filament::Texture::Sampler::SAMPLER_2D)
+                          .format(internal)
+                          .build(*engine_);
+        if (built == nullptr) {
+            textureSkipped_++;
+            return;
+        }
+        found = textures_.emplace(update.id, built).first;
+    }
+
+    const std::uint32_t pixel = update.pixelSize();
+    if (pixel == 0) {
+        textureSkipped_++;
+        return;
+    }
+
+    // Copied onto the heap and freed by the descriptor's callback, for the reason the vertex
+    // buffers are: the driver reads these after this call returns.
+    const auto upload = [&](std::uint32_t x, std::uint32_t y, std::uint32_t w, std::uint32_t h,
+                            const std::uint8_t* from, std::size_t bytes) {
+        auto* owned = static_cast<std::uint8_t*>(std::malloc(bytes));
+        if (owned == nullptr) {
+            return;
+        }
+        std::memcpy(owned, from, bytes);
+        found->second->setImage(
+            *engine_, 0, x, y, w, h,
+            filament::Texture::PixelBufferDescriptor(
+                owned, bytes, format, filament::Texture::Type::UBYTE,
+                [](void* buffer, std::size_t, void*) { std::free(buffer); }));
+        textureUploads_++;
+    };
+
+    if (update.rects.empty()) {
+        const std::size_t bytes =
+            static_cast<std::size_t>(update.width) * update.height * pixel;
+        if (bytes <= update.pixels.size) {
+            upload(0, 0, update.width, update.height, update.pixels.data, bytes);
+        }
+        return;
+    }
+    // Rects are packed back to back in the order they are listed, each row-major within itself.
+    std::size_t at = 0;
+    for (const tsl_rect& rect : update.rects) {
+        const std::size_t bytes = static_cast<std::size_t>(rect.w) * rect.h * pixel;
+        if (at + bytes > update.pixels.size) {
+            break;
+        }
+        upload(rect.x, rect.y, rect.w, rect.h, update.pixels.data + at, bytes);
+        at += bytes;
+    }
+}
+
 void FilamentRenderer::onStencilTiles(const StencilTiles& tiles) {
     // Kept for this frame only. The producer names the tile set a layer group wants clipped *now*;
     // holding onto earlier frames' tiles leaves stale masks overlapping the live ones, and since
@@ -326,6 +431,11 @@ FilamentRenderer::~FilamentRenderer() {
     for (auto& [family, material] : materials_) {
         engine_->destroy(material);
     }
+    // Before the engine, like everything else it made.
+    for (auto& [id, texture] : textures_) {
+        engine_->destroy(texture);
+    }
+    textures_.clear();
 }
 
 void FilamentRenderer::clearScene() {

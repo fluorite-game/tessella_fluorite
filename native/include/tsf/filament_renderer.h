@@ -12,6 +12,7 @@
 #include <filament/Material.h>
 #include <filament/MaterialInstance.h>
 #include <filament/Scene.h>
+#include <filament/Texture.h>
 #include <utils/Entity.h>
 
 #include <cstdint>
@@ -86,6 +87,7 @@ public:
     /// Builds one batch into the scene. Called from `endFrame`, in painter order.
     void issue(const Batch& batch);
     void onUniforms(const UboUpdate& update) override;
+    void onTexture(const TextureUpdate& update) override;
     void onStencilTiles(const StencilTiles& tiles) override;
 
     /// How many batches were skipped for want of a material.
@@ -149,6 +151,12 @@ public:
 
     /// How many wall triangles were built from instances.
     [[nodiscard]] std::uint64_t walls() const noexcept { return walls_; }
+
+    /// Textures held, and how many pixel uploads they have taken.
+    [[nodiscard]] std::size_t textures() const noexcept { return textures_.size(); }
+    [[nodiscard]] std::uint64_t textureUploads() const noexcept { return textureUploads_; }
+    /// Uploads refused because the format has no Filament equivalent here.
+    [[nodiscard]] std::uint64_t textureSkipped() const noexcept { return textureSkipped_; }
 
     /// How many materials were loaded.
     [[nodiscard]] std::size_t materials() const noexcept { return materials_.size(); }
@@ -244,6 +252,12 @@ private:
     std::uint64_t renderables_ = 0;
     std::uint64_t primitives_ = 0;
     std::uint64_t walls_ = 0;
+
+    /// Atlases by id, kept until the engine goes. A glyph or sprite atlas outlives any one tile
+    /// and is re-uploaded in rects as it fills, so it is owned here rather than with a drawable.
+    std::unordered_map<std::uint64_t, filament::Texture*> textures_;
+    std::uint64_t textureUploads_ = 0;
+    std::uint64_t textureSkipped_ = 0;
 };
 
 } // namespace tsf
