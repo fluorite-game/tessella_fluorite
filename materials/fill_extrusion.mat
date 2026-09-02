@@ -1,17 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The fill-extrusion family: buildings with height.
+// The fill-extrusion family: the roofs of buildings with height.
 //
-// A wall vertex carries the footprint position and a packed normal whose parity says whether this
-// corner sits at the building's base or its top. mbgl reads it as
-//   t = mod(normal.x, 2.0)
-//   z = t > 0 ? height : base
-// so one vertex buffer describes both the ground ring and the roof ring, and the walls between.
+// Roofs only, and that is the architecture rather than a gap. DR-16 settles this build on Vulkan,
+// where mbgl defines `MLN_USE_FILL_EXTRUSION_INSTANCING`, so the instanced branch is the one the
+// target backend takes: roofs come through this shader and the walls through the instanced one as
+// their own family. That is why no normal arrives with the vertices and none is wanted -- mbgl's
+// instanced roof shader hardcodes `vec3(0, 0, 1)`, because every vertex this shader ever sees is
+// part of a horizontal surface. Reading a normal out of the vertex data was the bug this replaces:
+// the attribute at that slot is `decimals_ed`, so the "normal" was a packed coordinate, and the
+// facing computed from it was noise.
 //
-// The lighting is mbgl's flat approximation rather than anything physical: a directional term from
-// the normal plus the layer's own light colour and intensity, which is what gives the roofs and the
-// two wall orientations their distinct shades. `vertical_gradient` and the pattern variants are not
-// here yet.
+// A vertex carries the footprint position and the packed fraction whose low bit says whether the
+// corner sits at the building's base or its top.
+//
+// The lighting is mbgl's, term for term. It is not a physical model and should not be tidied into
+// one: the directional factor *brightens* a lit surface rather than dimming it -- at full
+// incidence it is `max(1 - luminance + intensity, 1)`, never below one -- and only a surface
+// facing away is scaled down, by `1 - intensity`. Multiplying the colour by the intensity instead
+// is what made every building near-black.
 //
 // Placed by the shader like a line, and for the same reason: the base/height selection happens in
 // tile units before the tile-to-clip step, and worldPosition in the object domain is already past
@@ -29,7 +36,10 @@ material {
         { type : float,  name : height },
         { type : float,  name : heightFactor },
         { type : float3, name : lightColor },
-        { type : float,  name : lightIntensity }
+        // Direction the light arrives from, already in the space the normal is in.
+        { type : float3, name : lightPosition },
+        { type : float,  name : lightIntensity },
+        { type : float,  name : verticalGradient }
     ],
     requires : [ position, custom0 ],
     variables : [ shade ]
@@ -38,30 +48,61 @@ material {
 vertex {
     void materialVertex(inout MaterialVertexInputs material) {
         vec2 footprint = getPosition().xy;
-        vec4 normalEd = getCustom0();
+        vec4 decimalsEd = getCustom0();
 
-        // Parity of the packed normal's x selects the roof ring from the ground ring.
-        float top = mod(normalEd.x, 2.0);
-        float z = top > 0.0 ? materialParams.height : materialParams.base;
+        // Every vertex here is on a roof, so the surface faces straight up.
+        vec3 normal = vec3(0.0, 0.0, 1.0);
+        float t = 1.0;
+        float z = t > 0.0 ? materialParams.height : materialParams.base;
 
-        // A wall's facing, from the packed normal. A zero normal is a roof, which takes full light.
-        vec3 normal = normalEd.xyz;
-        float lit = 1.0;
-        if (normal.x != 0.0 || normal.y != 0.0) {
-            vec2 facing = normalize(normal.xy);
-            lit = 0.65 + 0.35 * abs(facing.x * 0.7 + facing.y * 0.7);
+        // The fraction the position was packed with, seven bits an axis. Integer tile units make
+        // this zero today, but a simplification pass produces fractional positions and the walls
+        // would part company with the roof if it were dropped.
+        float packed = floor(decimalsEd.x / 2.0);
+        float high = floor(packed / 256.0);
+        vec2 decimals = vec2(high, packed - high * 256.0) / 128.0;
+
+        // How bright the surface already is. A pale building takes a narrower range of shading
+        // than a dark one, which is what keeps a light roof from blowing out.
+        vec4 color = materialParams.color;
+        float luminance = color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722;
+
+        // Slight ambient, so nothing is ever completely black.
+        color += vec4(0.03, 0.03, 0.03, 1.0);
+
+        float directionalFraction = clamp(dot(normal, materialParams.lightPosition), 0.0, 1.0);
+        float minDirectional = 1.0 - materialParams.lightIntensity;
+        float maxDirectional = max(1.0 - luminance + materialParams.lightIntensity, 1.0);
+        float directional = mix(minDirectional, maxDirectional, directionalFraction);
+
+        // The vertical gradient down a wall. Never taken here -- a roof's normal has z of one --
+        // and kept because it is one branch of the term mbgl computes, and dropping it would make
+        // this shader agree with the oracle only by coincidence of what it is handed.
+        if (normal.z == 0.0) {
+            float fMin = mix(0.7, 0.98, 1.0 - materialParams.lightIntensity);
+            float factor = clamp((t + materialParams.base)
+                                 * pow(materialParams.height / 150.0, 0.5), fMin, 1.0);
+            directional *= (1.0 - materialParams.verticalGradient)
+                         + (materialParams.verticalGradient * factor);
         }
-        material.shade = vec4(lit * materialParams.lightIntensity * materialParams.lightColor, 1.0);
 
-        material.worldPosition =
-            materialParams.matrix * vec4(footprint, z * materialParams.heightFactor, 1.0);
+        // Shading is floored at a tint complementary to the light, so a coloured light leaves its
+        // opposite in the shadows rather than driving them to black.
+        vec3 minLight = mix(vec3(0.0), vec3(0.3), 1.0 - materialParams.lightColor);
+        vec3 lit = clamp(color.rgb * directional * materialParams.lightColor, minLight, vec3(1.0));
+
+        // Premultiplied: rgb scaled by the opacity and alpha set to it, which is mbgl's
+        // `vcolor * opacity` over a colour whose alpha was one.
+        material.shade = vec4(lit, 1.0) * materialParams.opacity;
+
+        material.worldPosition = materialParams.matrix
+                               * vec4(footprint + decimals, z * materialParams.heightFactor, 1.0);
     }
 }
 
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        vec4 paint = materialParams.color * materialParams.opacity;
-        material.baseColor = vec4(paint.rgb * variable_shade.rgb, paint.a);
+        material.baseColor = variable_shade;
     }
 }

@@ -641,10 +641,18 @@ void FilamentRenderer::issue(const Batch& batch) {
                 instance->setParameter("base", paint.base);
                 instance->setParameter("height", paint.height);
                 instance->setParameter("lightIntensity", paint.light_intensity);
+                instance->setParameter("verticalGradient", paint.vertical_gradient);
                 instance->setParameter(
                     "lightColor", filament::math::float3{paint.light_color[0],
                                                          paint.light_color[1],
                                                          paint.light_color[2]});
+                // The direction the light arrives from. Without it the directional term reduces
+                // to its unlit floor and every roof takes the shading meant for a surface facing
+                // away from the light.
+                instance->setParameter(
+                    "lightPosition", filament::math::float3{paint.light_position[0],
+                                                           paint.light_position[1],
+                                                           paint.light_position[2]});
 
                 tsl_fill_extrusion_drawable_ubo block{};
                 if (at + sizeof block <= drawables->second.size()) {
