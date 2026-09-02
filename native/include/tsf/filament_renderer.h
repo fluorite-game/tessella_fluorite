@@ -8,6 +8,7 @@
 #include <tsf/host.h>
 
 #include <filament/Engine.h>
+#include <filament/Camera.h>
 #include <filament/Material.h>
 #include <filament/MaterialInstance.h>
 #include <filament/Scene.h>
@@ -62,6 +63,19 @@ public:
 
     FilamentRenderer(const FilamentRenderer&) = delete;
     FilamentRenderer& operator=(const FilamentRenderer&) = delete;
+
+    /// Points a camera at what tessella emits.
+    ///
+    /// The capture stream's matrices carry tile-local coordinates all the way to clip space, so
+    /// the camera must not project again: its view and projection are the identity apart from one
+    /// correction. Filament's clip space has +Y downward -- measured, and the same on the Vulkan
+    /// and OpenGL backends, so it is Filament's own convention rather than a backend's NDC -- and
+    /// mbgl's matrices are written for OpenGL's +Y up. The projection is that flip, which is the
+    /// whole of the difference between the two conventions.
+    ///
+    /// Without it every frame renders vertically mirrored: the map is upside down on screen, and
+    /// a readback compared against the oracle looks merely translated, which is how it hid.
+    static void configureCamera(filament::Camera& camera);
 
     void beginFrame(std::uint64_t frameNo) override;
     void endFrame(std::uint64_t frameNo) override;

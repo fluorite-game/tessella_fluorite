@@ -4,6 +4,7 @@
 
 #include <tessella_capture_abi.h>
 
+#include <filament/Camera.h>
 #include <filament/IndexBuffer.h>
 #include <filament/RenderableManager.h>
 #include <filament/TransformManager.h>
@@ -327,6 +328,17 @@ void FilamentRenderer::clearScene() {
         engine_->destroy(instance);
     }
     maskInstances_.clear();
+}
+
+void FilamentRenderer::configureCamera(filament::Camera& camera) {
+    // Identity but for the Y flip: `clip = viewProj * worldPosition` has to reduce to
+    // `clip = matrix * position`, because the producer's matrix already reaches clip space.
+    camera.setCustomProjection(filament::math::mat4{filament::math::float4{1.0, 0.0, 0.0, 0.0},
+                                                    filament::math::float4{0.0, -1.0, 0.0, 0.0},
+                                                    filament::math::float4{0.0, 0.0, 1.0, 0.0},
+                                                    filament::math::float4{0.0, 0.0, 0.0, 1.0}},
+                               -1.0, 1.0);
+    camera.setModelMatrix(filament::math::mat4f());
 }
 
 void FilamentRenderer::beginFrame(std::uint64_t) {
@@ -681,8 +693,15 @@ void FilamentRenderer::issue(const Batch& batch) {
                 }
                 minX = std::min(minX, clip.x / clip.w);
                 maxX = std::max(maxX, clip.x / clip.w);
-                minY = std::min(minY, clip.y / clip.w);
-                maxY = std::max(maxY, clip.y / clip.w);
+                // Y negated, for the same reason `configureCamera` flips the projection: the
+                // producer's clip space has +Y up and Filament's has it down. This box is
+                // measured in the producer's space but names a region of the screen, so it has
+                // to be carried across the same way the geometry is. Left unflipped it is the
+                // mirror of what it should bound, and a tile is clipped to where its own
+                // reflection overlaps it -- a band across the middle of the map.
+                const float screenY = -clip.y / clip.w;
+                minY = std::min(minY, screenY);
+                maxY = std::max(maxY, screenY);
             }
             const auto toPixels = [](float ndc, std::uint32_t extent) {
                 return (ndc * 0.5f + 0.5f) * static_cast<float>(extent);

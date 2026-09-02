@@ -94,19 +94,9 @@ int main(int argc, char** argv) {
     view->setScene(scene);
     view->setCamera(camera);
     view->setViewport({0, 0, W, H});
-    // Identity view *and* identity projection, which is load-bearing rather than tidy.
-    //
-    // With `vertexDomain : device` Filament reads `getPosition()` as clip space and turns it into
-    // world with `worldFromClip` -- and then the pipeline projects world back to clip with
-    // viewProj. A material that writes `material.worldPosition` is writing the input to that
-    // second projection, so tessella's matrix (which already carries tile-local all the way to
-    // clip) was being applied and then transformed again by the camera. Every fill landed
-    // somewhere off screen; the background survived only because its own matrix happened to.
-    //
-    // Making viewProj the identity is what reduces `clip = viewProj * worldPosition` to
-    // `clip = matrix * position`, which is the arrangement the capture stream assumes.
-    camera->setCustomProjection(filament::math::mat4(), -1.0, 1.0);
-    camera->setModelMatrix(filament::math::mat4f());
+    // The camera the capture stream expects: identity but for Filament's Y convention. See
+    // `FilamentRenderer::configureCamera`, which owns the reason.
+    tsf::FilamentRenderer::configureCamera(*camera);
     // No post-processing. Filament tone maps for photographic rendering by default -- ACES, plus
     // bloom and dithering -- and a map is not a photograph: the style already says exactly what
     // colour each thing is, so anything applied on top of that is a deviation from the oracle by
