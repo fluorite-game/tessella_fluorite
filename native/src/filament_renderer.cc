@@ -335,15 +335,32 @@ void FilamentRenderer::onTexture(const TextureUpdate& update) {
         }
         return;
     }
-    // Rects are packed back to back in the order they are listed, each row-major within itself.
-    std::size_t at = 0;
+    // The pixels are the *whole* texture and a rect names which part of it changed -- not a
+    // tightly packed run of just that region. Reading them as packed uploads the atlas's top rows
+    // into wherever the rect happens to point, which put every glyph at the wrong address: the
+    // shader then sampled the right coordinates and found nothing there, and about one label in
+    // nine survived by landing on a glyph anyway.
+    const std::size_t rowBytes = static_cast<std::size_t>(update.width) * pixel;
+    if (rowBytes * update.height > update.pixels.size) {
+        textureSkipped_++;
+        return;
+    }
+    std::vector<std::uint8_t> region;
     for (const tsl_rect& rect : update.rects) {
-        const std::size_t bytes = static_cast<std::size_t>(rect.w) * rect.h * pixel;
-        if (at + bytes > update.pixels.size) {
-            break;
+        if (rect.w == 0 || rect.h == 0 || rect.x + rect.w > update.width ||
+            rect.y + rect.h > update.height) {
+            continue;
         }
-        upload(rect.x, rect.y, rect.w, rect.h, update.pixels.data + at, bytes);
-        at += bytes;
+        // Cut the rectangle out at the texture's own row stride.
+        const std::size_t bytes = static_cast<std::size_t>(rect.w) * rect.h * pixel;
+        region.resize(bytes);
+        for (std::uint32_t row = 0; row < rect.h; row++) {
+            std::memcpy(region.data() + static_cast<std::size_t>(row) * rect.w * pixel,
+                        update.pixels.data + (static_cast<std::size_t>(rect.y) + row) * rowBytes +
+                            static_cast<std::size_t>(rect.x) * pixel,
+                        static_cast<std::size_t>(rect.w) * pixel);
+        }
+        upload(rect.x, rect.y, rect.w, rect.h, region.data(), bytes);
     }
 }
 
