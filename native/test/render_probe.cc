@@ -178,6 +178,8 @@ int main(int argc, char** argv) {
     std::printf("textures %zu\n", backend.textures());
     std::printf("texture_uploads %llu\n", (unsigned long long)backend.textureUploads());
     std::printf("texture_skipped %llu\n", (unsigned long long)backend.textureSkipped());
+    std::printf("missing_atlas %llu\n", (unsigned long long)backend.missingAtlas());
+    std::printf("pitched_labels %llu\n", (unsigned long long)backend.pitchedLabels());
     std::printf("missing_batches %llu\n", (unsigned long long)backend.missing());
     for (std::int32_t family : backend.missingFamilies()) {
         std::printf("missing_family_%d 1\n", family);

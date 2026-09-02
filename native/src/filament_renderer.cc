@@ -9,6 +9,7 @@
 #include <filament/RenderableManager.h>
 #include <filament/TransformManager.h>
 #include <filament/Texture.h>
+#include <filament/TextureSampler.h>
 #include <filament/VertexBuffer.h>
 #include <math/mat4.h>
 #include <utils/EntityManager.h>
@@ -71,6 +72,13 @@ std::size_t drawableStride(std::int32_t family) {
         case TSL_BUILTIN_LINE_PATTERN_SHADER:
         case TSL_BUILTIN_LINE_SDFSHADER:
             return TSL_STRIDE_LINE_DRAWABLE_UNION_UBO;
+        case TSL_BUILTIN_SYMBOL_SDFSHADER:
+        case TSL_BUILTIN_SYMBOL_ICON_SHADER:
+        case TSL_BUILTIN_SYMBOL_TEXT_AND_ICON_SHADER:
+            // 272: three matrices before anything else. Nothing else in the header is this size,
+            // so falling through to the fill's 96 put every symbol drawable after the first in a
+            // layer on another one's matrices.
+            return sizeof(tsl_symbol_drawable_ubo);
         case TSL_BUILTIN_FILL_EXTRUSION_SHADER:
         case TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER:
         case TSL_BUILTIN_FILL_EXTRUSION_PATTERN_SHADER:
@@ -88,6 +96,9 @@ std::size_t drawableStride(std::int32_t family) {
 }
 /// And which carries the layer's evaluated paint.
 constexpr std::uint32_t kPropsSlot = 5;
+
+/// A symbol's per-drawable pass flags, which are their own block rather than part of the paint.
+constexpr std::uint32_t kSymbolTilePropsSlot = 3;
 
 /// Which primitive a family's indices describe.
 ///
@@ -489,6 +500,19 @@ void FilamentRenderer::beginFrame(std::uint64_t) {
 }
 
 namespace {
+
+/// The atlas a drawable samples at slot zero, or zero if it names none.
+///
+/// Slot zero is the image texture for every family that has one -- a glyph atlas for text, a
+/// sprite atlas for a pattern -- and a drawable that samples nothing simply lists no reference.
+std::uint64_t textureFor(const DrawableAdd& add) {
+    for (const auto& [slot, id] : add.textureRefs) {
+        if (slot == TSL_UBO_ID_SYMBOL_IMAGE_TEXTURE) {
+            return id;
+        }
+    }
+    return 0;
+}
 
 /// The two components of a packed instance, read at a byte offset the wire names.
 struct Outline {
@@ -898,7 +922,8 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
     meshes_[add.id] = Mesh{vertices, indices, indexCount, add.layerIndex,
                            add.tileID ? add.tileID->z : std::uint8_t{0},
                            add.tileID ? add.tileID->overscaled_z : std::uint8_t{0},
-                           add.tileID ? *add.tileID : TileID{}};
+                           add.tileID ? *add.tileID : TileID{},
+                           textureFor(add)};
 }
 
 void FilamentRenderer::onRetire(std::uint64_t id) {
@@ -1029,19 +1054,25 @@ void FilamentRenderer::issue(const Batch& batch) {
         if (const auto props = layer->second.find(kPropsSlot);
             props != layer->second.end() &&
             props->second.size() >= colourOffset(batch.builtinShader) + sizeof(float) * 4) {
-            float colour[4] = {0, 0, 0, 0};
-            std::memcpy(colour, props->second.data() + colourOffset(batch.builtinShader),
-                        sizeof colour);
-            coloured_++;
-            instance->setParameter(
-                "color", filament::math::float4{colour[0], colour[1], colour[2], colour[3]});
+            // A symbol has no single colour: it carries a fill and a halo, and which of them
+            // applies is a property of the pass rather than of the layer. Its own block below
+            // sets both, so the shared path would only be setting a uniform it does not declare.
+            const bool sharedColour = batch.builtinShader != TSL_BUILTIN_SYMBOL_SDFSHADER;
+            if (sharedColour) {
+                float colour[4] = {0, 0, 0, 0};
+                std::memcpy(colour, props->second.data() + colourOffset(batch.builtinShader),
+                            sizeof colour);
+                coloured_++;
+                instance->setParameter(
+                    "color", filament::math::float4{colour[0], colour[1], colour[2], colour[3]});
 
-            float opacity = 1.0f;
-            const std::size_t off = opacityOffset(batch.builtinShader, props->second.size());
-            if (off + sizeof(float) <= props->second.size()) {
-                std::memcpy(&opacity, props->second.data() + off, sizeof opacity);
+                float opacity = 1.0f;
+                const std::size_t off = opacityOffset(batch.builtinShader, props->second.size());
+                if (off + sizeof(float) <= props->second.size()) {
+                    std::memcpy(&opacity, props->second.data() + off, sizeof opacity);
+                }
+                instance->setParameter("opacity", opacity);
             }
-            instance->setParameter("opacity", opacity);
 
             // A line needs the widths from the layer's paint and the drawable's own ratio, which
             // is what keeps a road at a constant pixel width as the tile scales.
@@ -1075,6 +1106,105 @@ void FilamentRenderer::issue(const Batch& batch) {
                                        filament::math::float2{static_cast<float>(width_) * 0.5f,
                                                               -static_cast<float>(height_) * 0.5f});
                 instance->setParameter("matrix", transform);
+            }
+
+            // A symbol needs three matrices, the atlas it samples, the layer's text paint, and
+            // the frame's camera distance -- the last because how far a label's anchor is from
+            // the camera is what sets its size on screen.
+            if (batch.builtinShader == TSL_BUILTIN_SYMBOL_SDFSHADER) {
+                tsl_symbol_drawable_ubo block{};
+                if (at + sizeof block <= drawables->second.size()) {
+                    std::memcpy(&block, drawables->second.data() + at, sizeof block);
+                }
+                const auto asMatrix = [](const float (&from)[16]) {
+                    filament::math::mat4f out;
+                    std::memcpy(&out, from, sizeof from);
+                    return out;
+                };
+                instance->setParameter("matrix", asMatrix(block.matrix));
+                instance->setParameter("labelPlaneMatrix", asMatrix(block.label_plane_matrix));
+                instance->setParameter("coordMatrix", asMatrix(block.coord_matrix));
+                instance->setParameter(
+                    "texsize", filament::math::float2{block.texsize[0], block.texsize[1]});
+                instance->setParameter("isTextProp", block.is_text_prop ? 1.0f : 0.0f);
+                instance->setParameter("rotateSymbol", block.rotate_symbol ? 1.0f : 0.0f);
+                instance->setParameter("pitchWithMap", block.pitch_with_map ? 1.0f : 0.0f);
+                instance->setParameter("isSizeZoomConstant",
+                                       block.is_size_zoom_constant ? 1.0f : 0.0f);
+                instance->setParameter("isSizeFeatureConstant",
+                                       block.is_size_feature_constant ? 1.0f : 0.0f);
+                instance->setParameter("isOffset", block.is_offset ? 1.0f : 0.0f);
+                instance->setParameter("sizeT", block.size_t);
+                instance->setParameter("size", block.size);
+
+                // Text or icon decides which half of the paint block applies, and the tile props
+                // say which of the two passes this drawable is.
+                tsl_symbol_tile_props_ubo tile{};
+                if (const auto props = layer->second.find(kSymbolTilePropsSlot);
+                    props != layer->second.end()) {
+                    const std::size_t tileAt =
+                        static_cast<std::size_t>(batch.uboIndexes[i]) * sizeof tile;
+                    if (tileAt + sizeof tile <= props->second.size()) {
+                        std::memcpy(&tile, props->second.data() + tileAt, sizeof tile);
+                    }
+                }
+                instance->setParameter("isHalo", tile.is_halo ? 1.0f : 0.0f);
+                instance->setParameter("tileGammaScale", tile.gamma_scale);
+
+                tsl_symbol_evaluated_props_ubo paint{};
+                if (props->second.size() >= sizeof paint) {
+                    std::memcpy(&paint, props->second.data(), sizeof paint);
+                }
+                const bool text = tile.is_text != 0;
+                const float* fill = text ? paint.text_fill_color : paint.icon_fill_color;
+                const float* halo = text ? paint.text_halo_color : paint.icon_halo_color;
+                instance->setParameter(
+                    "fillColor", filament::math::float4{fill[0], fill[1], fill[2], fill[3]});
+                instance->setParameter(
+                    "haloColor", filament::math::float4{halo[0], halo[1], halo[2], halo[3]});
+                instance->setParameter("opacity",
+                                       text ? paint.text_opacity : paint.icon_opacity);
+                instance->setParameter("haloWidth",
+                                       text ? paint.text_halo_width : paint.icon_halo_width);
+                instance->setParameter("haloBlur",
+                                       text ? paint.text_halo_blur : paint.icon_halo_blur);
+
+                tsl_global_paint_params_ubo frame{};
+                if (const auto global = uniforms_.find(-1); global != uniforms_.end()) {
+                    if (const auto slot = global->second.find(TSL_UBO_ID_GLOBAL_PAINT_PARAMS_UBO);
+                        slot != global->second.end() && slot->second.size() >= sizeof frame) {
+                        std::memcpy(&frame, slot->second.data(), sizeof frame);
+                    }
+                }
+                instance->setParameter("cameraToCenterDistance",
+                                       frame.camera_to_center_distance);
+                instance->setParameter("aspectRatio", frame.aspect_ratio);
+                instance->setParameter("symbolFadeChange", frame.symbol_fade_change);
+                instance->setParameter("pixelRatio",
+                                       frame.pixel_ratio > 0.0f ? frame.pixel_ratio : 1.0f);
+
+                // A label pitched with the map lays out in the tile's own plane rather than the
+                // viewport's: its plane matrix is the identity and its coord matrix carries the
+                // tile's projection, so the offsets added between them are in tile units and not
+                // pixels. That is a second arrangement of the same three matrices, and this
+                // shader implements the viewport one; drawing an on-map label through it puts the
+                // offsets in the wrong space. Counted and skipped until it is written.
+                if (block.pitch_with_map) {
+                    pitchedLabels_++;
+                    continue;
+                }
+
+                // Without the atlas there is nothing to read a distance out of, so the batch is
+                // skipped rather than drawn sampling whatever is bound.
+                const auto atlas = textures_.find(mesh->second.texture);
+                if (atlas == textures_.end()) {
+                    missingAtlas_++;
+                    continue;
+                }
+                instance->setParameter("atlas", atlas->second,
+                                       filament::TextureSampler(
+                                           filament::TextureSampler::MinFilter::LINEAR,
+                                           filament::TextureSampler::MagFilter::LINEAR));
             }
 
             // An extrusion needs its base and height, its light, and the height factor that turns
@@ -1203,7 +1333,8 @@ void FilamentRenderer::issue(const Batch& batch) {
         // A line places itself: it must extrude in tile units before the tile-to-clip transform,
         // so it takes the matrix as a parameter and its renderable carries the identity. Everything
         // else lets Filament apply the transform, which is cheaper and needs no vertex hook.
-        const bool placesItself = batch.builtinShader == TSL_BUILTIN_LINE_SHADER ||
+        const bool placesItself = batch.builtinShader == TSL_BUILTIN_SYMBOL_SDFSHADER ||
+                                  batch.builtinShader == TSL_BUILTIN_LINE_SHADER ||
                                   batch.builtinShader ==
                                       TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER ||
                                   batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER;

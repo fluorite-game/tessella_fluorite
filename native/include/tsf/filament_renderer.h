@@ -158,6 +158,12 @@ public:
     /// Uploads refused because the format has no Filament equivalent here.
     [[nodiscard]] std::uint64_t textureSkipped() const noexcept { return textureSkipped_; }
 
+    /// Label batches skipped because they lay out in the map's plane, not the viewport's.
+    [[nodiscard]] std::uint64_t pitchedLabels() const noexcept { return pitchedLabels_; }
+
+    /// Symbol batches skipped because their atlas had not arrived.
+    [[nodiscard]] std::uint64_t missingAtlas() const noexcept { return missingAtlas_; }
+
     /// How many materials were loaded.
     [[nodiscard]] std::size_t materials() const noexcept { return materials_.size(); }
 
@@ -171,6 +177,9 @@ private:
         std::uint8_t zoom = 0;
         std::uint8_t overscaledZoom = 0;
         TileID tile{};
+        /// The atlas this drawable samples, or zero. Held with the mesh because the reference
+        /// arrives with the geometry and is needed when the batch that draws it is issued.
+        std::uint64_t texture = 0;
     };
 
     /// One layer's uniform blocks, by slot.
@@ -252,6 +261,8 @@ private:
     std::uint64_t renderables_ = 0;
     std::uint64_t primitives_ = 0;
     std::uint64_t walls_ = 0;
+    std::uint64_t missingAtlas_ = 0;
+    std::uint64_t pitchedLabels_ = 0;
 
     /// Atlases by id, kept until the engine goes. A glyph or sprite atlas outlives any one tile
     /// and is re-uploaded in rects as it fills, so it is owned here rather than with a drawable.
