@@ -450,7 +450,14 @@ void FilamentRenderer::writeMasks() {
             .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES, maskVertices_,
                       maskIndices_, 0, 6);
         utils::Entity entity = utils::EntityManager::get().create();
-        const auto built = builder.build(*engine_, entity);
+        // A mask that failed to build is an entity with no renderable on it: adding it to the
+        // scene draws nothing and leaves a destroy to do at teardown. Returned instead, and the
+        // tile simply goes unclipped -- visible, which is what §13.2 asks for, rather than a
+        // parent painted over its children.
+        if (builder.build(*engine_, entity) != filament::RenderableManager::Builder::Success) {
+            utils::EntityManager::get().destroy(entity);
+            continue;
+        }
         auto& transforms = engine_->getTransformManager();
         transforms.setTransform(transforms.getInstance(entity), matrix);
         scene_->addEntity(entity);
@@ -713,6 +720,7 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
                            add.tileID ? add.tileID->z : std::uint8_t{0},
                            add.tileID ? add.tileID->overscaled_z : std::uint8_t{0},
                            add.tileID ? *add.tileID : TileID{}};
+    meshes_[add.id].clipped = add.enableStencil;
     walls_ += indexCount / 3;
     return true;
 }
@@ -855,6 +863,7 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
                            add.tileID ? add.tileID->z : std::uint8_t{0},
                            add.tileID ? add.tileID->overscaled_z : std::uint8_t{0},
                            add.tileID ? *add.tileID : TileID{}};
+    meshes_[add.id].clipped = add.enableStencil;
     return true;
 }
 
@@ -969,6 +978,7 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
                            add.tileID ? add.tileID->overscaled_z : std::uint8_t{0},
                            add.tileID ? *add.tileID : TileID{},
                            textureFor(add)};
+    meshes_[add.id].clipped = add.enableStencil;
     return true;
 }
 
@@ -1076,6 +1086,7 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
                            add.tileID ? *add.tileID : TileID{},
                            textureFor(add),
                            textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE)};
+    meshes_[add.id].clipped = add.enableStencil;
 }
 
 void FilamentRenderer::onRetire(std::uint64_t id) {
@@ -1562,8 +1573,14 @@ void FilamentRenderer::issue(const Batch& batch) {
         // The tile's own clip, as a stencil test. A parent's geometry passes only where the
         // parent's own mask survived -- that is, where no child overwrote it -- which is what
         // stops an ancestor compositing over the children that replaced it.
-        const std::uint8_t reference = referenceFor(mesh->second.tile);
-        if (reference == 0) {
+        //
+        // Only where the producer asked for it. §11.7's clip obligation is per drawable and the
+        // flag is how it is stated: a fill and a line carry it, a symbol and a circle do not,
+        // because those are drawn from an anchor whose geometry legitimately overhangs the tile
+        // that owns it. Clipping them anyway cut every label at every tile edge it crossed.
+        const bool clipped = mesh->second.clipped;
+        const std::uint8_t reference = clipped ? referenceFor(mesh->second.tile) : 0;
+        if (clipped && reference == 0) {
             unmasked_++;
         }
         if (reference != 0 && !std::getenv("TSF_NO_STENCIL")) {
@@ -1615,7 +1632,7 @@ void FilamentRenderer::issue(const Batch& batch) {
             const float r = std::min(static_cast<float>(width_), std::ceil(toPixels(maxX, width_)));
             const float t =
                 std::min(static_cast<float>(height_), std::ceil(toPixels(maxY, height_)));
-            if (r > l && t > b && !std::getenv("TSF_NO_SCISSOR")) {
+            if (clipped && r > l && t > b && !std::getenv("TSF_NO_SCISSOR")) {
                 instance->setScissor(
                     static_cast<std::uint32_t>(l), static_cast<std::uint32_t>(b),
                     static_cast<std::uint32_t>(r - l), static_cast<std::uint32_t>(t - b));

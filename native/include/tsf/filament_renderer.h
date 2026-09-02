@@ -182,6 +182,13 @@ private:
         std::uint64_t texture = 0;
         /// The second picture, for a raster tile fading from its parent.
         std::uint64_t texture1 = 0;
+        /// Whether the producer asked for this drawable to be clipped to its tile.
+        ///
+        /// `DrawFlags::ENABLE_STENCIL`, carried on the geometry because that is where it
+        /// arrives and the batch that draws it does not repeat it. A fill or a line sets it; a
+        /// symbol and a circle do not, and clipping one of those to its tile cuts a label in
+        /// half at the tile edge it crosses.
+        bool clipped = false;
     };
 
     /// One layer's uniform blocks, by slot.
