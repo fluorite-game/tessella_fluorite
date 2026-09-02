@@ -146,6 +146,15 @@ public:
     /// How many clip masks were written this frame.
     [[nodiscard]] std::uint64_t masked() const noexcept { return masked_; }
 
+    /// Label quads placement kept, and label quads it hid.
+    ///
+    /// The producer shapes every label a tile holds and hides the ones that lost their space, so
+    /// these are "drawn" against "offered minus drawn". A map with too few labels is one or the
+    /// other and they want different fixes: nothing shaped is a layout question, everything
+    /// shaped and hidden is a collision one.
+    [[nodiscard]] std::uint64_t glyphsDrawn() const noexcept { return glyphsDrawn_; }
+    [[nodiscard]] std::uint64_t glyphsHidden() const noexcept { return glyphsHidden_; }
+
     /// How many drawables were clipped to their own tile.
     [[nodiscard]] std::uint64_t scissored() const noexcept { return scissored_; }
 
@@ -223,6 +232,8 @@ private:
     filament::VertexBuffer* maskVertices_ = nullptr;
     filament::IndexBuffer* maskIndices_ = nullptr;
     std::uint64_t masked_ = 0;
+    std::uint64_t glyphsDrawn_ = 0;
+    std::uint64_t glyphsHidden_ = 0;
     std::uint64_t unmasked_ = 0;
 
     filament::Engine* engine_ = nullptr;

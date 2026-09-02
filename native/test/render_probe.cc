@@ -196,6 +196,8 @@ int main(int argc, char** argv) {
         std::printf("scale %.5f %llu\n", scale, (unsigned long long)n);
     }
     std::printf("masked %llu\n", (unsigned long long)backend.masked());
+    std::printf("glyph_quads_drawn %llu\n", (unsigned long long)backend.glyphsDrawn());
+    std::printf("glyph_quads_hidden %llu\n", (unsigned long long)backend.glyphsHidden());
     std::printf("scissored %llu\n", (unsigned long long)backend.scissored());
     std::printf("unplaced %llu\n", (unsigned long long)backend.unplaced());
     std::printf("wall_triangles %llu\n", (unsigned long long)backend.walls());

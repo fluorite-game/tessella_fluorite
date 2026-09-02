@@ -525,6 +525,8 @@ void FilamentRenderer::beginFrame(std::uint64_t) {
     scissored_ = 0;
     masked_ = 0;
     unmasked_ = 0;
+    glyphsDrawn_ = 0;
+    glyphsHidden_ = 0;
     zooms_.clear();
     overZooms_.clear();
     slotsThisFrame_.clear();
@@ -915,6 +917,20 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
         placed[i * 4 + 1] = xyz[1];
         placed[i * 4 + 2] = xyz[2];
         placed[i * 4 + 3] = packed;
+        // What placement decided, counted per quad. The producer shapes every label a tile
+        // holds and hides the ones that lost their space, so the difference between these two
+        // is "offered" against "drawn" -- the number to look at when a map draws fewer labels
+        // than it should, and the one thing that says whether they were never made or made and
+        // rejected. Four vertices to a quad; the counts are divided at the accessor.
+        if (i % 4 == 0) {
+            // The opacity rides in the high bits with the fade direction in the low one, so a
+            // value of zero or one is hidden either way it is moving.
+            if (packed <= 1.0f) {
+                glyphsHidden_++;
+            } else {
+                glyphsDrawn_++;
+            }
+        }
     }
 
     auto* vertices = filament::VertexBuffer::Builder()
