@@ -1410,8 +1410,18 @@ void FilamentRenderer::issue(const Batch& batch) {
                 instance->setParameter("matrix", asMatrix(block.matrix));
                 instance->setParameter("labelPlaneMatrix", asMatrix(block.label_plane_matrix));
                 instance->setParameter("coordMatrix", asMatrix(block.coord_matrix));
+                // The sheet this half samples, not the other's. The block carries both because
+                // one shader can sample both atlases; a drawable that samples one still has to be
+                // told which. Handing an icon the glyph atlas's dimensions scales every sprite
+                // coordinate by the ratio between the two sheets, which lands the lookup in
+                // whatever happens to be there -- transparent, most of the time, so a shield
+                // drew nothing rather than drawing wrong.
+                const bool isIcon = batch.builtinShader == TSL_BUILTIN_SYMBOL_ICON_SHADER;
+                const float* sheet = isIcon ? block.texsize_icon : block.texsize;
                 instance->setParameter(
-                    "texsize", filament::math::float2{block.texsize[0], block.texsize[1]});
+                    "texsize",
+                    filament::math::float2{sheet[0] > 0.0f ? sheet[0] : 1.0f,
+                                           sheet[1] > 0.0f ? sheet[1] : 1.0f});
                 instance->setParameter("isTextProp", block.is_text_prop ? 1.0f : 0.0f);
                 instance->setParameter("rotateSymbol", block.rotate_symbol ? 1.0f : 0.0f);
                 instance->setParameter("pitchWithMap", block.pitch_with_map ? 1.0f : 0.0f);
