@@ -174,6 +174,7 @@ int main(int argc, char** argv) {
     std::printf("masked %llu\n", (unsigned long long)backend.masked());
     std::printf("scissored %llu\n", (unsigned long long)backend.scissored());
     std::printf("unplaced %llu\n", (unsigned long long)backend.unplaced());
+    std::printf("wall_triangles %llu\n", (unsigned long long)backend.walls());
     std::printf("missing_batches %llu\n", (unsigned long long)backend.missing());
     for (std::int32_t family : backend.missingFamilies()) {
         std::printf("missing_family_%d 1\n", family);

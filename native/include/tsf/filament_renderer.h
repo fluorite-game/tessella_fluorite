@@ -147,6 +147,9 @@ public:
     /// How many drawables were clipped to their own tile.
     [[nodiscard]] std::uint64_t scissored() const noexcept { return scissored_; }
 
+    /// How many wall triangles were built from instances.
+    [[nodiscard]] std::uint64_t walls() const noexcept { return walls_; }
+
     /// How many materials were loaded.
     [[nodiscard]] std::size_t materials() const noexcept { return materials_.size(); }
 
@@ -166,6 +169,9 @@ private:
     using Blocks = std::unordered_map<std::uint32_t, std::vector<std::uint8_t>>;
 
     void clearScene();
+
+    /// Turns a wall drawable's instances into ordinary geometry. See the definition for why.
+    bool expandWalls(const DrawableAdd& add);
 
     /// Draws the clip masks for this frame and assigns each tile its stencil reference.
     ///
@@ -233,6 +239,7 @@ private:
     std::uint64_t coloured_ = 0;
     std::uint64_t renderables_ = 0;
     std::uint64_t primitives_ = 0;
+    std::uint64_t walls_ = 0;
 };
 
 } // namespace tsf

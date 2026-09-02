@@ -70,6 +70,17 @@ std::size_t drawableStride(std::int32_t family) {
         case TSL_BUILTIN_LINE_PATTERN_SHADER:
         case TSL_BUILTIN_LINE_SDFSHADER:
             return TSL_STRIDE_LINE_DRAWABLE_UNION_UBO;
+        case TSL_BUILTIN_FILL_EXTRUSION_SHADER:
+        case TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER:
+        case TSL_BUILTIN_FILL_EXTRUSION_PATTERN_SHADER:
+        case TSL_BUILTIN_FILL_EXTRUSION_PATTERN_INSTANCED_SHADER:
+            // 112, where a fill's is 96. The header emits no union constant for this family
+            // because every extrusion variant shares one drawable block, so the block's own size
+            // *is* the stride here -- which is why `sizeof` is right for once and worth saying so
+            // rather than leaving the next reader to wonder. Falling through to the fill's stride
+            // read every drawable after the first at the wrong offset, which is a layer whose
+            // buildings wear each other's matrices.
+            return sizeof(tsl_fill_extrusion_drawable_ubo);
         default:
             return TSL_STRIDE_FILL_DRAWABLE_UNION_UBO;
     }
@@ -367,9 +378,190 @@ void FilamentRenderer::beginFrame(std::uint64_t) {
     redrawn_ = 0;
 }
 
+namespace {
+
+/// The two components of a packed instance, read at a byte offset the wire names.
+struct Outline {
+    float x = 0.0f;
+    float y = 0.0f;
+    bool discarded = false;
+};
+
+/// Unpacks one wall instance: the footprint point it stands on, and whether it closes a ring.
+///
+/// `decimals_ed.x` holds seven bits of fraction per axis above a low bit that marks a ring's
+/// closing point, which has no edge leaving it and so raises no wall. The fraction is zero for
+/// integer tile units but a simplification pass produces fractional positions, and dropping it
+/// would part the walls from the roof they meet.
+Outline unpackOutline(const std::uint8_t* pos, const std::uint8_t* dec) {
+    std::int16_t ix = 0, iy = 0;
+    std::uint16_t packed = 0;
+    std::memcpy(&ix, pos, sizeof ix);
+    std::memcpy(&iy, pos + sizeof ix, sizeof iy);
+    std::memcpy(&packed, dec, sizeof packed);
+
+    const std::uint16_t fraction = static_cast<std::uint16_t>(packed / 2);
+    const float high = static_cast<float>(fraction / 256);
+    const float low = static_cast<float>(fraction % 256);
+    return Outline{static_cast<float>(ix) + high / 128.0f,
+                   static_cast<float>(iy) + low / 128.0f,
+                   (packed % 2) != 0};
+}
+
+} // namespace
+
+bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
+    // Filament has no per-instance vertex attributes -- `instances()` plus `getInstanceIndex()`
+    // is the whole of its instancing, and per-instance data would have to ride in a uniform array
+    // whose size is capped well below what a building-dense tile needs. So the instances are
+    // expanded once here, on upload, into the geometry mbgl's own non-instanced branch builds:
+    // four vertices per wall rather than one instance. Same pixels, same arithmetic, and the cost
+    // is paid per tile rather than per frame.
+    const Attribute* positions = nullptr;
+    const Attribute* decimals = nullptr;
+    for (const Attribute& attribute : add.instanceAttrs) {
+        if (attribute.desc.attr_id == TSL_UBO_ID_FILL_EXTRUSION_OUTLINE_POS_ATTRIBUTE) {
+            positions = &attribute;
+        } else if (attribute.desc.attr_id == TSL_UBO_ID_FILL_EXTRUSION_DECIMALS_ED_ATTRIBUTE) {
+            decimals = &attribute;
+        }
+    }
+    if (positions == nullptr || decimals == nullptr || add.attrs.empty()) {
+        return false;
+    }
+    const std::size_t instanceCount = std::min(positions->count(), decimals->count());
+    if (instanceCount < 2) {
+        return false;
+    }
+
+    // The template is the unit quad the producer sends: x picks which end of the edge this vertex
+    // sits at, y picks the base ring or the roof ring. Read from the wire rather than assumed, so
+    // the winding stays the producer's.
+    const Attribute& templateAttr = add.attrs.front();
+    const std::size_t templateCount = add.vertexCount;
+    const std::uint16_t* templateIndexes = reinterpret_cast<const std::uint16_t*>(add.indexes.data);
+    const std::size_t templateIndexCount = add.indexes.size / sizeof(std::uint16_t);
+    if (templateCount == 0 || templateIndexCount == 0) {
+        return false;
+    }
+
+    // Position as x, y and the base/roof selector; the wall's facing beside it.
+    std::vector<float> vertices;
+    std::vector<float> normals;
+    std::vector<std::uint16_t> indexes;
+    vertices.reserve(instanceCount * templateCount * 3);
+    normals.reserve(instanceCount * templateCount * 2);
+    indexes.reserve(instanceCount * templateIndexCount);
+
+    for (std::size_t i = 0; i + 1 < instanceCount; i++) {
+        const Outline p1 = unpackOutline(positions->data.data + i * positions->desc.stride,
+                                         decimals->data.data + i * decimals->desc.stride);
+        // A closing point raises no wall, which is what the flag is for.
+        if (p1.discarded) {
+            continue;
+        }
+        const Outline p2 = unpackOutline(positions->data.data + (i + 1) * positions->desc.stride,
+                                         decimals->data.data + (i + 1) * decimals->desc.stride);
+
+        const float dx = p2.x - p1.x;
+        const float dy = p2.y - p1.y;
+        const float length = std::sqrt(dx * dx + dy * dy);
+        // A zero-length edge has no facing to normalize, and would put a NaN through the lighting.
+        if (!(length > 0.0f)) {
+            continue;
+        }
+        const float nx = -dy / length;
+        const float ny = dx / length;
+
+        const auto base = static_cast<std::uint16_t>(vertices.size() / 3);
+        if (vertices.size() / 3 + templateCount > std::numeric_limits<std::uint16_t>::max()) {
+            break;
+        }
+        for (std::size_t k = 0; k < templateCount; k++) {
+            std::int16_t sx = 0, sy = 0;
+            const std::uint8_t* at = templateAttr.data.data + k * templateAttr.desc.stride;
+            std::memcpy(&sx, at, sizeof sx);
+            std::memcpy(&sy, at + sizeof sx, sizeof sy);
+            vertices.push_back(sx == 0 ? p1.x : p2.x);
+            vertices.push_back(sx == 0 ? p1.y : p2.y);
+            vertices.push_back(static_cast<float>(sy));
+            normals.push_back(nx);
+            normals.push_back(ny);
+        }
+        for (std::size_t k = 0; k < templateIndexCount; k++) {
+            indexes.push_back(static_cast<std::uint16_t>(base + templateIndexes[k]));
+        }
+    }
+    if (indexes.empty()) {
+        return false;
+    }
+
+    auto* built = filament::VertexBuffer::Builder()
+                      .vertexCount(static_cast<std::uint32_t>(vertices.size() / 3))
+                      .bufferCount(2)
+                      .attribute(filament::VertexAttribute::POSITION, 0,
+                                 filament::VertexBuffer::AttributeType::FLOAT3, 0, 12)
+                      .attribute(filament::VertexAttribute::CUSTOM0, 1,
+                                 filament::VertexBuffer::AttributeType::FLOAT2, 0, 8)
+                      .build(*engine_);
+    if (built == nullptr) {
+        return false;
+    }
+    const auto upload = [&](std::uint8_t slot, const std::vector<float>& from) {
+        const std::size_t bytes = from.size() * sizeof(float);
+        auto* owned = static_cast<std::uint8_t*>(std::malloc(bytes));
+        if (owned == nullptr) {
+            return;
+        }
+        std::memcpy(owned, from.data(), bytes);
+        built->setBufferAt(*engine_, slot,
+                           filament::VertexBuffer::BufferDescriptor(
+                               owned, bytes,
+                               [](void* buffer, std::size_t, void*) { std::free(buffer); }));
+    };
+    upload(0, vertices);
+    upload(1, normals);
+
+    const auto indexCount = static_cast<std::uint32_t>(indexes.size());
+    auto* built_indexes = filament::IndexBuffer::Builder()
+                              .indexCount(indexCount)
+                              .bufferType(filament::IndexBuffer::IndexType::USHORT)
+                              .build(*engine_);
+    if (built_indexes == nullptr) {
+        engine_->destroy(built);
+        return false;
+    }
+    const std::size_t indexBytes = indexes.size() * sizeof(std::uint16_t);
+    auto* ownedIndexes = static_cast<std::uint8_t*>(std::malloc(indexBytes));
+    if (ownedIndexes == nullptr) {
+        engine_->destroy(built_indexes);
+        engine_->destroy(built);
+        return false;
+    }
+    std::memcpy(ownedIndexes, indexes.data(), indexBytes);
+    built_indexes->setBuffer(*engine_,
+                             filament::IndexBuffer::BufferDescriptor(
+                                 ownedIndexes, indexBytes,
+                                 [](void* buffer, std::size_t, void*) { std::free(buffer); }));
+
+    onRetire(add.id);
+    meshes_[add.id] = Mesh{built, built_indexes, indexCount, add.layerIndex,
+                           add.tileID ? add.tileID->z : std::uint8_t{0},
+                           add.tileID ? add.tileID->overscaled_z : std::uint8_t{0},
+                           add.tileID ? *add.tileID : TileID{}};
+    walls_ += indexCount / 3;
+    return true;
+}
+
 void FilamentRenderer::onGeometry(const DrawableAdd& add) {
 
     if (add.vertexCount == 0 || add.indexes.empty()) {
+        return;
+    }
+
+    // The walls arrive as instances over the roof's outline rather than as their own vertices.
+    if (add.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER) {
+        expandWalls(add);
         return;
     }
 
@@ -633,7 +825,8 @@ void FilamentRenderer::issue(const Batch& batch) {
             // An extrusion needs its base and height, its light, and the height factor that turns
             // metres into the tile's own units -- the last from the drawable block, the rest from
             // the layer's paint.
-            if (batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER) {
+            if (batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER ||
+                batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER) {
                 tsl_fill_extrusion_props_ubo paint{};
                 if (props->second.size() >= sizeof paint) {
                     std::memcpy(&paint, props->second.data(), sizeof paint);
@@ -658,7 +851,8 @@ void FilamentRenderer::issue(const Batch& batch) {
                 if (at + sizeof block <= drawables->second.size()) {
                     std::memcpy(&block, drawables->second.data() + at, sizeof block);
                 }
-                instance->setParameter("heightFactor", block.height_factor);
+                // The height factor is deliberately not passed: it belongs to the pattern
+                // variants, which use it for texture coordinates rather than placement.
                 instance->setParameter("matrix", transform);
             }
         }
@@ -745,6 +939,8 @@ void FilamentRenderer::issue(const Batch& batch) {
         // so it takes the matrix as a parameter and its renderable carries the identity. Everything
         // else lets Filament apply the transform, which is cheaper and needs no vertex hook.
         const bool placesItself = batch.builtinShader == TSL_BUILTIN_LINE_SHADER ||
+                                  batch.builtinShader ==
+                                      TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER ||
                                   batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER;
         transforms.setTransform(transforms.getInstance(entity),
                                 placesItself ? filament::math::mat4f() : transform);

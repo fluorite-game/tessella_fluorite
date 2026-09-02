@@ -34,7 +34,6 @@ material {
         { type : float,  name : opacity },
         { type : float,  name : base },
         { type : float,  name : height },
-        { type : float,  name : heightFactor },
         { type : float3, name : lightColor },
         // Direction the light arrives from, already in the space the normal is in.
         { type : float3, name : lightPosition },
@@ -95,8 +94,12 @@ vertex {
         // `vcolor * opacity` over a colour whose alpha was one.
         material.shade = vec4(lit, 1.0) * materialParams.opacity;
 
-        material.worldPosition = materialParams.matrix
-                               * vec4(footprint + decimals, z * materialParams.heightFactor, 1.0);
+        // `z` straight, not scaled by the height factor. That factor exists only for the pattern
+        // variants, where it turns a wall's altitude into a texture coordinate
+        // (`vec2(edgedistance, z * height_factor)`); mbgl never places geometry with it. It is
+        // negative -- at z14 it is -4 -- so multiplying by it extruded every building four times
+        // too far and downward, which at pitch zero left the walls sprawled over the roads.
+        material.worldPosition = materialParams.matrix * vec4(footprint + decimals, z, 1.0);
     }
 }
 

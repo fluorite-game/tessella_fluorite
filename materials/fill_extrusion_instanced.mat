@@ -1,0 +1,87 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The fill-extrusion walls.
+//
+// mbgl draws these as instances over the roof's outline: one instance per footprint point, a unit
+// quad for a template, and the shader reads both its own instance and the *next* one to get the
+// edge. Filament has no per-instance vertex attributes, so the consumer expands them once on
+// upload into the geometry mbgl's non-instanced branch builds -- see `expandWalls`. By the time a
+// vertex reaches this shader the edge is already resolved: position carries the footprint point
+// and the base/roof selector, and the wall's facing arrives beside it.
+//
+// The lighting is the same term as the roof's, and deliberately not factored into a shared file:
+// the two shaders are separate families on the wire and mbgl keeps them separate too. What
+// differs is that a wall's normal lies in the ground plane, so the directional term falls to its
+// unlit floor as the wall turns away from the light, and the vertical gradient branch -- which a
+// roof never takes -- darkens a wall toward its base.
+material {
+    name : tessella_fill_extrusion_instanced,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        { type : mat4,   name : matrix },
+        { type : float4, name : color },
+        { type : float,  name : opacity },
+        { type : float,  name : base },
+        { type : float,  name : height },
+        { type : float3, name : lightColor },
+        { type : float3, name : lightPosition },
+        { type : float,  name : lightIntensity },
+        { type : float,  name : verticalGradient }
+    ],
+    requires : [ position, custom0 ],
+    variables : [ shade ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec3 placed = getPosition().xyz;
+        vec2 footprint = placed.xy;
+        // Which ring this vertex belongs to: zero is the base, one the roof.
+        float t = placed.z;
+
+        // The edge's facing, in the ground plane, so the z component is zero.
+        vec3 normal = vec3(getCustom0().xy, 0.0);
+
+        float z = t > 0.0 ? materialParams.height : materialParams.base;
+
+        vec4 color = materialParams.color;
+        float luminance = color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722;
+        color += vec4(0.03, 0.03, 0.03, 1.0);
+
+        float directionalFraction = clamp(dot(normal, materialParams.lightPosition), 0.0, 1.0);
+        float minDirectional = 1.0 - materialParams.lightIntensity;
+        float maxDirectional = max(1.0 - luminance + materialParams.lightIntensity, 1.0);
+        float directional = mix(minDirectional, maxDirectional, directionalFraction);
+
+        // The gradient down a wall, which is the branch a roof's normal never reaches. Taller
+        // buildings shade more steeply, and the floor rises as the light dims so a dark scene
+        // does not lose the bottom of every wall to black.
+        if (normal.z == 0.0) {
+            float fMin = mix(0.7, 0.98, 1.0 - materialParams.lightIntensity);
+            float factor = clamp((t + materialParams.base)
+                                 * pow(materialParams.height / 150.0, 0.5), fMin, 1.0);
+            directional *= (1.0 - materialParams.verticalGradient)
+                         + (materialParams.verticalGradient * factor);
+        }
+
+        vec3 minLight = mix(vec3(0.0), vec3(0.3), 1.0 - materialParams.lightColor);
+        vec3 lit = clamp(color.rgb * directional * materialParams.lightColor, minLight, vec3(1.0));
+
+        material.shade = vec4(lit, 1.0) * materialParams.opacity;
+        // `z` straight, not scaled by the height factor. That factor exists only for the pattern
+        // variants, where it turns a wall's altitude into a texture coordinate
+        // (`vec2(edgedistance, z * height_factor)`); mbgl never places geometry with it. It is
+        // negative -- at z14 it is -4 -- so multiplying by it extruded every building four times
+        // too far and downward, which at pitch zero left the walls sprawled over the roads.
+        material.worldPosition = materialParams.matrix * vec4(footprint, z, 1.0);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = variable_shade;
+    }
+}
