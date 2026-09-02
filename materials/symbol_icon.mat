@@ -1,0 +1,137 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The symbol family: icons, drawn from the sprite sheet.
+//
+// The icon half of a symbol, and the reason it is a separate family rather than a flag: a glyph
+// carries distance and an icon carries colour, so one is resolved through a smoothstep and the
+// other is simply sampled. A highway shield is the clearest case -- the shield is an icon and the
+// number on it is text, two drawables over the same anchor.
+//
+// The vertex stage is the SDF's, unchanged, because where a symbol goes has nothing to do with
+// what fills it: same layout, same walk along a line, same fade. Only the fragment differs.
+//
+// Transcribed from mbgl's `SymbolIconShader`, Vulkan variant.
+material {
+    name : tessella_symbol_icon,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        { type : mat4,      name : matrix },
+        { type : mat4,      name : labelPlaneMatrix },
+        { type : mat4,      name : coordMatrix },
+        { type : float2,    name : texsize },
+        // The drawable's own flags, as floats: a material parameter has no bool.
+        { type : float,     name : isTextProp },
+        { type : float,     name : rotateSymbol },
+        { type : float,     name : pitchWithMap },
+        { type : float,     name : isSizeZoomConstant },
+        { type : float,     name : isSizeFeatureConstant },
+        { type : float,     name : isOffset },
+        { type : float,     name : sizeT },
+        { type : float,     name : size },
+        // From the frame's own paint parameters.
+        { type : float,     name : cameraToCenterDistance },
+        { type : float,     name : aspectRatio },
+        { type : float,     name : symbolFadeChange },
+        // The layer's evaluated paint, already chosen between text and icon by the consumer.
+        { type : float4,    name : fillColor },
+        { type : float,     name : opacity },
+        // Per tile: which pass this is, and how much the tile is scaled on screen.
+        { type : float,     name : pixelRatio },
+        { type : sampler2d, name : atlas }
+    ],
+    requires : [ position, custom0, custom1, custom2 ],
+    variables : [ glyph, glyphGamma ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec4 posOffset = getPosition();
+        vec2 a_pos = posOffset.xy;
+        vec2 a_offset = posOffset.zw;
+
+        vec4 data = getCustom0();
+        vec2 a_tex = data.xy;
+        vec2 a_size = data.zw;
+        float a_size_min = floor(a_size.x * 0.5);
+
+        vec2 a_pxoffset = getCustom1().xy;
+        // Position and fade in one attribute: the consumer packs them together, because a fifth
+        // custom slot did not bind here and a fade of zero multiplies every glyph away.
+        vec4 placed = getCustom2();
+        vec3 projPos = placed.xyz;
+        float segment_angle = -projPos.z;
+        float packedFade = placed.w;
+
+        float size;
+        if (materialParams.isSizeZoomConstant < 0.5
+            && materialParams.isSizeFeatureConstant < 0.5) {
+            size = mix(a_size_min, a_size.y, materialParams.sizeT) / 128.0;
+        } else if (materialParams.isSizeZoomConstant >= 0.5
+                   && materialParams.isSizeFeatureConstant < 0.5) {
+            size = a_size_min / 128.0;
+        } else {
+            size = materialParams.size;
+        }
+
+        // How far the label's anchor is from the camera, which is what makes distant type smaller.
+        vec4 projectedPoint = materialParams.matrix * vec4(a_pos, 0.0, 1.0);
+        float camera_to_anchor_distance = projectedPoint.w;
+        // Laid out in pitched space, distance shrinks a label and this counteracts part of it;
+        // laid out in viewport space it grows one, and this divides instead.
+        float distance_ratio = materialParams.pitchWithMap >= 0.5
+            ? camera_to_anchor_distance / materialParams.cameraToCenterDistance
+            : materialParams.cameraToCenterDistance / camera_to_anchor_distance;
+        // The zero floor is what stops an overzoomed near-field symbol becoming enormous.
+        float perspective_ratio = clamp(0.5 + 0.5 * distance_ratio, 0.0, 4.0);
+        if (materialParams.isOffset < 0.5) {
+            size *= perspective_ratio;
+        }
+        float fontScale = materialParams.isTextProp >= 0.5 ? size / 24.0 : size;
+
+        float symbol_rotation = 0.0;
+        if (materialParams.rotateSymbol >= 0.5) {
+            // A label horizontal in tile units is not horizontal on screen. Its angle there is
+            // found by projecting a short horizontal line and measuring what became of it.
+            vec4 offsetPoint = materialParams.matrix * vec4(a_pos + vec2(1.0, 0.0), 0.0, 1.0);
+            vec2 a = projectedPoint.xy / projectedPoint.w;
+            vec2 b = offsetPoint.xy / offsetPoint.w;
+            symbol_rotation = atan((b.y - a.y) / materialParams.aspectRatio, b.x - a.x);
+        }
+
+        float angle_sin = sin(segment_angle + symbol_rotation);
+        float angle_cos = cos(segment_angle + symbol_rotation);
+        mat2 rotation_matrix = mat2(angle_cos, -1.0 * angle_sin, angle_sin, angle_cos);
+
+        // The anchor is placed in the label plane, and the glyph's corner offset is added there
+        // rather than in tile units -- which is what keeps type the same size across a tile.
+        vec4 projected_pos = materialParams.labelPlaneMatrix * vec4(projPos.xy, 0.0, 1.0);
+        vec2 pos_rot = a_offset / 32.0 * fontScale + a_pxoffset;
+        vec2 pos0 = projected_pos.xy / projected_pos.w + rotation_matrix * pos_rot;
+        vec4 clip = materialParams.coordMatrix * vec4(pos0, 0.0, 1.0);
+
+        // Two values in one float: the opacity in the high bits, and the direction it is moving
+        // in the low bit, so a label fading in and one fading out are told apart.
+        float intOpacity = floor(packedFade / 2.0);
+        vec2 rawFade = vec2(intOpacity / 127.0, mod(packedFade, 2.0));
+        float fade_change = rawFade.y > 0.5 ? materialParams.symbolFadeChange
+                                            : -materialParams.symbolFadeChange;
+
+        material.glyph = vec4(a_tex / materialParams.texsize,
+                              clamp(rawFade.x + fade_change, 0.0, 1.0),
+                              fontScale);
+        material.glyphGamma = vec4(clip.w, 0.0, 0.0, 0.0);
+        material.worldPosition = clip;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // The sheet is premultiplied, so opacity scales it directly.
+        vec4 sprite = texture(materialParams_atlas, variable_glyph.xy);
+        material.baseColor = sprite * (materialParams.opacity * variable_glyph.z);
+    }
+}

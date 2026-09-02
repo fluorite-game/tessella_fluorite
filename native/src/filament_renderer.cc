@@ -987,7 +987,10 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
         buildRoof(add);
         return;
     }
-    if (add.builtinShader == TSL_BUILTIN_SYMBOL_SDFSHADER) {
+    if (add.builtinShader == TSL_BUILTIN_SYMBOL_SDFSHADER
+        || add.builtinShader == TSL_BUILTIN_SYMBOL_ICON_SHADER) {
+        // Both halves carry the same five attributes and want the same packing; what differs is
+        // only which atlas they sample and how the fragment resolves it.
         buildSymbol(add);
         return;
     }
@@ -1210,6 +1213,7 @@ void FilamentRenderer::issue(const Batch& batch) {
                 batch.builtinShader == TSL_BUILTIN_FILL_PATTERN_SHADER
                 || batch.builtinShader == TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER;
             const bool sharedColour = batch.builtinShader != TSL_BUILTIN_SYMBOL_SDFSHADER
+                                      && batch.builtinShader != TSL_BUILTIN_SYMBOL_ICON_SHADER
                                       && batch.builtinShader != TSL_BUILTIN_RASTER_SHADER
                                       && !patterned;
             if (sharedColour) {
@@ -1392,7 +1396,8 @@ void FilamentRenderer::issue(const Batch& batch) {
             // A symbol needs three matrices, the atlas it samples, the layer's text paint, and
             // the frame's camera distance -- the last because how far a label's anchor is from
             // the camera is what sets its size on screen.
-            if (batch.builtinShader == TSL_BUILTIN_SYMBOL_SDFSHADER) {
+            if (batch.builtinShader == TSL_BUILTIN_SYMBOL_SDFSHADER
+                || batch.builtinShader == TSL_BUILTIN_SYMBOL_ICON_SHADER) {
                 tsl_symbol_drawable_ubo block{};
                 if (at + sizeof block <= drawables->second.size()) {
                     std::memcpy(&block, drawables->second.data() + at, sizeof block);
@@ -1429,8 +1434,11 @@ void FilamentRenderer::issue(const Batch& batch) {
                         std::memcpy(&tile, props->second.data() + tileAt, sizeof tile);
                     }
                 }
-                instance->setParameter("isHalo", tile.is_halo ? 1.0f : 0.0f);
-                instance->setParameter("tileGammaScale", tile.gamma_scale);
+                const bool sdf = batch.builtinShader == TSL_BUILTIN_SYMBOL_SDFSHADER;
+                if (sdf) {
+                    instance->setParameter("isHalo", tile.is_halo ? 1.0f : 0.0f);
+                    instance->setParameter("tileGammaScale", tile.gamma_scale);
+                }
 
                 tsl_symbol_evaluated_props_ubo paint{};
                 if (props->second.size() >= sizeof paint) {
@@ -1441,14 +1449,18 @@ void FilamentRenderer::issue(const Batch& batch) {
                 const float* halo = text ? paint.text_halo_color : paint.icon_halo_color;
                 instance->setParameter(
                     "fillColor", filament::math::float4{fill[0], fill[1], fill[2], fill[3]});
-                instance->setParameter(
-                    "haloColor", filament::math::float4{halo[0], halo[1], halo[2], halo[3]});
+                if (sdf) {
+                    instance->setParameter(
+                        "haloColor", filament::math::float4{halo[0], halo[1], halo[2], halo[3]});
+                }
                 instance->setParameter("opacity",
                                        text ? paint.text_opacity : paint.icon_opacity);
-                instance->setParameter("haloWidth",
-                                       text ? paint.text_halo_width : paint.icon_halo_width);
-                instance->setParameter("haloBlur",
-                                       text ? paint.text_halo_blur : paint.icon_halo_blur);
+                if (sdf) {
+                    instance->setParameter("haloWidth",
+                                           text ? paint.text_halo_width : paint.icon_halo_width);
+                    instance->setParameter("haloBlur",
+                                           text ? paint.text_halo_blur : paint.icon_halo_blur);
+                }
 
                 tsl_global_paint_params_ubo frame{};
                 if (const auto global = uniforms_.find(-1); global != uniforms_.end()) {
@@ -1620,6 +1632,7 @@ void FilamentRenderer::issue(const Batch& batch) {
         // else lets Filament apply the transform, which is cheaper and needs no vertex hook.
         const bool placesItself = patternPlaces(batch.builtinShader) ||
                                   batch.builtinShader == TSL_BUILTIN_RASTER_SHADER ||
+                                  batch.builtinShader == TSL_BUILTIN_SYMBOL_ICON_SHADER ||
                                   batch.builtinShader == TSL_BUILTIN_SYMBOL_SDFSHADER ||
                                   batch.builtinShader == TSL_BUILTIN_LINE_SHADER ||
                                   batch.builtinShader ==
