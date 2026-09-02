@@ -104,6 +104,15 @@ constexpr std::uint32_t kPropsSlot = 5;
 /// A symbol's per-drawable pass flags, which are their own block rather than part of the paint.
 constexpr std::uint32_t kSymbolTilePropsSlot = 3;
 
+/// And a patterned fill's, which names the sprite rectangles for this tile.
+constexpr std::uint32_t kFillPatternTilePropsSlot = 3;
+
+/// Whether a family carries its own matrix rather than taking the renderable's transform.
+bool patternPlaces(std::int32_t family) {
+    return family == TSL_BUILTIN_FILL_PATTERN_SHADER
+           || family == TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER;
+}
+
 /// Which primitive a family's indices describe.
 ///
 /// The ABI carries no topology, and it does not need to: the family settles it. A fill outline is
@@ -1197,8 +1206,12 @@ void FilamentRenderer::issue(const Batch& batch) {
             // A symbol has no single colour: it carries a fill and a halo, and which of them
             // applies is a property of the pass rather than of the layer. Its own block below
             // sets both, so the shared path would only be setting a uniform it does not declare.
+            const bool patterned =
+                batch.builtinShader == TSL_BUILTIN_FILL_PATTERN_SHADER
+                || batch.builtinShader == TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER;
             const bool sharedColour = batch.builtinShader != TSL_BUILTIN_SYMBOL_SDFSHADER
-                                      && batch.builtinShader != TSL_BUILTIN_RASTER_SHADER;
+                                      && batch.builtinShader != TSL_BUILTIN_RASTER_SHADER
+                                      && !patterned;
             if (sharedColour) {
                 float colour[4] = {0, 0, 0, 0};
                 std::memcpy(colour, props->second.data() + colourOffset(batch.builtinShader),
@@ -1247,6 +1260,82 @@ void FilamentRenderer::issue(const Batch& batch) {
                                        filament::math::float2{static_cast<float>(width_) * 0.5f,
                                                               -static_cast<float>(height_) * 0.5f});
                 instance->setParameter("matrix", transform);
+            }
+
+            // A patterned fill takes its sprite rectangles from the tile props, its world anchor
+            // and scale from the drawable block, and the crossfade from the layer's paint.
+            if (patterned) {
+                tsl_fill_pattern_drawable_ubo block{};
+                if (at + sizeof block <= drawables->second.size()) {
+                    std::memcpy(&block, drawables->second.data() + at, sizeof block);
+                }
+                filament::math::mat4f placement;
+                std::memcpy(&placement, block.matrix, sizeof block.matrix);
+                instance->setParameter("matrix", placement);
+                instance->setParameter("pixelCoordUpper",
+                                       filament::math::float2{block.pixel_coord_upper[0],
+                                                              block.pixel_coord_upper[1]});
+                instance->setParameter("pixelCoordLower",
+                                       filament::math::float2{block.pixel_coord_lower[0],
+                                                              block.pixel_coord_lower[1]});
+                instance->setParameter("tileRatio", block.tile_ratio);
+
+                // Which sprite, and how big it is in the atlas. Per tile rather than per layer,
+                // because the same layer resolves to different sprites in different tiles when
+                // the pattern is data-driven.
+                tsl_fill_pattern_tile_props_ubo tile{};
+                if (const auto held = layer->second.find(kFillPatternTilePropsSlot);
+                    held != layer->second.end()) {
+                    const std::size_t tileAt =
+                        static_cast<std::size_t>(batch.uboIndexes[i]) * sizeof tile;
+                    if (tileAt + sizeof tile <= held->second.size()) {
+                        std::memcpy(&tile, held->second.data() + tileAt, sizeof tile);
+                    }
+                }
+                instance->setParameter("patternFrom",
+                                       filament::math::float4{tile.pattern_from[0],
+                                                              tile.pattern_from[1],
+                                                              tile.pattern_from[2],
+                                                              tile.pattern_from[3]});
+                instance->setParameter("patternTo",
+                                       filament::math::float4{tile.pattern_to[0],
+                                                              tile.pattern_to[1],
+                                                              tile.pattern_to[2],
+                                                              tile.pattern_to[3]});
+                // A zero atlas size would divide the sprite rectangles into infinity.
+                instance->setParameter(
+                    "texsize",
+                    filament::math::float2{tile.texsize[0] > 0.0f ? tile.texsize[0] : 1.0f,
+                                           tile.texsize[1] > 0.0f ? tile.texsize[1] : 1.0f});
+
+                tsl_fill_evaluated_props_ubo paint{};
+                if (props->second.size() >= sizeof paint) {
+                    std::memcpy(&paint, props->second.data(), sizeof paint);
+                }
+                instance->setParameter("fromScale", paint.from_scale);
+                instance->setParameter("toScale", paint.to_scale);
+                instance->setParameter("fade", paint.fade);
+                instance->setParameter("opacity", paint.opacity);
+
+                tsl_global_paint_params_ubo frame{};
+                if (const auto global = uniforms_.find(-1); global != uniforms_.end()) {
+                    if (const auto slot = global->second.find(TSL_UBO_ID_GLOBAL_PAINT_PARAMS_UBO);
+                        slot != global->second.end() && slot->second.size() >= sizeof frame) {
+                        std::memcpy(&frame, slot->second.data(), sizeof frame);
+                    }
+                }
+                instance->setParameter("pixelRatio",
+                                       frame.pixel_ratio > 0.0f ? frame.pixel_ratio : 1.0f);
+
+                const auto atlas = textures_.find(mesh->second.texture);
+                if (atlas == textures_.end()) {
+                    missingAtlas_++;
+                    continue;
+                }
+                instance->setParameter("image0", atlas->second,
+                                       filament::TextureSampler(
+                                           filament::TextureSampler::MinFilter::LINEAR,
+                                           filament::TextureSampler::MagFilter::LINEAR));
             }
 
             // A raster tile needs its own placement, the style's colour adjustments, and both
@@ -1525,7 +1614,8 @@ void FilamentRenderer::issue(const Batch& batch) {
         // A line places itself: it must extrude in tile units before the tile-to-clip transform,
         // so it takes the matrix as a parameter and its renderable carries the identity. Everything
         // else lets Filament apply the transform, which is cheaper and needs no vertex hook.
-        const bool placesItself = batch.builtinShader == TSL_BUILTIN_RASTER_SHADER ||
+        const bool placesItself = patternPlaces(batch.builtinShader) ||
+                                  batch.builtinShader == TSL_BUILTIN_RASTER_SHADER ||
                                   batch.builtinShader == TSL_BUILTIN_SYMBOL_SDFSHADER ||
                                   batch.builtinShader == TSL_BUILTIN_LINE_SHADER ||
                                   batch.builtinShader ==

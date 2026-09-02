@@ -1,0 +1,98 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The fill-pattern family: a fill painted with a sprite instead of a colour.
+//
+// The pattern is anchored to the *world*, not to the tile, so it does not slide when tiles are
+// replaced and does not seam where two tiles meet. That is what `pixel_coord_upper` and
+// `pixel_coord_lower` are for: the tile's origin in world pixels, split across two floats because
+// a single float32 runs out of mantissa long before a zoom-22 world runs out of pixels. The
+// modular arithmetic in `patternPos` folds that origin into the pattern's own period before
+// scaling, which keeps the precision where it is needed.
+//
+// Two patterns and a fade between them, because a zoom change swaps one sprite for another and
+// mbgl crossfades rather than cutting. Both are read from one atlas at different rectangles.
+//
+// Transcribed from mbgl's `FillPatternShader`, Vulkan variant.
+material {
+    name : tessella_fill_pattern,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        { type : mat4,      name : matrix },
+        { type : float2,    name : pixelCoordUpper },
+        { type : float2,    name : pixelCoordLower },
+        { type : float,     name : tileRatio },
+        { type : float4,    name : patternFrom },
+        { type : float4,    name : patternTo },
+        { type : float2,    name : texsize },
+        { type : float,     name : fromScale },
+        { type : float,     name : toScale },
+        { type : float,     name : fade },
+        { type : float,     name : opacity },
+        { type : float,     name : pixelRatio },
+        { type : sampler2d, name : image0 }
+    ],
+    requires : [ position ],
+    variables : [ patternPosA, patternPosB ]
+}
+
+vertex {
+    /// Where a vertex falls within the pattern's period, in pattern widths.
+    ///
+    /// The triple `mod` is mbgl's and is not redundant: it reduces the high half of the world
+    /// coordinate against the pattern size *before* multiplying it up by 256 twice, so the product
+    /// never leaves the range a float can hold exactly.
+    vec2 patternPos(vec2 upper, vec2 lower, vec2 size, float unitsToPixels, vec2 pos) {
+        vec2 offset = mod(mod(mod(upper, size) * 256.0, size) * 256.0 + lower, size);
+        return (unitsToPixels * pos + offset) / size;
+    }
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec2 position = getPosition().xy;
+
+        vec2 tlA = materialParams.patternFrom.xy;
+        vec2 brA = materialParams.patternFrom.zw;
+        vec2 tlB = materialParams.patternTo.xy;
+        vec2 brB = materialParams.patternTo.zw;
+
+        float ratio = max(materialParams.pixelRatio, 1e-6);
+        vec2 sizeA = (brA - tlA) / ratio;
+        vec2 sizeB = (brB - tlB) / ratio;
+
+        material.patternPosA = vec4(
+            patternPos(materialParams.pixelCoordUpper, materialParams.pixelCoordLower,
+                       materialParams.fromScale * sizeA, materialParams.tileRatio, position),
+            0.0, 0.0);
+        material.patternPosB = vec4(
+            patternPos(materialParams.pixelCoordUpper, materialParams.pixelCoordLower,
+                       materialParams.toScale * sizeB, materialParams.tileRatio, position),
+            0.0, 0.0);
+
+        material.worldPosition = materialParams.matrix * vec4(position, 0.0, 1.0);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 tlA = materialParams.patternFrom.xy;
+        vec2 brA = materialParams.patternFrom.zw;
+        vec2 tlB = materialParams.patternTo.xy;
+        vec2 brB = materialParams.patternTo.zw;
+
+        // `mod` is what tiles the sprite: the position runs on across the world and this is what
+        // wraps it back into one copy of the pattern before it indexes the atlas.
+        vec2 within = mod(variable_patternPosA.xy, 1.0);
+        vec2 a = mix(tlA / materialParams.texsize, brA / materialParams.texsize, within);
+        vec4 color1 = texture(materialParams_image0, a);
+
+        vec2 withinB = mod(variable_patternPosB.xy, 1.0);
+        vec2 b = mix(tlB / materialParams.texsize, brB / materialParams.texsize, withinB);
+        vec4 color2 = texture(materialParams_image0, b);
+
+        // The atlas is premultiplied already, so the crossfade and the opacity scale it directly.
+        material.baseColor = mix(color1, color2, materialParams.fade) * materialParams.opacity;
+    }
+}
