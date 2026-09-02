@@ -553,6 +553,147 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
     return true;
 }
 
+/// Builds an extrusion roof, keying its attributes by id rather than by wire order.
+///
+/// The generic path assigns Filament's custom slots in the order the wire lists attributes, which
+/// is fine where a family always sends the same ones. An extrusion does not: `base`, `height` and
+/// `color` are data-driven, so they are present when the style computes them per feature and
+/// absent when it does not, and a slot assigned by position would mean something different in the
+/// two cases.
+///
+/// A missing one is synthesised as a constant so the material stays single. mbgl compiles a
+/// permutation per case and branches on `HAS_UNIFORM_u_height`; a Filament material is one
+/// compiled thing, so the cheaper trade is to hand it the value it would have read anyway. It
+/// costs eight bytes a vertex, and only for the properties a style did *not* make data-driven.
+bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
+    const Attribute* position = nullptr;
+    const Attribute* decimals = nullptr;
+    const Attribute* base = nullptr;
+    const Attribute* height = nullptr;
+    for (const Attribute& attribute : add.attrs) {
+        switch (attribute.desc.attr_id) {
+            case TSL_UBO_ID_FILL_EXTRUSION_POS_VERTEX_ATTRIBUTE: position = &attribute; break;
+            case TSL_UBO_ID_FILL_EXTRUSION_DECIMALS_ED_ATTRIBUTE: decimals = &attribute; break;
+            case TSL_UBO_ID_FILL_EXTRUSION_BASE_VERTEX_ATTRIBUTE: base = &attribute; break;
+            case TSL_UBO_ID_FILL_EXTRUSION_HEIGHT_VERTEX_ATTRIBUTE: height = &attribute; break;
+            default: break;
+        }
+    }
+    if (position == nullptr || decimals == nullptr) {
+        return false;
+    }
+    const auto count = static_cast<std::uint32_t>(add.vertexCount);
+    if (count == 0) {
+        return false;
+    }
+
+    // A zoom-interpolated property arrives as the pair the zoom mixes between; one that only
+    // varies by feature writes the first and leaves the factor at zero, so reading both is right
+    // either way.
+    const std::size_t fillBytes = static_cast<std::size_t>(count) * sizeof(float);
+    std::vector<std::uint8_t> baseFill;
+    std::vector<std::uint8_t> heightFill;
+    const auto constantPair = [&](std::vector<std::uint8_t>& into, float value) {
+        into.resize(fillBytes);
+        auto* as_floats = reinterpret_cast<float*>(into.data());
+        for (std::uint32_t i = 0; i < count; i++) {
+            as_floats[i] = value;
+        }
+    };
+    // The layer's own evaluated value, which is what the shader would have read as a uniform.
+    float constantBase = 0.0f;
+    float constantHeight = 0.0f;
+    if (const auto layer = uniforms_.find(add.layerIndex); layer != uniforms_.end()) {
+        if (const auto props = layer->second.find(kPropsSlot);
+            props != layer->second.end() && props->second.size() >= sizeof(tsl_fill_extrusion_props_ubo)) {
+            tsl_fill_extrusion_props_ubo paint{};
+            std::memcpy(&paint, props->second.data(), sizeof paint);
+            constantBase = paint.base;
+            constantHeight = paint.height;
+        }
+    }
+    if (base == nullptr) {
+        constantPair(baseFill, constantBase);
+    }
+    if (height == nullptr) {
+        constantPair(heightFill, constantHeight);
+    }
+
+    auto* vertices = filament::VertexBuffer::Builder()
+                         .vertexCount(count)
+                         .bufferCount(4)
+                         .attribute(filament::VertexAttribute::POSITION, 0,
+                                    filament::VertexBuffer::AttributeType::SHORT2,
+                                    position->desc.offset, position->desc.stride)
+                         .attribute(filament::VertexAttribute::CUSTOM0, 1,
+                                    filament::VertexBuffer::AttributeType::USHORT2,
+                                    decimals->desc.offset, decimals->desc.stride)
+                         // One float each, not a pair. The binder interleaves the layer's
+                         // data-driven properties into a single buffer -- base at offset 0 and
+                         // height at offset 4 of an 8-byte stride for this style -- so reading
+                         // either as a pair runs into the other property, and then into the next
+                         // vertex. The wire says which: `FLOAT` is one component, and a
+                         // zoom-interpolated property would arrive as `FLOAT2` with the pair mbgl
+                         // mixes between.
+                         .attribute(filament::VertexAttribute::CUSTOM1, 2,
+                                    filament::VertexBuffer::AttributeType::FLOAT,
+                                    base ? base->desc.offset : 0,
+                                    base ? base->desc.stride : 4)
+                         .attribute(filament::VertexAttribute::CUSTOM2, 3,
+                                    filament::VertexBuffer::AttributeType::FLOAT,
+                                    height ? height->desc.offset : 0,
+                                    height ? height->desc.stride : 4)
+                         .build(*engine_);
+    if (vertices == nullptr) {
+        return false;
+    }
+    const auto upload = [&](std::uint8_t slot, const std::uint8_t* from, std::size_t bytes) {
+        auto* owned = static_cast<std::uint8_t*>(std::malloc(bytes));
+        if (owned == nullptr) {
+            return;
+        }
+        std::memcpy(owned, from, bytes);
+        vertices->setBufferAt(*engine_, slot,
+                              filament::VertexBuffer::BufferDescriptor(
+                                  owned, bytes,
+                                  [](void* buffer, std::size_t, void*) { std::free(buffer); }));
+    };
+    upload(0, position->data.data, position->data.size);
+    upload(1, decimals->data.data, decimals->data.size);
+    upload(2, base ? base->data.data : baseFill.data(),
+           base ? base->data.size : baseFill.size());
+    upload(3, height ? height->data.data : heightFill.data(),
+           height ? height->data.size : heightFill.size());
+
+    const auto indexCount = static_cast<std::uint32_t>(add.indexes.size / sizeof(std::uint16_t));
+    auto* indices = filament::IndexBuffer::Builder()
+                        .indexCount(indexCount)
+                        .bufferType(filament::IndexBuffer::IndexType::USHORT)
+                        .build(*engine_);
+    if (indices == nullptr) {
+        engine_->destroy(vertices);
+        return false;
+    }
+    auto* ownedIndexes = static_cast<std::uint8_t*>(std::malloc(add.indexes.size));
+    if (ownedIndexes == nullptr) {
+        engine_->destroy(indices);
+        engine_->destroy(vertices);
+        return false;
+    }
+    std::memcpy(ownedIndexes, add.indexes.data, add.indexes.size);
+    indices->setBuffer(*engine_,
+                       filament::IndexBuffer::BufferDescriptor(
+                           ownedIndexes, add.indexes.size,
+                           [](void* buffer, std::size_t, void*) { std::free(buffer); }));
+
+    onRetire(add.id);
+    meshes_[add.id] = Mesh{vertices, indices, indexCount, add.layerIndex,
+                           add.tileID ? add.tileID->z : std::uint8_t{0},
+                           add.tileID ? add.tileID->overscaled_z : std::uint8_t{0},
+                           add.tileID ? *add.tileID : TileID{}};
+    return true;
+}
+
 void FilamentRenderer::onGeometry(const DrawableAdd& add) {
 
     if (add.vertexCount == 0 || add.indexes.empty()) {
@@ -562,6 +703,10 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
     // The walls arrive as instances over the roof's outline rather than as their own vertices.
     if (add.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER) {
         expandWalls(add);
+        return;
+    }
+    if (add.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER) {
+        buildRoof(add);
         return;
     }
 
@@ -831,8 +976,18 @@ void FilamentRenderer::issue(const Batch& batch) {
                 if (props->second.size() >= sizeof paint) {
                     std::memcpy(&paint, props->second.data(), sizeof paint);
                 }
-                instance->setParameter("base", paint.base);
-                instance->setParameter("height", paint.height);
+                if (batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER) {
+                    // Nothing: the roof reads base and height per vertex. The zoom-mix factors in
+                    // the drawable block are for a height that interpolates across zooms, which
+                    // arrives as a `FLOAT2` pair; this reads the single-component form and would
+                    // need both to serve that case.
+                } else {
+                    // The walls still take theirs as uniforms: `encode_extrusion_walls` does not
+                    // put the data-driven attributes on the wire, so there is nothing per instance
+                    // to read and this is the layer's evaluated value or nothing.
+                    instance->setParameter("base", paint.base);
+                    instance->setParameter("height", paint.height);
+                }
                 instance->setParameter("lightIntensity", paint.light_intensity);
                 instance->setParameter("verticalGradient", paint.vertical_gradient);
                 instance->setParameter(

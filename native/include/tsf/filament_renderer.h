@@ -173,6 +173,10 @@ private:
     /// Turns a wall drawable's instances into ordinary geometry. See the definition for why.
     bool expandWalls(const DrawableAdd& add);
 
+    /// Builds an extrusion roof, keying attributes by id and filling in the ones a style left
+    /// constant. See the definition for why that is not the generic path.
+    bool buildRoof(const DrawableAdd& add);
+
     /// Draws the clip masks for this frame and assigns each tile its stencil reference.
     ///
     /// Coarse first, so a child's mask overwrites its parent's where they overlap and the parent

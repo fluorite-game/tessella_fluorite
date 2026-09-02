@@ -32,15 +32,14 @@ material {
         { type : mat4,   name : matrix },
         { type : float4, name : color },
         { type : float,  name : opacity },
-        { type : float,  name : base },
-        { type : float,  name : height },
+
         { type : float3, name : lightColor },
         // Direction the light arrives from, already in the space the normal is in.
         { type : float3, name : lightPosition },
         { type : float,  name : lightIntensity },
         { type : float,  name : verticalGradient }
     ],
-    requires : [ position, custom0 ],
+    requires : [ position, custom0, custom1, custom2 ],
     variables : [ shade ]
 }
 
@@ -52,7 +51,19 @@ vertex {
         // Every vertex here is on a roof, so the surface faces straight up.
         vec3 normal = vec3(0.0, 0.0, 1.0);
         float t = 1.0;
-        float z = t > 0.0 ? materialParams.height : materialParams.base;
+
+        // The building's own base and height, per vertex. These are data-driven in every real
+        // style -- liberty reads `render_height` off the feature -- so taking them from the paint
+        // block instead leaves every building zero metres tall and flat on the ground, which is
+        // what it was doing. A property the style left constant is handed over as a pair of equal
+        // values, so this one path serves both.
+        // One component each: the binder interleaves this layer's data-driven properties into a
+        // single buffer, so base and height are neighbours at one stride rather than a pair
+        // apiece. The zoom-mix factors are zero for a property that varies by feature and not by
+        // zoom, which is what `["get", "render_height"]` is, so the mix reduces to this value.
+        float base = max(getCustom1().x, 0.0);
+        float height = max(getCustom2().x, 0.0);
+        float z = t > 0.0 ? height : base;
 
         // The fraction the position was packed with, seven bits an axis. Integer tile units make
         // this zero today, but a simplification pass produces fractional positions and the walls
@@ -79,8 +90,7 @@ vertex {
         // this shader agree with the oracle only by coincidence of what it is handed.
         if (normal.z == 0.0) {
             float fMin = mix(0.7, 0.98, 1.0 - materialParams.lightIntensity);
-            float factor = clamp((t + materialParams.base)
-                                 * pow(materialParams.height / 150.0, 0.5), fMin, 1.0);
+            float factor = clamp((t + base) * pow(height / 150.0, 0.5), fMin, 1.0);
             directional *= (1.0 - materialParams.verticalGradient)
                          + (materialParams.verticalGradient * factor);
         }
