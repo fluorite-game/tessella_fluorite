@@ -83,6 +83,11 @@ std::size_t drawableStride(std::int32_t family) {
             // so falling through to the fill's 96 put every symbol drawable after the first in a
             // layer on another one's matrices.
             return sizeof(tsl_symbol_drawable_ubo);
+        case TSL_BUILTIN_CIRCLE_SHADER:
+            // 112, where a fill's is 96. As for the extrusions, the header emits no union
+            // constant for this family because it has one drawable block, so the block's own
+            // size is the stride.
+            return sizeof(tsl_circle_drawable_ubo);
         case TSL_BUILTIN_FILL_EXTRUSION_SHADER:
         case TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER:
         case TSL_BUILTIN_FILL_EXTRUSION_PATTERN_SHADER:
@@ -117,7 +122,11 @@ constexpr std::uint32_t kFillPatternTilePropsSlot = 4;
 /// Whether a family carries its own matrix rather than taking the renderable's transform.
 bool patternPlaces(std::int32_t family) {
     return family == TSL_BUILTIN_FILL_PATTERN_SHADER
-           || family == TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER;
+           || family == TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER
+           // A circle's quad is extruded in *clip* space, by a radius in pixels scaled by the
+           // projected w -- so the matrix has to be inside the shader, and the renderable carries
+           // the identity like a line's does.
+           || family == TSL_BUILTIN_CIRCLE_SHADER;
 }
 
 /// Which primitive a family's indices describe.
@@ -1267,6 +1276,53 @@ void FilamentRenderer::issue(const Batch& batch) {
                     std::memcpy(&opacity, props->second.data() + off, sizeof opacity);
                 }
                 instance->setParameter("opacity", opacity);
+            }
+
+            // A circle takes its size and its stroke from the layer's paint and its extrude
+            // scale from the drawable. `color` and `opacity` are already set above, which is why
+            // only the rest is read here.
+            if (batch.builtinShader == TSL_BUILTIN_CIRCLE_SHADER) {
+                tsl_circle_evaluated_props_ubo paint{};
+                paint.radius = 5.0f;
+                if (props->second.size() >= sizeof paint) {
+                    std::memcpy(&paint, props->second.data(), sizeof paint);
+                }
+                instance->setParameter("radius", paint.radius);
+                instance->setParameter("blur", paint.blur);
+                instance->setParameter("strokeWidth", paint.stroke_width);
+                instance->setParameter("strokeOpacity", paint.stroke_opacity);
+                instance->setParameter("strokeColor",
+                                       filament::math::float4{paint.stroke_color[0],
+                                                              paint.stroke_color[1],
+                                                              paint.stroke_color[2],
+                                                              paint.stroke_color[3]});
+                instance->setParameter("scaleWithMap", paint.scale_with_map ? 1.0f : 0.0f);
+                instance->setParameter("pitchWithMap", paint.pitch_with_map ? 1.0f : 0.0f);
+
+                tsl_circle_drawable_ubo block{};
+                if (at + sizeof block <= drawables->second.size()) {
+                    std::memcpy(&block, drawables->second.data() + at, sizeof block);
+                }
+                filament::math::mat4f placement;
+                std::memcpy(&placement, block.matrix, sizeof block.matrix);
+                instance->setParameter("matrix", placement);
+                instance->setParameter("extrudeScale",
+                                       filament::math::float2{block.extrude_scale[0],
+                                                              block.extrude_scale[1]});
+                // The frame's own camera distance, which is what holds a circle at a constant
+                // pixel size while the map is pitched. Read from the frame-wide block the same
+                // way a symbol reads it.
+                tsl_global_paint_params_ubo frame{};
+                if (const auto global = uniforms_.find(-1); global != uniforms_.end()) {
+                    if (const auto slot = global->second.find(TSL_UBO_ID_GLOBAL_PAINT_PARAMS_UBO);
+                        slot != global->second.end() && slot->second.size() >= sizeof frame) {
+                        std::memcpy(&frame, slot->second.data(), sizeof frame);
+                    }
+                }
+                instance->setParameter("cameraToCenterDistance",
+                                       frame.camera_to_center_distance);
+                instance->setParameter("pixelRatio",
+                                       frame.pixel_ratio > 0.0f ? frame.pixel_ratio : 1.0f);
             }
 
             // A line needs the widths from the layer's paint and the drawable's own ratio, which

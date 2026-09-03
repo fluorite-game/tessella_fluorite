@@ -1,0 +1,105 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// A circle layer: one quad per point, with the disc drawn inside it by the fragment shader.
+//
+// The quad is never seen. What is seen is a disc anti-aliased against its own radius, and a
+// stroke drawn as a second smoothstep at the boundary between the fill and the edge -- so a
+// circle costs four vertices whatever its size, and stays round at any zoom because nothing
+// about it is tessellated.
+//
+// Ported from mbgl's `circle.vertex.glsl` and `circle.fragment.glsl`.
+
+material {
+    name : tessella_circle,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        { type : mat4,   name : matrix },
+        // Tile units per pixel, which is what turns a radius in pixels into an extrusion.
+        { type : float2, name : extrudeScale },
+        { type : float4, name : color },
+        { type : float4, name : strokeColor },
+        { type : float,  name : radius },
+        { type : float,  name : blur },
+        { type : float,  name : opacity },
+        { type : float,  name : strokeWidth },
+        { type : float,  name : strokeOpacity },
+        // `circle-pitch-scale` and `circle-pitch-alignment`, as floats: a material parameter has
+        // no bool. Both are false on a flat north-up map, which is the case the goldens pin.
+        { type : float,  name : scaleWithMap },
+        { type : float,  name : pitchWithMap },
+        { type : float,  name : cameraToCenterDistance },
+        { type : float,  name : pixelRatio }
+    ],
+    requires : [ position ],
+    variables : [ circleData ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        // The corner sign rides in the low bit of each coordinate, the same trick the line vertex
+        // uses: the point is doubled and zero or one added. So the centre is the halved position
+        // and the extrusion is what is left, mapped from {0,1} back to {-1,+1}.
+        vec2 pos = getPosition().xy;
+        vec2 extrude = mod(pos, 2.0) * 2.0 - 1.0;
+        vec2 centre = floor(pos * 0.5);
+
+        float reach = materialParams.radius + materialParams.strokeWidth;
+        vec4 clip;
+        if (materialParams.pitchWithMap >= 0.5) {
+            // Lying on the ground: the extrusion is in tile units and goes on before the matrix.
+            vec2 corner = centre;
+            if (materialParams.scaleWithMap >= 0.5) {
+                corner += extrude * reach * materialParams.extrudeScale;
+            } else {
+                // Held at a constant pixel size while lying flat, which needs the perspective
+                // divide the matrix is about to do -- so it is measured first and multiplied in.
+                vec4 projected = materialParams.matrix * vec4(centre, 0.0, 1.0);
+                corner += extrude * reach * materialParams.extrudeScale
+                        * (projected.w / max(materialParams.cameraToCenterDistance, 1e-6));
+            }
+            clip = materialParams.matrix * vec4(corner, 0.0, 1.0);
+        } else {
+            // Standing up on the screen: the matrix places the centre and the extrusion is added
+            // in clip space afterwards, scaled by w so it survives the divide as a pixel size.
+            clip = materialParams.matrix * vec4(centre, 0.0, 1.0);
+            if (materialParams.scaleWithMap >= 0.5) {
+                clip.xy += extrude * reach * materialParams.extrudeScale
+                         * materialParams.cameraToCenterDistance;
+            } else {
+                clip.xy += extrude * reach * materialParams.extrudeScale * clip.w;
+            }
+        }
+
+        // The blur that hides the quad's own edge: one device pixel spread over the circle's
+        // reach, so a small circle fades over more of itself than a large one.
+        float antialias = 1.0 / max(materialParams.pixelRatio, 1e-6) / max(reach, 1e-6);
+        material.circleData = vec4(extrude, antialias, 0.0);
+        material.worldPosition = clip;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 extrude = variable_circleData.xy;
+        float antialias = variable_circleData.z;
+        float reach = materialParams.radius + materialParams.strokeWidth;
+
+        float extrudeLength = length(extrude);
+        // Negative, because the ramp runs inwards from the quad's edge to the disc's.
+        float edge = -max(materialParams.blur, antialias);
+        float inside = smoothstep(0.0, edge, extrudeLength - 1.0);
+        // Where the fill gives way to the stroke. A hairline stroke is no stroke: below a
+        // hundredth of a pixel the ratio below is noise, and mbgl cuts it off at the same place.
+        float stroked = materialParams.strokeWidth < 0.01
+            ? 0.0
+            : smoothstep(edge, 0.0, extrudeLength - materialParams.radius / max(reach, 1e-6));
+
+        vec4 fill = materialParams.color * materialParams.opacity;
+        vec4 stroke = materialParams.strokeColor * materialParams.strokeOpacity;
+        material.baseColor = inside * mix(fill, stroke, stroked);
+    }
+}
