@@ -1221,8 +1221,44 @@ void FilamentRenderer::endFrame(std::uint64_t) {
     // The clip masks first, so every drawable issued below has a reference to test against.
     writeMasks();
     // Reversed: see `pending_`. The producer's order is front-to-back and this pass blends.
-    for (auto it = pending_.rbegin(); it != pending_.rend(); ++it) {
-        issue(*it);
+    // Reversed in place: `pending_` is cleared below either way, and a `Batch` owns two vectors,
+    // so copying the frame's batches into a second sequence to reverse them would allocate once
+    // per drawable for nothing.
+    std::reverse(pending_.begin(), pending_.end());
+
+    // ... except inside a layer that resolves in depth, where the reversal is wrong.
+    //
+    // The reversal exists because a translucent pass with no depth buffer has to blend
+    // bottom-up. An extrusion is not that layer: it *has* a depth buffer, and the producer
+    // already orders its drawables the way mbgl does -- the roof before the walls it belongs
+    // to. Reversing that draws the walls first, and where the two meet at exactly equal depth
+    // the comparison cannot separate them, so painter order decides and the roof edge is drawn
+    // by whichever came last.
+    //
+    // This is also how the depth pass was caught. It was arriving *after* the colour pass, so
+    // nothing ever read what it wrote -- which is why dropping it rendered pixel-identically,
+    // and why a read-only colour pass with the prepass and one with no depth buffer at all lost
+    // the *same* 6,857 wall pixels. The prepass is skipped outright now, in `issue`.
+    //
+    // Reversed at layer granularity, so the extrusion layer as a whole still sits where painter
+    // order puts it and only its interior is restored.
+    for (auto run = pending_.begin(); run != pending_.end();) {
+        if (!resolvesInDepth(run->builtinShader)) {
+            ++run;
+            continue;
+        }
+        const auto layer = run->layerIndex;
+        auto end = run;
+        while (end != pending_.end() && resolvesInDepth(end->builtinShader)
+               && end->layerIndex == layer) {
+            ++end;
+        }
+        std::reverse(run, end);
+        run = end;
+    }
+
+    for (const auto& batch : pending_) {
+        issue(batch);
     }
     pending_.clear();
 }
@@ -1747,6 +1783,37 @@ void FilamentRenderer::issue(const Batch& batch) {
         // combination putting the near one in front in both draw orders is this projection with
         // Filament's default comparison and the write on. Reversing z -- the obvious reading,
         // since Filament is a reversed-Z renderer -- puts the *far* quad in front instead.
+        // The depth-only pass, which this backend does not need and must not draw.
+        //
+        // mbgl gives a translucent extrusion two passes: one that writes depth with colour off,
+        // then a colour pass that reads depth without writing. The second pass compares
+        // `LessEqual` against what the first wrote, so at each pixel only the frontmost surface
+        // passes and every pixel blends exactly once. The prepass is how mbgl gets that.
+        //
+        // Reproducing it here does not work, and the reason is structural rather than a detail
+        // to tune. mbgl's two passes draw the same drawables through the same shaders, so their
+        // depths are bit-identical and the comparison is exact. Ours are not: the roof and the
+        // walls are separate drawables on separate shaders -- the walls are expanded from
+        // outlines and reconstruct their position from instance attributes, the roof reads it
+        // from the vertex buffer -- so the depth a prepass writes for a surface is not the depth
+        // the colour pass computes for it. Swept over every comparison function, the read-only
+        // colour pass scored MAE 5.46 against the oracle where a writing one scores 2.05, and
+        // the disagreement shows as whole triangles of building where neither roof nor wall
+        // survived the test.
+        //
+        // A single colour pass that writes depth reaches the same picture: depth still resolves
+        // roof against wall and building against building, which is what the prepass was for.
+        // What it gives up is mbgl's blend-once guarantee, and measurement says that costs
+        // nothing here -- MAE 2.05 and 164 gross pixels, against 2.08 and 342 for the two-pass
+        // arrangement this replaced -- while halving the renderables, 36 against 54.
+        //
+        // Skipped at the consumer rather than dropped from the stream: the producer's order is
+        // measured against mbgl's own capture and has to keep saying what mbgl says. How a
+        // backend satisfies it is §11.7's business, and a colour pass that already writes depth
+        // has satisfied "fill the depth buffer" by construction.
+        if (resolvesInDepth(batch.builtinShader) && !mesh->second.colour) {
+            continue;
+        }
         if (resolvesInDepth(batch.builtinShader)) {
             instance->setDepthCulling(true);
             instance->setDepthWrite(true);
@@ -1870,9 +1937,13 @@ void FilamentRenderer::issue(const Batch& batch) {
         // drawable arriving *after* every translucent one is not a thing to deduce from a
         // picture. Alongside `TSF_NO_SCISSOR` and `TSF_NO_STENCIL` for the same reason.
         if (std::getenv("TSF_ORDER_LOG")) {
-            std::fprintf(stderr, "order %llu shader %d layer %u pass %u band %u\n",
+            std::fprintf(stderr,
+                         "order %llu shader %d layer %u pass %u band %u geom %llu slot %u "
+                         "colour %d idx %u\n",
                          (unsigned long long)ordered_, (int)batch.builtinShader,
-                         (unsigned)batch.layerIndex, (unsigned)batch.pass, (unsigned)band);
+                         (unsigned)batch.layerIndex, (unsigned)batch.pass, (unsigned)band,
+                         (unsigned long long)batch.geometries[i], (unsigned)batch.uboIndexes[i],
+                         (int)mesh->second.colour, (unsigned)mesh->second.indexCount);
         }
         scene_->addEntity(entity);
         entities_.push_back(entity);
