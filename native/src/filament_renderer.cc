@@ -1822,6 +1822,28 @@ void FilamentRenderer::issue(const Batch& batch) {
         if (resolvesInDepth(batch.builtinShader)) {
             instance->setDepthCulling(true);
             instance->setDepthWrite(true);
+        } else {
+            // A flat layer is not occluded by a building.
+            //
+            // mbgl draws one under `depthModeForSublayer`, which is a depth *range*: the fragment's
+            // depth is remapped into a narrow band a few `depthEpsilon` from the near plane, one
+            // band per layer and sublayer. Two things follow. Flat layers resolve against each
+            // other by the band they are in, and every one of them sits in front of anything
+            // drawn through the whole range -- which is what a fill-extrusion uses.
+            //
+            // The band is reproduced here as a nudge to the projection's `[14]`, because a
+            // consumer that binds a matrix has nowhere to put a depth range. A nudge translates
+            // the depth; it does not compress it. So a flat layer kept the depth of the ground it
+            // sits on, and once the extrusion started writing depth, a building's roof was nearer
+            // than the circle beside its foot and the test threw the circle away. Half the POI
+            // dots in the all-families scene went: 946 pixels of them against the oracle's 1,811,
+            // and 1,794 with the buildings taken out of the style.
+            //
+            // Not tested at all rather than tested against a band this cannot express. Painter
+            // order already puts these layers in the right sequence -- it is what the reversal in
+            // `endFrame` is for -- and a flat layer in mbgl neither writes depth nor loses to
+            // anything that does.
+            instance->setDepthCulling(false);
         }
 
         // An extrusion is not clipped to its tile, in either pass.
