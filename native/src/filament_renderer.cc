@@ -190,9 +190,27 @@ std::size_t opacityOffset(std::int32_t family, std::size_t bytes) {
     switch (family) {
         case TSL_BUILTIN_FILL_SHADER:
         case TSL_BUILTIN_FILL_OUTLINE_SHADER:
+        // The pattern variants share the fill block; only their tile props differ.
+        case TSL_BUILTIN_FILL_PATTERN_SHADER:
+        case TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER:
             return offsetof(tsl_fill_evaluated_props_ubo, opacity);
+        case TSL_BUILTIN_LINE_SHADER:
+            return offsetof(tsl_line_evaluated_props_ubo, opacity);
+        case TSL_BUILTIN_CIRCLE_SHADER:
+            return offsetof(tsl_circle_evaluated_props_ubo, opacity);
+        // Raster is deliberately absent: its block does not open with a colour, and it sets
+        // `opacity` itself from `tsl_raster_evaluated_props_ubo` alongside the rest of its paint.
         case TSL_BUILTIN_BACKGROUND_SHADER:
             return offsetof(tsl_background_props_ubo, opacity);
+        // Both extrusion families, which share one props block. Missing here, the default below
+        // left `opacity` at one and a translucent building was drawn opaque: the roofs came out
+        // at the lit colour instead of nine parts lit to one part what was behind them, which is
+        // 3 of 255 on a roof and 14 on a wall, over a third of the frame. It is also why the
+        // layer matched the oracle exactly at an opacity of one -- the only value at which not
+        // blending is right.
+        case TSL_BUILTIN_FILL_EXTRUSION_SHADER:
+        case TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER:
+            return offsetof(tsl_fill_extrusion_props_ubo, opacity);
         default:
             // Unknown layouts still open with a colour; the opacity is left at one rather than
             // read from an offset nothing has checked.
@@ -1380,7 +1398,15 @@ void FilamentRenderer::issue(const Batch& batch) {
                 coloured_++;
                 instance->setParameter(
                     "color", filament::math::float4{colour[0], colour[1], colour[2], colour[3]});
+            }
 
+            // Opacity is not a property of having a shared colour, and nesting it inside that
+            // test cost every family that sets its own colour its opacity: a raster tile at
+            // `raster-opacity` 0.55 was composited at one, which is opaque imagery over the
+            // vector layers it should be showing through to. Every material declares the
+            // parameter, so this runs for all of them; a family whose block has no opacity field
+            // answers `bytes` above and keeps the one.
+            {
                 float opacity = 1.0f;
                 const std::size_t off = opacityOffset(batch.builtinShader, props->second.size());
                 if (off + sizeof(float) <= props->second.size()) {
