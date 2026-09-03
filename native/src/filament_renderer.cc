@@ -105,7 +105,14 @@ constexpr std::uint32_t kPropsSlot = 5;
 constexpr std::uint32_t kSymbolTilePropsSlot = 3;
 
 /// And a patterned fill's, which names the sprite rectangles for this tile.
-constexpr std::uint32_t kFillPatternTilePropsSlot = 3;
+///
+/// Four, not three. Three is where a *symbol* keeps its tile props, and copying that constant
+/// left every patterned fill reading a slot the producer never writes: `patternFrom` and
+/// `patternTo` stayed zero, the sprite rectangle had no area, and the layer drew nothing at all
+/// -- not even the `fill-color` beside it, because the drawable is the pattern permutation and
+/// there is no fallback in it. `idFillTilePropsUBO` is 4 in the generated tables, which are
+/// mbgl's own.
+constexpr std::uint32_t kFillPatternTilePropsSlot = 4;
 
 /// Whether a family carries its own matrix rather than taking the renderable's transform.
 bool patternPlaces(std::int32_t family) {
