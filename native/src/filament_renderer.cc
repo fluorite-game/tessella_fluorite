@@ -1967,12 +1967,14 @@ void FilamentRenderer::issue(const Batch& batch) {
         if (std::getenv("TSF_ORDER_LOG")) {
             std::fprintf(stderr,
                          "order %llu shader %d layer %u pass %u band %u geom %llu slot %u "
-                         "colour %d idx %u tx %.4f ty %.4f\n",
+                         "colour %d idx %u tx %.4f ty %.4f tile %u/%u/%u\n",
                          (unsigned long long)ordered_, (int)batch.builtinShader,
                          (unsigned)batch.layerIndex, (unsigned)batch.pass, (unsigned)band,
                          (unsigned long long)batch.geometries[i], (unsigned)batch.uboIndexes[i],
                          (int)mesh->second.colour, (unsigned)mesh->second.indexCount,
-                         (double)transform[3][0], (double)transform[3][1]);
+                         (double)transform[3][0], (double)transform[3][1],
+                         (unsigned)mesh->second.tile.z, (unsigned)mesh->second.tile.x,
+                         (unsigned)mesh->second.tile.y);
         }
         scene_->addEntity(entity);
         entities_.push_back(entity);
