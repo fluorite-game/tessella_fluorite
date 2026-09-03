@@ -1811,26 +1811,39 @@ void FilamentRenderer::issue(const Batch& batch) {
         // since Filament is a reversed-Z renderer -- puts the *far* quad in front instead.
         // The depth-only pass, drawn as mbgl draws it.
         //
-        // A translucent extrusion has to resolve which surface is nearest *before* any colour is
-        // blended, or a farther surface blends first and a nearer one blends over it and the
-        // pixel carries both. Depth alone cannot prevent that: the test rejects a farther
-        // fragment that arrives second, but nothing stops it arriving first. mbgl fills the depth
-        // buffer with the whole layer and only then draws colour, and this now does the same.
-        //
-        // What it is worth: on a stacked building an upper block's wall projects over the lower
-        // block's roof, and both were blended, which reads as a lighter rectangle let into the
-        // wall. That is the artifact this removes. Against `mbgl-render`, 94.9% of pixels exact
-        // where the single pass reached 92.0%.
+        // Depth alone cannot prevent a double blend: the test rejects a farther fragment that
+        // arrives second, but nothing stops it arriving first. So the buffer is filled with the
+        // whole layer before any colour is blended. On a stacked building an upper block's wall
+        // projects over the lower block's roof, and without this both are blended, which reads as
+        // a lighter rectangle let into the wall.
         //
         // The colour pass writes depth as well as reading it, where mbgl leaves it read-only.
-        // Read-only was measured and is worse here -- 93.0% and 8,267 gross pixels against 94.9%
-        // and 2,694 -- so it is not taken on faithfulness alone.
+        // Read-only measures worse here and is not taken on faithfulness alone.
         if (resolvesInDepth(batch.builtinShader)) {
             instance->setDepthCulling(true);
             instance->setDepthWrite(true);
         }
 
-        const bool clipped = mesh->second.clipped;
+        // The depth pass takes the colour pass's clip, though the producer does not mark it.
+        //
+        // mbgl sets `setEnableStencil(doDepthPass)` on the colour builder and leaves the depth
+        // builder at the default of false, so its two passes are clipped differently and it does
+        // not matter there: mbgl's stencil is what makes exactly one tile paint each pixel, and
+        // between them the tiles still cover everything.
+        //
+        // Here it matters, because the clip is honoured per drawable. Unclipped, the depth pass
+        // writes for the whole of a building including the part overhanging its tile -- MVT
+        // geometry runs past the edge by design -- and the colour pass, clipped, can never paint
+        // there. The neighbouring tile carries its own copy of that building and does paint it,
+        // but from its own origin, so its depth differs in the last bits and the test rejects it.
+        // What is left is depth with no colour: whole wall faces replaced by the background.
+        //
+        // That is what made the prepass look broken. Each pass drawn alone was correct and only
+        // the pair failed, which is exactly what a clip on one of them and not the other does.
+        // Clipped to match, the prepass is what it is meant to be: 97.8% of pixels exact against
+        // the oracle and MAE 0.13, where the colour pass alone reaches 92.0% and 0.41.
+        const bool clipped = mesh->second.clipped
+                             || (resolvesInDepth(batch.builtinShader) && !mesh->second.colour);
         const std::uint8_t reference = clipped ? referenceFor(mesh->second.tile) : 0;
         if (clipped && reference == 0) {
             unmasked_++;
@@ -1950,11 +1963,12 @@ void FilamentRenderer::issue(const Batch& batch) {
         if (std::getenv("TSF_ORDER_LOG")) {
             std::fprintf(stderr,
                          "order %llu shader %d layer %u pass %u band %u geom %llu slot %u "
-                         "colour %d idx %u\n",
+                         "colour %d idx %u tx %.4f ty %.4f\n",
                          (unsigned long long)ordered_, (int)batch.builtinShader,
                          (unsigned)batch.layerIndex, (unsigned)batch.pass, (unsigned)band,
                          (unsigned long long)batch.geometries[i], (unsigned)batch.uboIndexes[i],
-                         (int)mesh->second.colour, (unsigned)mesh->second.indexCount);
+                         (int)mesh->second.colour, (unsigned)mesh->second.indexCount,
+                         (double)transform[3][0], (double)transform[3][1]);
         }
         scene_->addEntity(entity);
         entities_.push_back(entity);
