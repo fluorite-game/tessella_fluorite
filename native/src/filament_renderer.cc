@@ -1809,37 +1809,22 @@ void FilamentRenderer::issue(const Batch& batch) {
         // combination putting the near one in front in both draw orders is this projection with
         // Filament's default comparison and the write on. Reversing z -- the obvious reading,
         // since Filament is a reversed-Z renderer -- puts the *far* quad in front instead.
-        // The depth-only pass, which this backend does not need and must not draw.
+        // The depth-only pass, drawn as mbgl draws it.
         //
-        // mbgl gives a translucent extrusion two passes: one that writes depth with colour off,
-        // then a colour pass that reads depth without writing. The second pass compares
-        // `LessEqual` against what the first wrote, so at each pixel only the frontmost surface
-        // passes and every pixel blends exactly once. The prepass is how mbgl gets that.
+        // A translucent extrusion has to resolve which surface is nearest *before* any colour is
+        // blended, or a farther surface blends first and a nearer one blends over it and the
+        // pixel carries both. Depth alone cannot prevent that: the test rejects a farther
+        // fragment that arrives second, but nothing stops it arriving first. mbgl fills the depth
+        // buffer with the whole layer and only then draws colour, and this now does the same.
         //
-        // Reproducing it here does not work, and the reason is structural rather than a detail
-        // to tune. mbgl's two passes draw the same drawables through the same shaders, so their
-        // depths are bit-identical and the comparison is exact. Ours are not: the roof and the
-        // walls are separate drawables on separate shaders -- the walls are expanded from
-        // outlines and reconstruct their position from instance attributes, the roof reads it
-        // from the vertex buffer -- so the depth a prepass writes for a surface is not the depth
-        // the colour pass computes for it. Swept over every comparison function, the read-only
-        // colour pass scored MAE 5.46 against the oracle where a writing one scores 2.05, and
-        // the disagreement shows as whole triangles of building where neither roof nor wall
-        // survived the test.
+        // What it is worth: on a stacked building an upper block's wall projects over the lower
+        // block's roof, and both were blended, which reads as a lighter rectangle let into the
+        // wall. That is the artifact this removes. Against `mbgl-render`, 94.9% of pixels exact
+        // where the single pass reached 92.0%.
         //
-        // A single colour pass that writes depth reaches the same picture: depth still resolves
-        // roof against wall and building against building, which is what the prepass was for.
-        // What it gives up is mbgl's blend-once guarantee, and measurement says that costs
-        // nothing here -- MAE 2.05 and 164 gross pixels, against 2.08 and 342 for the two-pass
-        // arrangement this replaced -- while halving the renderables, 36 against 54.
-        //
-        // Skipped at the consumer rather than dropped from the stream: the producer's order is
-        // measured against mbgl's own capture and has to keep saying what mbgl says. How a
-        // backend satisfies it is §11.7's business, and a colour pass that already writes depth
-        // has satisfied "fill the depth buffer" by construction.
-        if (resolvesInDepth(batch.builtinShader) && !mesh->second.colour) {
-            continue;
-        }
+        // The colour pass writes depth as well as reading it, where mbgl leaves it read-only.
+        // Read-only was measured and is worse here -- 93.0% and 8,267 gross pixels against 94.9%
+        // and 2,694 -- so it is not taken on faithfulness alone.
         if (resolvesInDepth(batch.builtinShader)) {
             instance->setDepthCulling(true);
             instance->setDepthWrite(true);

@@ -18,7 +18,16 @@ material {
     name : tessella_fill_extrusion_instanced,
     shadingModel : unlit,
     blending : transparent,
-    culling : none,
+    // Back faces, as mbgl culls them -- `setCullFaceMode(CullFaceMode::backCCW())` on all four
+    // of its fill-extrusion builders. `front` rather than `back` because Filament's front-facing
+    // winding is the opposite of mbgl's here: culling `front` on the roof is a no-op, which is
+    // how the convention was established, and culling `back` removes every roof triangle.
+    //
+    // What it buys is not only the rasterization it skips. A building's far walls were being
+    // drawn, and a translucent extrusion blended them through its near ones. It is only correct
+    // because the wall template winds consistently now -- see `WALL_INDICES` on the producer
+    // side; against the old winding this took one triangle of every quad and left the other.
+    culling : front,
     parameters : [
         { type : mat4,   name : matrix },
         { type : float4, name : color },
@@ -57,8 +66,11 @@ vertex {
         // then, and the paint block is the right source. Tested with `!=` on itself because that
         // is the one comparison a NaN answers true to.
         vec2 extent = getCustom1().xy;
-        float base = extent.x != extent.x ? materialParams.base : extent.x;
-        float height = extent.y != extent.y ? materialParams.height : extent.y;
+        // Clamped at zero, as mbgl clamps both -- `base = max(0.0, base)` -- and as the roof
+        // shader already did. A wall whose foot went below the ground did not agree with the roof
+        // that shares its top edge.
+        float base = max(extent.x != extent.x ? materialParams.base : extent.x, 0.0);
+        float height = max(extent.y != extent.y ? materialParams.height : extent.y, 0.0);
 
         float z = t > 0.0 ? height : base;
 

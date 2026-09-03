@@ -27,7 +27,16 @@ material {
     name : tessella_fill_extrusion,
     shadingModel : unlit,
     blending : transparent,
-    culling : none,
+    // Back faces, as mbgl culls them -- `setCullFaceMode(CullFaceMode::backCCW())` on all four
+    // of its fill-extrusion builders. `front` rather than `back` because Filament's front-facing
+    // winding is the opposite of mbgl's here: culling `front` on the roof is a no-op, which is
+    // how the convention was established, and culling `back` removes every roof triangle.
+    //
+    // What it buys is not only the rasterization it skips. A building's far walls were being
+    // drawn, and a translucent extrusion blended them through its near ones. It is only correct
+    // because the wall template winds consistently now -- see `WALL_INDICES` on the producer
+    // side; against the old winding this took one triangle of every quad and left the other.
+    culling : front,
     parameters : [
         { type : mat4,   name : matrix },
         { type : float4, name : color },
