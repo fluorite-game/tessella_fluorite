@@ -191,6 +191,12 @@ private:
         std::uint64_t texture = 0;
         /// The second picture, for a raster tile fading from its parent.
         std::uint64_t texture1 = 0;
+        /// Whether this drawable writes colour.
+        ///
+        /// `DrawFlags::ENABLE_COLOR`, cleared for an extrusion's depth-only pass. Ignoring it drew
+        /// that pass *as* the colour pass, which is what a building looked like before: a flat
+        /// footprint in the roof's shade, with no walls and no depth between them.
+        bool colour = true;
         /// Whether the producer asked for this drawable to be clipped to its tile.
         ///
         /// `DrawFlags::ENABLE_STENCIL`, carried on the geometry because that is where it

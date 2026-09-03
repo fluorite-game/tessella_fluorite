@@ -120,6 +120,24 @@ constexpr std::uint32_t kSymbolTilePropsSlot = 3;
 /// mbgl's own.
 constexpr std::uint32_t kFillPatternTilePropsSlot = 4;
 
+/// Whether a family resolves against the depth buffer.
+///
+/// The extrusions, and only them. A building is a volume and has to know which of its own faces is
+/// in front; every other family lies flat on the map and painter order settles it.
+///
+/// Not read from `ENABLE_DEPTH`, which a background carries too. A background is a viewport quad
+/// at a clip z of zero, and zero is the *near* plane in the producer's convention, so a background
+/// taking part in depth stands in front of every building in the frame -- mbgl draws it
+/// `DepthMaskType::ReadOnly` for exactly that reason, a distinction the single wire bit cannot
+/// carry. `native/test/depth_probe.cc` shows it: a background quad at z zero that writes depth
+/// hides both test quads, and the same quad with the write off does not.
+bool resolvesInDepth(std::int32_t family) {
+    return family == TSL_BUILTIN_FILL_EXTRUSION_SHADER
+           || family == TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER
+           || family == TSL_BUILTIN_FILL_EXTRUSION_PATTERN_SHADER
+           || family == TSL_BUILTIN_FILL_EXTRUSION_PATTERN_INSTANCED_SHADER;
+}
+
 /// Whether a family carries its own matrix rather than taking the renderable's transform.
 bool patternPlaces(std::int32_t family) {
     return family == TSL_BUILTIN_FILL_PATTERN_SHADER
@@ -792,6 +810,7 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
                            add.tileID ? add.tileID->overscaled_z : std::uint8_t{0},
                            add.tileID ? *add.tileID : TileID{}};
     meshes_[add.id].clipped = add.enableStencil;
+    meshes_[add.id].colour = add.enableColor;
     walls_ += indexCount / 3;
     return true;
 }
@@ -935,6 +954,7 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
                            add.tileID ? add.tileID->overscaled_z : std::uint8_t{0},
                            add.tileID ? *add.tileID : TileID{}};
     meshes_[add.id].clipped = add.enableStencil;
+    meshes_[add.id].colour = add.enableColor;
     return true;
 }
 
@@ -1064,6 +1084,7 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
                            add.tileID ? *add.tileID : TileID{},
                            textureFor(add)};
     meshes_[add.id].clipped = add.enableStencil;
+    meshes_[add.id].colour = add.enableColor;
     return true;
 }
 
@@ -1172,6 +1193,7 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
                            textureFor(add),
                            textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE)};
     meshes_[add.id].clipped = add.enableStencil;
+    meshes_[add.id].colour = add.enableColor;
 }
 
 void FilamentRenderer::onRetire(std::uint64_t id) {
@@ -1713,6 +1735,23 @@ void FilamentRenderer::issue(const Batch& batch) {
         // flag is how it is stated: a fill and a line carry it, a symbol and a circle do not,
         // because those are drawn from an anchor whose geometry legitimately overhangs the tile
         // that owns it. Clipping them anyway cut every label at every tile edge it crossed.
+        // What the producer said this pass draws. An extrusion's depth pass clears `ENABLE_COLOR`
+        // and exists only to fill the depth buffer; drawing it as though it wrote colour is a
+        // building painted twice, once flat.
+        instance->setColorWrite(mesh->second.colour);
+
+        // And the depth buffer, which is what makes a building a volume rather than an outline.
+        //
+        // Read and written by both passes, where mbgl leaves its colour pass read-only.
+        // `depth_probe` is why: two quads at the depths a z15 frame really produces, and the only
+        // combination putting the near one in front in both draw orders is this projection with
+        // Filament's default comparison and the write on. Reversing z -- the obvious reading,
+        // since Filament is a reversed-Z renderer -- puts the *far* quad in front instead.
+        if (resolvesInDepth(batch.builtinShader)) {
+            instance->setDepthCulling(true);
+            instance->setDepthWrite(true);
+        }
+
         const bool clipped = mesh->second.clipped;
         const std::uint8_t reference = clipped ? referenceFor(mesh->second.tile) : 0;
         if (clipped && reference == 0) {

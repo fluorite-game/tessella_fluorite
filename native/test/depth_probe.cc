@@ -78,6 +78,20 @@ std::string slurp(const char* path) {
 
 } // namespace
 
+namespace {
+
+/// What a frame may carry besides the two quads, and which the first sweep left out.
+struct Scene {
+    const char* name;
+    bool background;   //!< A full-screen quad drawn first, as a background layer is.
+    bool backgroundWritesDepth;
+    float backgroundZ; //!< Its clip depth. A background layer's quad need not sit at the ground.
+    bool stencil;      //!< The stencil buffer the real view enables.
+    bool blendOrder;   //!< The global blend order the real consumer sets.
+};
+
+} // namespace
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::fprintf(stderr, "usage: %s <depth_probe.filamat>\n", argv[0]);
@@ -90,7 +104,11 @@ int main(int argc, char** argv) {
     }
 
     auto* engine = filament::Engine::Builder().backend(filament::Engine::Backend::VULKAN).build();
-    auto* swapChain = engine->createSwapChain(W, H, filament::SwapChain::CONFIG_READABLE);
+    // Readable, and with a stencil buffer, because the real view enables one and Filament
+    // refuses to render a stencil-enabled view against a swap chain without it.
+    auto* swapChain = engine->createSwapChain(
+        W, H,
+        filament::SwapChain::CONFIG_READABLE | filament::SwapChain::CONFIG_HAS_STENCIL_BUFFER);
     auto* renderer = engine->createRenderer();
     auto* view = engine->createView();
     auto cameraEntity = utils::EntityManager::get().create();
@@ -220,6 +238,115 @@ int main(int argc, char** argv) {
                         good ? "<== near wins both" : "");
         }
       }
+    }
+
+    // Phase two: hold the settings phase one settled on, and add what a real frame carries.
+    //
+    // The same settings draw nothing on a real frame, so the difference is the scene rather than
+    // the depth setup. These are the things this probe left out.
+    const Scene scenes[] = {
+        {"bare            ", false, false, FAR_Z, false, false},
+        {"+background     ", true, false, FAR_Z, false, false},
+        {"+bg writes depth", true, true, FAR_Z, false, false},
+        // A background quad at the *near* end of clip space rather than the ground's depth. This
+        // is the suspect: a viewport-space quad is at z 0, and 0 is the near plane in the
+        // producer's convention -- so a background that writes depth there is in front of every
+        // building in the frame.
+        {"+bg at z=0      ", true, true, 0.0f, false, false},
+        {"+bg z=0 no write", true, false, 0.0f, false, false},
+        {"+stencil        ", false, false, FAR_Z, true, false},
+        {"+blend order    ", false, false, FAR_Z, false, true},
+        {"all             ", true, true, FAR_Z, true, true},
+    };
+    std::printf("\n%-17s %-10s %-10s %s\n", "scene", "near-first", "far-first", "verdict");
+    for (const Scene& scene : scenes) {
+        view->setStencilBufferEnabled(scene.stencil);
+        std::string seen[2];
+        for (int order = 0; order < 2; order++) {
+            auto* sceneObj = engine->createScene();
+            view->setScene(sceneObj);
+            camera->setCustomProjection(passthrough, -1.0, 1.0);
+            camera->setModelMatrix(filament::math::mat4f());
+
+            std::vector<utils::Entity> entities;
+            std::vector<filament::MaterialInstance*> instances;
+            std::uint16_t blend = 0;
+            const auto add = [&](float z, filament::math::float4 colour, bool writes) {
+                auto* instance = material->createInstance();
+                instance->setParameter("color", colour);
+                instance->setParameter("clipZ", z);
+                instance->setParameter("clipW", 1050.0f);
+                instance->setDepthCulling(true);
+                instance->setDepthWrite(writes);
+                utils::Entity entity = utils::EntityManager::get().create();
+                filament::RenderableManager::Builder builder(1);
+                builder.boundingBox({{-1, -1, -1}, {1, 1, 1}})
+                    .culling(false)
+                    .priority(5)
+                    .material(0, instance)
+                    .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES, vertices,
+                              indexBuffer, 0, 6);
+                if (scene.blendOrder) {
+                    builder.blendOrder(0, blend).globalBlendOrderEnabled(0, true);
+                }
+                blend++;
+                builder.build(*engine, entity);
+                sceneObj->addEntity(entity);
+                entities.push_back(entity);
+                instances.push_back(instance);
+            };
+
+            // A background sits at the ground's depth, which is where a background layer's quad is.
+            if (scene.background) {
+                add(scene.backgroundZ, {0.0f, 1.0f, 0.0f, 1.0f}, scene.backgroundWritesDepth);
+            }
+            if (order == 0) {
+                add(NEAR_Z, {1.0f, 0.0f, 0.0f, 1.0f}, true);
+                add(FAR_Z, {0.0f, 0.0f, 1.0f, 1.0f}, true);
+            } else {
+                add(FAR_Z, {0.0f, 0.0f, 1.0f, 1.0f}, true);
+                add(NEAR_Z, {1.0f, 0.0f, 0.0f, 1.0f}, true);
+            }
+
+            std::vector<std::uint8_t> pixels(W * H * 4);
+            filament::backend::PixelBufferDescriptor pb(pixels.data(), pixels.size(),
+                                                        filament::backend::PixelDataFormat::RGBA,
+                                                        filament::backend::PixelDataType::UBYTE);
+            for (int warm = 0; warm < 2; warm++) {
+                if (renderer->beginFrame(swapChain)) {
+                    renderer->render(view);
+                    renderer->endFrame();
+                }
+                engine->flushAndWait();
+            }
+            if (renderer->beginFrame(swapChain)) {
+                renderer->render(view);
+                renderer->readPixels(0, 0, W, H, std::move(pb));
+                renderer->endFrame();
+            }
+            engine->flushAndWait();
+
+            const std::size_t centre = ((H / 2) * W + W / 2) * 4;
+            const std::uint8_t r = pixels[centre], g = pixels[centre + 1], b = pixels[centre + 2];
+            seen[order] = r > 128 && b < 128        ? "near(red)"
+                          : b > 128 && r < 128      ? "far(blue)"
+                          : g > 128                 ? "bg(green)"
+                          : (r < 40 && g < 40 && b < 40) ? "blank"
+                                                         : "other";
+            for (auto entity : entities) {
+                sceneObj->remove(entity);
+                engine->getRenderableManager().destroy(entity);
+                utils::EntityManager::get().destroy(entity);
+            }
+            engine->destroy(sceneObj);
+            for (auto* held : instances) {
+                engine->destroy(held);
+            }
+            engine->flushAndWait();
+        }
+        const bool good = seen[0] == "near(red)" && seen[1] == "near(red)";
+        std::printf("%-17s %-10s %-10s %s\n", scene.name, seen[0].c_str(), seen[1].c_str(),
+                    good ? "near wins both" : "<== CHANGED");
     }
 
     engine->destroy(indexBuffer);
