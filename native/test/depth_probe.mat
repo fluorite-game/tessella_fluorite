@@ -1,0 +1,42 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The smallest thing that can answer "which quad wins": a flat colour, and a position taken
+// straight to clip space the way every tessella material takes it.
+//
+// Deliberately not one of the shipped materials. Those carry the arithmetic of a real layer, and
+// a probe that shares it cannot tell a depth problem from a projection one.
+
+material {
+    name : tessella_depth_probe,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        { type : float4, name : color },
+        { type : float,  name : clipZ },
+        // The perspective divisor a real tile matrix produces. The first version of this probe
+        // used one, and answered a question the renderer does not ask: every tessella material
+        // reaches clip space through a projection whose w is the distance to the camera, around a
+        // thousand at z15, and whether the depth test survives that is the whole question.
+        { type : float,  name : clipW }
+    ],
+    requires : [ position ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        // x and y from the buffer, z from the parameter: the whole point is to place two quads at
+        // known depths and see which survives.
+        // Pre-multiplied by w, so the perspective divide returns the intended x, y and z. This is
+        // the shape a tile matrix hands over.
+        float w = materialParams.clipW;
+        material.worldPosition = vec4(getPosition().xy * w, materialParams.clipZ * w, w);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = materialParams.color;
+    }
+}
