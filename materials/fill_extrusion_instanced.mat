@@ -30,7 +30,7 @@ material {
         { type : float,  name : lightIntensity },
         { type : float,  name : verticalGradient }
     ],
-    requires : [ position, custom0 ],
+    requires : [ position, custom0, custom1 ],
     variables : [ shade ]
 }
 
@@ -44,7 +44,23 @@ vertex {
         // The edge's facing, in the ground plane, so the z component is zero.
         vec3 normal = vec3(getCustom0().xy, 0.0);
 
-        float z = t > 0.0 ? materialParams.height : materialParams.base;
+        // The building's own base and height, per instance, replicated onto this corner by the
+        // consumer -- Filament has no per-instance attribute, which is the same reason the
+        // instances are expanded at all.
+        //
+        // These are data-driven in every real style, and the walls read the paint block instead
+        // until now: `fill-extrusion-height` of `["get", "height"]` leaves that block holding its
+        // fallback of zero, so every wall was a quad of no height. Built, uploaded, and
+        // rasterising nothing -- the roofs drew, so the buildings looked like flat footprints.
+        //
+        // NaN marks the pair absent, which is the constant-paint case: there is no binder buffer
+        // then, and the paint block is the right source. Tested with `!=` on itself because that
+        // is the one comparison a NaN answers true to.
+        vec2 extent = getCustom1().xy;
+        float base = extent.x != extent.x ? materialParams.base : extent.x;
+        float height = extent.y != extent.y ? materialParams.height : extent.y;
+
+        float z = t > 0.0 ? height : base;
 
         vec4 color = materialParams.color;
         float luminance = color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722;
@@ -60,8 +76,9 @@ vertex {
         // does not lose the bottom of every wall to black.
         if (normal.z == 0.0) {
             float fMin = mix(0.7, 0.98, 1.0 - materialParams.lightIntensity);
-            float factor = clamp((t + materialParams.base)
-                                 * pow(materialParams.height / 150.0, 0.5), fMin, 1.0);
+            // The same base and height the vertex was raised to, not the paint block's: the
+            // gradient down a wall is a function of how tall *this* building is.
+            float factor = clamp((t + base) * pow(height / 150.0, 0.5), fMin, 1.0);
             directional *= (1.0 - materialParams.verticalGradient)
                          + (materialParams.verticalGradient * factor);
         }

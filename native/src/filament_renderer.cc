@@ -22,6 +22,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 
 namespace tsf {
 namespace {
@@ -608,11 +609,21 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
     // is paid per tile rather than per frame.
     const Attribute* positions = nullptr;
     const Attribute* decimals = nullptr;
+    // The building's own base and height, per instance. Data-driven in every real style, so a
+    // wall that took them from the paint block instead got the fallback -- zero -- and stood no
+    // height at all. Absent for a constant-paint layer, where the paint block is the right
+    // source and the fallback below is what reads it.
+    const Attribute* base = nullptr;
+    const Attribute* height = nullptr;
     for (const Attribute& attribute : add.instanceAttrs) {
         if (attribute.desc.attr_id == TSL_UBO_ID_FILL_EXTRUSION_OUTLINE_POS_ATTRIBUTE) {
             positions = &attribute;
         } else if (attribute.desc.attr_id == TSL_UBO_ID_FILL_EXTRUSION_DECIMALS_ED_ATTRIBUTE) {
             decimals = &attribute;
+        } else if (attribute.desc.attr_id == TSL_UBO_ID_FILL_EXTRUSION_BASE_VERTEX_ATTRIBUTE) {
+            base = &attribute;
+        } else if (attribute.desc.attr_id == TSL_UBO_ID_FILL_EXTRUSION_HEIGHT_VERTEX_ATTRIBUTE) {
+            height = &attribute;
         }
     }
     if (positions == nullptr || decimals == nullptr || add.attrs.empty()) {
@@ -637,20 +648,34 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
     // Position as x, y and the base/roof selector; the wall's facing beside it.
     std::vector<float> vertices;
     std::vector<float> normals;
+    // Base and height, replicated onto each of the quad's four corners. A vertex attribute is
+    // the only per-instance channel Filament has here, which is the same reason the instances
+    // are expanded at all.
+    std::vector<float> extents;
     std::vector<std::uint16_t> indexes;
     vertices.reserve(instanceCount * templateCount * 3);
     normals.reserve(instanceCount * templateCount * 2);
+    extents.reserve(instanceCount * templateCount * 2);
     indexes.reserve(instanceCount * templateIndexCount);
 
     for (std::size_t i = 0; i + 1 < instanceCount; i++) {
-        const Outline p1 = unpackOutline(positions->data.data + i * positions->desc.stride,
-                                         decimals->data.data + i * decimals->desc.stride);
+        // Each attribute's own offset, not just its stride. The two share one buffer -- position
+        // at 0, the packed decimals-and-flag at 4 -- so dropping the offset read the position's
+        // bytes as the flag, and the closing point of a ring was marked by the parity of its x.
+        // Half the rings therefore raised a wall from their last point to the *next ring's*
+        // first, which is a quad six hundred tile units long. Invisible while every wall stood
+        // zero metres tall, and the moment the walls got their height it was a cross-hatch of
+        // lines over the whole tile.
+        const Outline p1 = unpackOutline(
+            positions->data.data + i * positions->desc.stride + positions->desc.offset,
+            decimals->data.data + i * decimals->desc.stride + decimals->desc.offset);
         // A closing point raises no wall, which is what the flag is for.
         if (p1.discarded) {
             continue;
         }
-        const Outline p2 = unpackOutline(positions->data.data + (i + 1) * positions->desc.stride,
-                                         decimals->data.data + (i + 1) * decimals->desc.stride);
+        const Outline p2 = unpackOutline(
+            positions->data.data + (i + 1) * positions->desc.stride + positions->desc.offset,
+            decimals->data.data + (i + 1) * decimals->desc.stride + decimals->desc.offset);
 
         const float dx = p2.x - p1.x;
         const float dy = p2.y - p1.y;
@@ -662,7 +687,30 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
         const float nx = -dy / length;
         const float ny = dx / length;
 
-        const auto base = static_cast<std::uint16_t>(vertices.size() / 3);
+        // This instance's own base and height. The binder writes them as floats at its own
+        // stride, one entry per outline point, which is the same indexing the position above
+        // uses. Falls back to the paint block's values, which is what a constant-paint layer
+        // wants and what the material reads when the pair is absent.
+        const auto readFloat = [&](const Attribute* attribute, std::size_t index) {
+            float value = 0.0f;
+            // Absent, or short of this instance. The binder writes one entry per roof vertex and
+            // the outline is walked per instance; a buffer that does not reach is answered NaN
+            // rather than read past, which the material takes as "use the paint block". Reading
+            // past it flung whole walls across the tile -- the picture is long thin quads
+            // radiating from a few points, which is what a garbage height looks like.
+            if (attribute == nullptr || index >= attribute->count()) {
+                return std::numeric_limits<float>::quiet_NaN();
+            }
+            std::memcpy(&value,
+                        attribute->data.data + index * attribute->desc.stride
+                            + attribute->desc.offset,
+                        sizeof value);
+            return value;
+        };
+        const float instanceBase = readFloat(base, i);
+        const float instanceHeight = readFloat(height, i);
+
+        const auto corner = static_cast<std::uint16_t>(vertices.size() / 3);
         if (vertices.size() / 3 + templateCount > std::numeric_limits<std::uint16_t>::max()) {
             break;
         }
@@ -676,9 +724,11 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
             vertices.push_back(static_cast<float>(sy));
             normals.push_back(nx);
             normals.push_back(ny);
+            extents.push_back(instanceBase);
+            extents.push_back(instanceHeight);
         }
         for (std::size_t k = 0; k < templateIndexCount; k++) {
-            indexes.push_back(static_cast<std::uint16_t>(base + templateIndexes[k]));
+            indexes.push_back(static_cast<std::uint16_t>(corner + templateIndexes[k]));
         }
     }
     if (indexes.empty()) {
@@ -687,10 +737,12 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
 
     auto* built = filament::VertexBuffer::Builder()
                       .vertexCount(static_cast<std::uint32_t>(vertices.size() / 3))
-                      .bufferCount(2)
+                      .bufferCount(3)
                       .attribute(filament::VertexAttribute::POSITION, 0,
                                  filament::VertexBuffer::AttributeType::FLOAT3, 0, 12)
                       .attribute(filament::VertexAttribute::CUSTOM0, 1,
+                                 filament::VertexBuffer::AttributeType::FLOAT2, 0, 8)
+                      .attribute(filament::VertexAttribute::CUSTOM1, 2,
                                  filament::VertexBuffer::AttributeType::FLOAT2, 0, 8)
                       .build(*engine_);
     if (built == nullptr) {
@@ -710,6 +762,7 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
     };
     upload(0, vertices);
     upload(1, normals);
+    upload(2, extents);
 
     const auto indexCount = static_cast<std::uint32_t>(indexes.size());
     auto* built_indexes = filament::IndexBuffer::Builder()
