@@ -1824,26 +1824,30 @@ void FilamentRenderer::issue(const Batch& batch) {
             instance->setDepthWrite(true);
         }
 
-        // The depth pass takes the colour pass's clip, though the producer does not mark it.
+        // An extrusion is not clipped to its tile, in either pass.
         //
-        // mbgl sets `setEnableStencil(doDepthPass)` on the colour builder and leaves the depth
-        // builder at the default of false, so its two passes are clipped differently and it does
-        // not matter there: mbgl's stencil is what makes exactly one tile paint each pixel, and
-        // between them the tiles still cover everything.
+        // The producer marks the colour pass `ENABLE_STENCIL` and the depth pass not, which is
+        // what mbgl does -- `setEnableStencil(doDepthPass)` on the colour builder, the depth
+        // builder left at the default of false. There the asymmetry is harmless: mbgl's stencil
+        // is what makes exactly one tile paint each pixel, and between them the tiles cover
+        // everything.
         //
-        // Here it matters, because the clip is honoured per drawable. Unclipped, the depth pass
-        // writes for the whole of a building including the part overhanging its tile -- MVT
-        // geometry runs past the edge by design -- and the colour pass, clipped, can never paint
-        // there. The neighbouring tile carries its own copy of that building and does paint it,
-        // but from its own origin, so its depth differs in the last bits and the test rejects it.
-        // What is left is depth with no colour: whole wall faces replaced by the background.
+        // Here it was the anomaly. A building's geometry runs past its tile's edge by design, and
+        // clipping the colour pass to the tile square slices the walls off there. Nothing paints
+        // what is cut: the neighbouring tile does not carry its own copy of that building to
+        // paint it with. So the clip removes wall faces and puts the background in their place.
         //
-        // That is what made the prepass look broken. Each pass drawn alone was correct and only
-        // the pair failed, which is exactly what a clip on one of them and not the other does.
-        // Clipped to match, the prepass is what it is meant to be: 97.8% of pixels exact against
-        // the oracle and MAE 0.13, where the colour pass alone reaches 92.0% and 0.41.
-        const bool clipped = mesh->second.clipped
-                             || (resolvesInDepth(batch.builtinShader) && !mesh->second.colour);
+        // Measured against the oracle, clipping is what the visible error *is*. Unclipped the
+        // frame has 8 gross pixels; clipped, 161 -- and in the worst region, 1 against 64. The
+        // cost of dropping it is that two tiles' copies of an overlapping building both blend,
+        // which is 2.1% of pixels differing by a shade nobody sees, against wall faces that are
+        // simply missing.
+        //
+        // Both passes, not just one. A clip on the depth pass and not the colour pass is worse
+        // than either: the depth pass writes for the whole building and the colour pass cannot
+        // paint the part outside the tile, which leaves depth with no colour -- a hole rather
+        // than a slice. That asymmetry is why the prepass looked broken when it was first drawn.
+        const bool clipped = mesh->second.clipped && !resolvesInDepth(batch.builtinShader);
         const std::uint8_t reference = clipped ? referenceFor(mesh->second.tile) : 0;
         if (clipped && reference == 0) {
             unmasked_++;
