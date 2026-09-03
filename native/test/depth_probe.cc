@@ -349,6 +349,79 @@ int main(int argc, char** argv) {
                     good ? "near wins both" : "<== CHANGED");
     }
 
+    // Phase three: one surface drawn as mbgl draws a translucent extrusion -- a depth-only pass
+    // that writes no colour, then a colour pass that reads the depth without writing it.
+    //
+    // Ours loses most of its walls when the colour pass is made read-only, and the question this
+    // answers is whether that is Filament's behaviour or our two passes disagreeing about depth.
+    // `offset` is the depth difference between the two passes: zero is the same surface twice,
+    // and anything else stands in for a per-sub-layer depth nudge.
+    std::printf("\n%-22s %-12s %s\n", "two-pass", "centre", "verdict");
+    for (float offset : {0.0f, 1e-6f, 1e-5f, 1e-4f}) {
+        auto* sceneObj = engine->createScene();
+        view->setScene(sceneObj);
+        view->setStencilBufferEnabled(false);
+        camera->setCustomProjection(passthrough, -1.0, 1.0);
+        camera->setModelMatrix(filament::math::mat4f());
+
+        std::vector<utils::Entity> entities;
+        std::vector<filament::MaterialInstance*> instances;
+        const auto pass = [&](float z, bool writesColour) {
+            auto* instance = material->createInstance();
+            instance->setParameter("color", filament::math::float4{1.0f, 0.0f, 0.0f, 1.0f});
+            instance->setParameter("clipZ", z);
+            instance->setParameter("clipW", 1050.0f);
+            instance->setDepthCulling(true);
+            instance->setDepthWrite(!writesColour);
+            instance->setColorWrite(writesColour);
+            utils::Entity entity = utils::EntityManager::get().create();
+            filament::RenderableManager::Builder(1)
+                .boundingBox({{-1, -1, -1}, {1, 1, 1}})
+                .culling(false)
+                .material(0, instance)
+                .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES, vertices,
+                          indexBuffer, 0, 6)
+                .build(*engine, entity);
+            sceneObj->addEntity(entity);
+            entities.push_back(entity);
+            instances.push_back(instance);
+        };
+        pass(NEAR_Z, false);            // depth only
+        pass(NEAR_Z + offset, true);    // colour, reading
+
+        std::vector<std::uint8_t> pixels(W * H * 4);
+        filament::backend::PixelBufferDescriptor pb(pixels.data(), pixels.size(),
+                                                    filament::backend::PixelDataFormat::RGBA,
+                                                    filament::backend::PixelDataType::UBYTE);
+        for (int warm = 0; warm < 2; warm++) {
+            if (renderer->beginFrame(swapChain)) {
+                renderer->render(view);
+                renderer->endFrame();
+            }
+            engine->flushAndWait();
+        }
+        if (renderer->beginFrame(swapChain)) {
+            renderer->render(view);
+            renderer->readPixels(0, 0, W, H, std::move(pb));
+            renderer->endFrame();
+        }
+        engine->flushAndWait();
+        const std::size_t centre = ((H / 2) * W + W / 2) * 4;
+        const bool drew = pixels[centre] > 128;
+        std::printf("depth+read, offset %-7.0e %-12s %s\n", offset,
+                    drew ? "red" : "blank", drew ? "colour survives" : "<== colour lost");
+        for (auto entity : entities) {
+            sceneObj->remove(entity);
+            engine->getRenderableManager().destroy(entity);
+            utils::EntityManager::get().destroy(entity);
+        }
+        engine->destroy(sceneObj);
+        for (auto* held : instances) {
+            engine->destroy(held);
+        }
+        engine->flushAndWait();
+    }
+
     engine->destroy(indexBuffer);
     engine->destroy(vertices);
     engine->destroy(material);
