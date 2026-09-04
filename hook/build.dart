@@ -108,6 +108,23 @@ void main(List<String> args) async {
       }
     }
     output.dependencies.add(Uri.file('${packageRoot}CMakeLists.txt'));
+
+    // And when tessella changes, which is most of what this library is. Without
+    // these the hook is cached against its own C++ alone, so a producer fix
+    // rebuilds nothing and the bundle silently ships the previous one -- which
+    // is a very quiet way to test the wrong binary.
+    final crates = Directory('$tessellaDir/crates');
+    if (crates.existsSync()) {
+      for (final entity in crates.listSync(recursive: true)) {
+        if (entity is File && entity.path.endsWith('.rs')) {
+          output.dependencies.add(entity.uri);
+        }
+      }
+    }
+    for (final manifest in ['Cargo.toml', 'Cargo.lock']) {
+      final handle = File('$tessellaDir/$manifest');
+      if (handle.existsSync()) output.dependencies.add(handle.uri);
+    }
   });
 }
 
