@@ -384,6 +384,16 @@ int main(int argc, char** argv) {
                 (unsigned long long)motionRecords, frames + warmup,
                 static_cast<double>(motionRecords) / (frames + warmup));
     recordPerPane = false;
+    for (std::size_t i = 0; i < panes.size(); i++) {
+        const auto [live, slabs] = panes[i].map->slabOccupancy();
+        std::printf("  %-10s last result %d  region %.1f MiB, live %.1f MiB in %llu slabs\n",
+                    kCities[i].name, static_cast<int>(panes[i].map->lastResult()),
+                    static_cast<double>(panes[i].map->slabUsed()) / (1024.0 * 1024.0),
+                    static_cast<double>(live) / (1024.0 * 1024.0), (unsigned long long)slabs);
+        std::printf("bench motion.%s.slab_mib=%.2f motion.%s.result=%d\n", kCities[i].name,
+                    static_cast<double>(panes[i].map->slabUsed()) / (1024.0 * 1024.0),
+                    kCities[i].name, static_cast<int>(panes[i].map->lastResult()));
+    }
     report("motion", "prod", summarise(produce));
     report("motion", "drain", summarise(drain));
     for (std::size_t i = 0; i < panes.size(); i++) {

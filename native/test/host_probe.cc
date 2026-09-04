@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
     }
     std::fclose(file);
 
-    tessella_config config;
+    tessella_config config{};
     config.style_json = style.c_str();
     config.width = 1024;
     config.height = 768;
@@ -121,6 +121,8 @@ int main(int argc, char** argv) {
     // over two dozen tiles, and four megabytes does not hold it -- see TSF_PROBE_RING_MB.
     const int ringMb = std::getenv("TSF_PROBE_RING_MB") ? std::atoi(std::getenv("TSF_PROBE_RING_MB")) : 4;
     config.ring_capacity = (size_t)ringMb << 20;
+    // Zero takes the producer's default.
+    config.slab_capacity = 0;
 
     std::string error;
     std::unique_ptr<tsf::Host> host = tsf::Host::create(config, lat, lon, zoom, &error);

@@ -2,6 +2,8 @@
 
 #include <tsf/host.h>
 
+#include <cstring>
+#include <utility>
 #include <ctime>
 
 #include <tessella_capture_abi.h>
@@ -105,8 +107,11 @@ std::uint64_t Host::tick(Renderer& renderer) {
     produceNs_ = now_ns() - producing;
     drainNs_ = 0;
     // TESSELLA_RING_FULL means nothing was emitted and nothing retired, so draining is still the
-    // right thing to do -- it is what makes room. Any other failure leaves the ring untouched.
-    if (last_ != TESSELLA_OK && last_ != TESSELLA_RING_FULL) {
+    // right thing to do -- it is what makes room. TESSELLA_REGION_FULL likewise emitted nothing,
+    // but the frame that reported it ran the arena's compaction, so the retry has room this
+    // attempt did not; draining is harmless and the cursor is what the caller retires against.
+    // Any other failure leaves the ring untouched.
+    if (last_ != TESSELLA_OK && last_ != TESSELLA_RING_FULL && last_ != TESSELLA_REGION_FULL) {
         return reader_ ? reader_->cursor() : 0;
     }
 
@@ -130,6 +135,43 @@ std::uint64_t Host::tick(Renderer& renderer) {
     records_ += reader_->drain(sink);
     drainNs_ = now_ns() - draining;
     return reader_->cursor();
+}
+
+std::uint64_t Host::slabUsed() const {
+    tessella_map_regions regions{};
+    if (tessella_regions(map_, &regions) != TESSELLA_OK || regions.slabs == nullptr ||
+        regions.slabs_len < sizeof(tsl_slab_region)) {
+        return 0;
+    }
+    tsl_slab_region header{};
+    std::memcpy(&header, regions.slabs, sizeof header);
+    return header.total_len;
+}
+
+std::pair<std::uint64_t, std::uint64_t> Host::slabOccupancy() const {
+    tessella_map_regions regions{};
+    if (tessella_regions(map_, &regions) != TESSELLA_OK || regions.slabs == nullptr ||
+        regions.slabs_len < sizeof(tsl_slab_region)) {
+        return {0, 0};
+    }
+    tsl_slab_region header{};
+    std::memcpy(&header, regions.slabs, sizeof header);
+    const std::size_t table = sizeof(tsl_slab_region) + sizeof(tsl_slab_entry) * header.count;
+    if (regions.slabs_len < table) {
+        return {header.total_len, 0};
+    }
+    std::uint64_t live = 0;
+    std::uint64_t slabs = 0;
+    for (std::uint32_t i = 0; i < header.count; i++) {
+        tsl_slab_entry entry{};
+        std::memcpy(&entry, regions.slabs + sizeof(tsl_slab_region) + sizeof(tsl_slab_entry) * i,
+                    sizeof entry);
+        if (entry.length != 0) {
+            live += entry.length;
+            slabs++;
+        }
+    }
+    return {live, slabs};
 }
 
 void Host::retire(std::uint64_t upTo) {

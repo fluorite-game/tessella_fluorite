@@ -35,6 +35,9 @@ std::unique_ptr<MapView> MapView::create(filament::Engine* engine,
   // records has never come close; the headroom is for a pan that outruns the
   // consumer, where a full ring drops a frame rather than corrupting one.
   config.ring_capacity = static_cast<std::size_t>(256) << 20;
+  // Zero takes the producer's default. The region holds the geometry of everything on screen
+  // plus what compaction has not reclaimed, and a view is one of several sharing a process.
+  config.slab_capacity = 0;
 
   std::unique_ptr<Host> host = Host::create(config, latitude, longitude, zoom, error);
   if (!host) {
@@ -66,6 +69,14 @@ void MapView::tick() {
 }
 
 std::uint64_t MapView::pending() const { return host_->pending(); }
+
+std::uint64_t MapView::slabUsed() const { return host_->slabUsed(); }
+
+std::pair<std::uint64_t, std::uint64_t> MapView::slabOccupancy() const {
+  return host_->slabOccupancy();
+}
+
+tessella_result MapView::lastResult() const { return host_->lastResult(); }
 
 std::uint64_t MapView::produceNs() const { return host_->produceNs(); }
 

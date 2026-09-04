@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace filament {
 class Camera;
@@ -71,6 +72,17 @@ class MapView {
   /// none, so a caller waiting for a settled frame watches this alongside
   /// `pending()` -- neither alone is sufficient.
   [[nodiscard]] std::uint64_t records() const;
+
+  /// How far the slab region extends, in bytes. See `Host::slabUsed`.
+  [[nodiscard]] std::uint64_t slabUsed() const;
+
+  /// Bytes the slab table still claims, and how many slabs claim them. See
+  /// `Host::slabOccupancy`.
+  [[nodiscard]] std::pair<std::uint64_t, std::uint64_t> slabOccupancy() const;
+
+  /// The producer's own word on the last call. A tick that emitted nothing
+  /// because the ring or the region was full says so here and nowhere else.
+  [[nodiscard]] tessella_result lastResult() const;
 
   /// What the last `tick` spent producing and draining, in nanoseconds. See
   /// `Host::produceNs`.

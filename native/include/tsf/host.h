@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace tsf {
 
@@ -108,6 +109,17 @@ public:
     /// How much work is still in flight: tiles asked for and not yet answered, plus an unfinished
     /// glyph fetch. Zero means nothing further arrives without another tick.
     [[nodiscard]] std::uint64_t pending() const;
+
+    /// How far the slab region extends, in bytes: the producer's bump cursor,
+    /// which is the high-water mark of live geometry plus whatever compaction
+    /// has not yet reclaimed. What a caller sizes `slab_capacity` from.
+    [[nodiscard]] std::uint64_t slabUsed() const;
+
+    /// Bytes the region's table still claims, and how many slabs claim them.
+    ///
+    /// Against `slabUsed` this separates the two ways a region fills: live geometry that is
+    /// genuinely held, and dead space under a bump cursor that nothing has reclaimed.
+    [[nodiscard]] std::pair<std::uint64_t, std::uint64_t> slabOccupancy() const;
 
     /// The last status any call returned, for a caller that wants the producer's own word.
     [[nodiscard]] tessella_result lastResult() const noexcept { return last_; }
