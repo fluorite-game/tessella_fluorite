@@ -2,6 +2,8 @@
 
 #include <tsf/host.h>
 
+#include <ctime>
+
 #include <tessella_capture_abi.h>
 
 #include <cstddef>
@@ -86,8 +88,22 @@ bool Host::setCamera(double latitude, double longitude, double zoom, double bear
     return last_ == TESSELLA_OK;
 }
 
+namespace {
+
+std::uint64_t now_ns() {
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<std::uint64_t>(ts.tv_sec) * 1000000000ull +
+           static_cast<std::uint64_t>(ts.tv_nsec);
+}
+
+}  // namespace
+
 std::uint64_t Host::tick(Renderer& renderer) {
+    const std::uint64_t producing = now_ns();
     last_ = tessella_tick(map_);
+    produceNs_ = now_ns() - producing;
+    drainNs_ = 0;
     // TESSELLA_RING_FULL means nothing was emitted and nothing retired, so draining is still the
     // right thing to do -- it is what makes room. Any other failure leaves the ring untouched.
     if (last_ != TESSELLA_OK && last_ != TESSELLA_RING_FULL) {
@@ -110,7 +126,9 @@ std::uint64_t Host::tick(Renderer& renderer) {
     }
 
     HostSink sink(renderer, drawlist_);
+    const std::uint64_t draining = now_ns();
     records_ += reader_->drain(sink);
+    drainNs_ = now_ns() - draining;
     return reader_->cursor();
 }
 

@@ -72,6 +72,11 @@ class MapView {
   /// `pending()` -- neither alone is sufficient.
   [[nodiscard]] std::uint64_t records() const;
 
+  /// What the last `tick` spent producing and draining, in nanoseconds. See
+  /// `Host::produceNs`.
+  [[nodiscard]] std::uint64_t produceNs() const;
+  [[nodiscard]] std::uint64_t drainNs() const;
+
   [[nodiscard]] FilamentRenderer& renderer() { return *renderer_; }
 
  private:

@@ -115,6 +115,16 @@ public:
     /// How many records have been read since the map was created.
     [[nodiscard]] std::uint64_t records() const noexcept { return records_; }
 
+    /// Nanoseconds the last `tick` spent producing and draining, split at the
+    /// FFI boundary: `produceNs` is `tessella_tick`, which covers cover, layout
+    /// and placement; `drainNs` is walking the ring into the renderer, which
+    /// covers buffer uploads and scene edits. A tick that is slow says nothing
+    /// about which half without these, and the two are tuned separately.
+    ///
+    /// Two clock reads per tick, against a tick measured in milliseconds.
+    [[nodiscard]] std::uint64_t produceNs() const noexcept { return produceNs_; }
+    [[nodiscard]] std::uint64_t drainNs() const noexcept { return drainNs_; }
+
 private:
     explicit Host(tessella_map* map) noexcept : map_(map) {}
 
@@ -123,6 +133,8 @@ private:
     DrawList drawlist_;
     tessella_result last_ = TESSELLA_OK;
     std::uint64_t records_ = 0;
+    std::uint64_t produceNs_ = 0;
+    std::uint64_t drainNs_ = 0;
 };
 
 } // namespace tsf

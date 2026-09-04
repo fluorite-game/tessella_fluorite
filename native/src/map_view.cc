@@ -67,6 +67,10 @@ void MapView::tick() {
 
 std::uint64_t MapView::pending() const { return host_->pending(); }
 
+std::uint64_t MapView::produceNs() const { return host_->produceNs(); }
+
+std::uint64_t MapView::drainNs() const { return host_->drainNs(); }
+
 std::uint64_t MapView::records() const { return host_->records(); }
 
 tessella_readiness MapView::readiness(std::string* reason) const { return host_->readiness(reason); }
