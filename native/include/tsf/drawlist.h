@@ -25,7 +25,7 @@ struct Batch {
 
     std::int32_t builtinShader = 0;
     std::uint64_t permutationKey = 0;
-    std::vector<std::pair<std::uint32_t, std::uint64_t>> textureRefs;
+    std::vector<TextureBinding> textureRefs;
 
     /// Geometry ids, in draw order.
     std::vector<std::uint64_t> geometries;
@@ -88,7 +88,7 @@ private:
     struct Known {
         std::int32_t builtinShader = 0;
         std::uint64_t permutationKey = 0;
-        std::vector<std::pair<std::uint32_t, std::uint64_t>> textureRefs;
+        std::vector<TextureBinding> textureRefs;
     };
 
     std::unordered_map<std::uint64_t, Known> byId_;

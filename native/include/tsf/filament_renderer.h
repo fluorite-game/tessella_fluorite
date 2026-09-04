@@ -191,6 +191,11 @@ private:
         std::uint64_t texture = 0;
         /// The second picture, for a raster tile fading from its parent.
         std::uint64_t texture1 = 0;
+        /// How slot zero is sampled: 0 linear, 1 nearest. See `filterFor`.
+        ///
+        /// After the textures, because both mesh records above are built with positional
+        /// initialisers and a field between them would silently take the next one's value.
+        std::uint32_t filter = 0;
         /// Whether this drawable writes colour.
         ///
         /// `DrawFlags::ENABLE_COLOR`, cleared for an extrusion's depth-only pass. Ignoring it drew

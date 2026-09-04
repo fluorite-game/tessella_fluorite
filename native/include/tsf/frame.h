@@ -112,6 +112,26 @@ struct Attribute {
     }
 };
 
+/// One texture bound to one shader slot, and how it is sampled.
+///
+/// The sampler travels with the binding rather than with the texture because it is a property of
+/// the *use*: mbgl's `DrawableAtlasesTweaker` gives the glyph atlas linear filtering always and
+/// the icon atlas nearest unless the icons are scaled, and the sprite sheet is the same texture
+/// a pattern samples linearly.
+struct TextureBinding {
+    std::uint32_t slot = 0;
+    std::uint64_t texture = 0;
+    /// `tsl_texture_ref::filter`: 0 linear, 1 nearest.
+    std::uint32_t filter = 0;
+
+    // Spelled out rather than defaulted: one consumer of this header still builds at C++17,
+    // where a defaulted comparison operator is not available.
+    friend bool operator==(const TextureBinding& a, const TextureBinding& b) {
+        return a.slot == b.slot && a.texture == b.texture && a.filter == b.filter;
+    }
+    friend bool operator!=(const TextureBinding& a, const TextureBinding& b) { return !(a == b); }
+};
+
 /// One drawable, joined from the shared geometry and one view's use of it.
 ///
 /// Field names follow mbgl's `DrawableAdd` so the Filament half needs no re-reading.
@@ -136,8 +156,8 @@ struct DrawableAdd {
     Bytes indexes;
     std::vector<tsl_segment> segments;
 
-    /// Slot to texture id, for the slots this drawable's shader declares.
-    std::vector<std::pair<std::uint32_t, std::uint64_t>> textureRefs;
+    /// Slot to texture id and sampler, for the slots this drawable's shader declares.
+    std::vector<TextureBinding> textureRefs;
 
     bool is3D = false;
     bool enableStencil = false;

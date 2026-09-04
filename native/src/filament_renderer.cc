@@ -598,9 +598,23 @@ namespace {
 /// Slot zero is the image texture for every family that has one -- a glyph atlas for text, a
 /// sprite atlas for a pattern -- and a drawable that samples nothing simply lists no reference.
 std::uint64_t textureFor(const DrawableAdd& add, std::uint32_t want = 0) {
-    for (const auto& [slot, id] : add.textureRefs) {
-        if (slot == want) {
-            return id;
+    for (const auto& ref : add.textureRefs) {
+        if (ref.slot == want) {
+            return ref.texture;
+        }
+    }
+    return 0;
+}
+
+/// How the drawable asks for slot zero to be sampled.
+///
+/// Nearest for an icon drawn at its own size, which is what keeps its texels one to a pixel;
+/// linear for everything else. The producer decides, because the test reads the style -- see
+/// `SymbolLayout::icons_need_linear`.
+std::uint32_t filterFor(const DrawableAdd& add, std::uint32_t want = 0) {
+    for (const auto& ref : add.textureRefs) {
+        if (ref.slot == want) {
+            return ref.filter;
         }
     }
     return 0;
@@ -1101,6 +1115,7 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
                            add.tileID ? add.tileID->overscaled_z : std::uint8_t{0},
                            add.tileID ? *add.tileID : TileID{},
                            textureFor(add)};
+    meshes_[add.id].filter = filterFor(add);
     meshes_[add.id].clipped = add.enableStencil;
     meshes_[add.id].colour = add.enableColor;
     return true;
@@ -1738,10 +1753,15 @@ void FilamentRenderer::issue(const Batch& batch) {
                     missingAtlas_++;
                     continue;
                 }
+                // The producer chose it: an icon drawn at its own size is sampled nearest so
+                // its texels land one to a pixel, and everything else linearly.
+                const bool nearest = mesh->second.filter == 1;
                 instance->setParameter("atlas", atlas->second,
                                        filament::TextureSampler(
-                                           filament::TextureSampler::MinFilter::LINEAR,
-                                           filament::TextureSampler::MagFilter::LINEAR));
+                                           nearest ? filament::TextureSampler::MinFilter::NEAREST
+                                                   : filament::TextureSampler::MinFilter::LINEAR,
+                                           nearest ? filament::TextureSampler::MagFilter::NEAREST
+                                                   : filament::TextureSampler::MagFilter::LINEAR));
             }
 
             // An extrusion needs its base and height, its light, and the height factor that turns

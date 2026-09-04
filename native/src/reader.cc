@@ -208,7 +208,7 @@ void Reader::dispatch(const tsl_record_header& header,
         out.segments = found->second.segments;
         out.textureRefs.reserve(found->second.textureRefs.size());
         for (const auto& ref : found->second.textureRefs) {
-            out.textureRefs.emplace_back(ref.slot, ref.texture);
+            out.textureRefs.push_back(TextureBinding{ref.slot, ref.texture, ref.filter});
         }
 
         sink.onDrawableAdd(out);
