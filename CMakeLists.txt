@@ -51,7 +51,8 @@ add_library(tsf_consumer STATIC
         native/src/reader.cc
         native/src/drawlist.cc
         native/src/host.cc
-        native/src/filament_renderer.cc)
+        native/src/filament_renderer.cc
+        native/src/map_view.cc)
 
 target_include_directories(tsf_consumer
         PUBLIC

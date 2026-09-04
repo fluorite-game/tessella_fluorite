@@ -11,6 +11,7 @@
 
 #include <tsf/filament_renderer.h>
 #include <tsf/host.h>
+#include <tsf/map_view.h>
 
 #include <filament/Camera.h>
 #include <math/mat4.h>
@@ -116,20 +117,12 @@ int main(int argc, char** argv) {
     // is destroyed at the end of main, which is after `Engine::destroy` has already freed every
     // buffer it created -- and the second destroy is a precondition panic that names a vertex
     // buffer rather than the ordering that caused it.
-    auto backendOwned = std::make_unique<tsf::FilamentRenderer>(engine, scene, materialDir, W, H);
-    tsf::FilamentRenderer& backend = *backendOwned;
-    std::printf("materials %zu\n", backend.materials());
-
-    tessella_config config;
-    config.style_json = style.c_str();
-    config.width = W;
-    config.height = H;
-    const int ringMb = std::getenv("TSF_PROBE_RING_MB") ? std::atoi(std::getenv("TSF_PROBE_RING_MB")) : 256;
-    config.ring_capacity = (size_t)ringMb << 20;
-
+    // The same five lines a platform view needs, so they are written once. See
+    // `tsf::MapView`; the probe owning the engine is the only difference.
     std::string error;
-    std::unique_ptr<tsf::Host> host = tsf::Host::create(config, lat, lon, zoom, &error);
-    if (!host) {
+    std::unique_ptr<tsf::MapView> map =
+        tsf::MapView::create(engine, scene, materialDir, style, W, H, lat, lon, zoom, &error);
+    if (!map) {
         std::fprintf(stderr, "probe: %s\n", error.c_str());
         return 1;
     }
@@ -138,7 +131,7 @@ int main(int argc, char** argv) {
     // when it would change something, so the flat path stays exactly the sequence of calls every
     // measurement so far was taken through.
     if (pitch != 0.0 || bearing != 0.0) {
-        if (!host->setCamera(lat, lon, zoom, bearing, pitch)) {
+        if (!map->setCamera(lat, lon, zoom, bearing, pitch)) {
             std::fprintf(stderr, "probe: camera refused pitch %g bearing %g\n", pitch, bearing);
             return 1;
         }
@@ -149,9 +142,8 @@ int main(int argc, char** argv) {
                              : 60000;
     int waited = 0;
     while (waited < budgetMs) {
-        const std::uint64_t seen = host->tick(backend);
-        host->retire(seen);
-        if (backend.primitives() > 0 && host->readiness() == TESSELLA_READY) {
+        map->tick();
+        if (map->renderer().primitives() > 0 && map->readiness() == TESSELLA_READY) {
             break;
         }
         pause_ms(5);
@@ -175,8 +167,7 @@ int main(int argc, char** argv) {
     int quiet = 0;
     int settled = 0;
     for (; settled < 6000 && quiet < quietTicks; settled++) {
-        const std::uint64_t seen = host->tick(backend);
-        host->retire(seen);
+        map->tick();
         // Both conditions, and the second is the one that was missing. A silence only means the
         // producer emitted nothing, which a source *blocked* on a fetch satisfies exactly as well
         // as one that has finished -- so the frame could be measured while it was still filling
@@ -184,58 +175,58 @@ int main(int argc, char** argv) {
         // reported themselves settled. `pending` is what distinguishes the two.
         if (::getenv("TSF_TRACE") && settled % 50 == 0) {
             std::fprintf(stderr, "t=%d records=%llu pending=%llu prims=%llu glyphs=%llu\n",
-                         settled, (unsigned long long)host->records(),
-                         (unsigned long long)host->pending(),
-                         (unsigned long long)backend.primitives(),
-                         (unsigned long long)backend.glyphsDrawn());
+                         settled, (unsigned long long)map->records(),
+                         (unsigned long long)map->pending(),
+                         (unsigned long long)map->renderer().primitives(),
+                         (unsigned long long)map->renderer().glyphsDrawn());
         }
-        if (host->records() == held && host->pending() == 0) {
+        if (map->records() == held && map->pending() == 0) {
             quiet++;
         } else {
-            held = host->records();
+            held = map->records();
             quiet = 0;
         }
         pause_ms(5);
     }
     std::printf("quiescent %d\n", quiet >= quietTicks ? 1 : 0);
     std::printf("settle_ticks %d\n", settled);
-    std::printf("records %llu\n", (unsigned long long)host->records());
+    std::printf("records %llu\n", (unsigned long long)map->records());
 
     std::string reason;
-    std::printf("readiness %d\n", (int)host->readiness(&reason));
-    std::printf("renderables %llu\n", (unsigned long long)backend.renderables());
-    std::printf("primitives %llu\n", (unsigned long long)backend.primitives());
-    std::printf("instances_made %llu\n", (unsigned long long)backend.made());
-    std::printf("instances_coloured %llu\n", (unsigned long long)backend.coloured());
-    for (const auto& [z, n] : backend.zooms()) {
+    std::printf("readiness %d\n", (int)map->readiness(&reason));
+    std::printf("renderables %llu\n", (unsigned long long)map->renderer().renderables());
+    std::printf("primitives %llu\n", (unsigned long long)map->renderer().primitives());
+    std::printf("instances_made %llu\n", (unsigned long long)map->renderer().made());
+    std::printf("instances_coloured %llu\n", (unsigned long long)map->renderer().coloured());
+    for (const auto& [z, n] : map->renderer().zooms()) {
         std::printf("zoom_%u %llu\n", (unsigned)z, (unsigned long long)n);
     }
-    for (const auto& [pass, n] : backend.passes()) {
+    for (const auto& [pass, n] : map->renderer().passes()) {
         std::printf("pass_%u %llu\n", (unsigned)pass, (unsigned long long)n);
     }
-    std::printf("redrawn %llu\n", (unsigned long long)backend.redrawn());
-    for (const auto& [z, n] : backend.overZooms()) {
+    std::printf("redrawn %llu\n", (unsigned long long)map->renderer().redrawn());
+    for (const auto& [z, n] : map->renderer().overZooms()) {
         std::printf("overzoom_%u %llu\n", (unsigned)z, (unsigned long long)n);
     }
-    std::printf("placements %zu\n", backend.placements());
-    std::printf("shared_slots %llu\n", (unsigned long long)backend.sharedSlots());
-    std::printf("unmasked %llu\n", (unsigned long long)backend.unmasked());
-    for (const auto& [scale, n] : backend.scales()) {
+    std::printf("placements %zu\n", map->renderer().placements());
+    std::printf("shared_slots %llu\n", (unsigned long long)map->renderer().sharedSlots());
+    std::printf("unmasked %llu\n", (unsigned long long)map->renderer().unmasked());
+    for (const auto& [scale, n] : map->renderer().scales()) {
         std::printf("scale %.5f %llu\n", scale, (unsigned long long)n);
     }
-    std::printf("masked %llu\n", (unsigned long long)backend.masked());
-    std::printf("glyph_quads_drawn %llu\n", (unsigned long long)backend.glyphsDrawn());
-    std::printf("glyph_quads_hidden %llu\n", (unsigned long long)backend.glyphsHidden());
-    std::printf("scissored %llu\n", (unsigned long long)backend.scissored());
-    std::printf("unplaced %llu\n", (unsigned long long)backend.unplaced());
-    std::printf("wall_triangles %llu\n", (unsigned long long)backend.walls());
-    std::printf("textures %zu\n", backend.textures());
-    std::printf("texture_uploads %llu\n", (unsigned long long)backend.textureUploads());
-    std::printf("texture_skipped %llu\n", (unsigned long long)backend.textureSkipped());
-    std::printf("missing_atlas %llu\n", (unsigned long long)backend.missingAtlas());
-    std::printf("pitched_labels %llu\n", (unsigned long long)backend.pitchedLabels());
-    std::printf("missing_batches %llu\n", (unsigned long long)backend.missing());
-    for (std::int32_t family : backend.missingFamilies()) {
+    std::printf("masked %llu\n", (unsigned long long)map->renderer().masked());
+    std::printf("glyph_quads_drawn %llu\n", (unsigned long long)map->renderer().glyphsDrawn());
+    std::printf("glyph_quads_hidden %llu\n", (unsigned long long)map->renderer().glyphsHidden());
+    std::printf("scissored %llu\n", (unsigned long long)map->renderer().scissored());
+    std::printf("unplaced %llu\n", (unsigned long long)map->renderer().unplaced());
+    std::printf("wall_triangles %llu\n", (unsigned long long)map->renderer().walls());
+    std::printf("textures %zu\n", map->renderer().textures());
+    std::printf("texture_uploads %llu\n", (unsigned long long)map->renderer().textureUploads());
+    std::printf("texture_skipped %llu\n", (unsigned long long)map->renderer().textureSkipped());
+    std::printf("missing_atlas %llu\n", (unsigned long long)map->renderer().missingAtlas());
+    std::printf("pitched_labels %llu\n", (unsigned long long)map->renderer().pitchedLabels());
+    std::printf("missing_batches %llu\n", (unsigned long long)map->renderer().missing());
+    for (std::int32_t family : map->renderer().missingFamilies()) {
         std::printf("missing_family_%d 1\n", family);
     }
     if (!reason.empty()) {
@@ -283,8 +274,7 @@ int main(int argc, char** argv) {
     for (; stable < 60; stable++) {
         previous.swap(pixels);
         for (int i = 0; i < 20; i++) {
-            const std::uint64_t seen = host->tick(backend);
-            host->retire(seen);
+            map->tick();
             pause_ms(5);
         }
         capture(pixels);
@@ -313,7 +303,7 @@ int main(int argc, char** argv) {
         std::printf("wrote 1\n");
     }
 
-    backendOwned.reset();
+    map.reset();
     engine->destroy(view);
     engine->destroy(scene);
     engine->destroy(renderer);
