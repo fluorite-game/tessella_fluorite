@@ -255,15 +255,43 @@ int main(int argc, char** argv) {
     }
 
     std::vector<uint8_t> pixels(W * H * 4);
-    filament::backend::PixelBufferDescriptor pb(pixels.data(), pixels.size(),
-                                                filament::backend::PixelDataFormat::RGBA,
-                                                filament::backend::PixelDataType::UBYTE);
-    if (renderer->beginFrame(swapChain)) {
-        renderer->render(view);
-        renderer->readPixels(0, 0, W, H, std::move(pb));
-        renderer->endFrame();
+    const auto capture = [&](std::vector<uint8_t>& into) {
+        filament::backend::PixelBufferDescriptor pb(into.data(), into.size(),
+                                                    filament::backend::PixelDataFormat::RGBA,
+                                                    filament::backend::PixelDataType::UBYTE);
+        if (renderer->beginFrame(swapChain)) {
+            renderer->render(view);
+            renderer->readPixels(0, 0, W, H, std::move(pb));
+            renderer->endFrame();
+        }
+        engine->flushAndWait();
+    };
+
+    // Settle on the *image*, which is the thing being measured, rather than on a proxy for it.
+    //
+    // The record count going quiet and nothing being outstanding are both necessary and neither is
+    // sufficient: the same scene at pitch 45 gave 13,757 through 34,121 differing pixels across
+    // six runs that all reported themselves settled, with an identical 39 renderables and nothing
+    // missing. Rather than keep guessing which producer-side signal is the weak one, this ticks on
+    // and re-reads the framebuffer until two consecutive captures agree. A frame that has stopped
+    // changing has stopped changing, whatever the counters believe.
+    //
+    // Bounded, and it says whether it got there, for the reason the settle loop says so.
+    int stable = 0;
+    std::vector<uint8_t> previous(W * H * 4, 0);
+    capture(pixels);
+    for (; stable < 60; stable++) {
+        previous.swap(pixels);
+        for (int i = 0; i < 20; i++) {
+            const std::uint64_t seen = host->tick(backend);
+            host->retire(seen);
+            pause_ms(5);
+        }
+        capture(pixels);
+        if (pixels == previous) break;
     }
-    engine->flushAndWait();
+    std::printf("image_stable %d\n", stable < 60 ? 1 : 0);
+    std::printf("stable_rounds %d\n", stable);
 
     size_t lit = 0;
     for (size_t i = 0; i < pixels.size(); i += 4) {
