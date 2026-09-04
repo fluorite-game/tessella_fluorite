@@ -246,8 +246,9 @@ FilamentRenderer::FilamentRenderer(filament::Engine* engine,
                                    filament::Scene* scene,
                                    const std::string& materialDir,
                                    std::uint32_t width,
-                                   std::uint32_t height)
-    : engine_(engine), scene_(scene), width_(width), height_(height) {
+                                   std::uint32_t height,
+                                   std::uint8_t layer)
+    : engine_(engine), scene_(scene), width_(width), height_(height), layer_(layer) {
     std::error_code ec;
     for (const auto& entry : std::filesystem::directory_iterator(materialDir, ec)) {
         if (entry.path().extension() != ".filamat") {
@@ -497,6 +498,7 @@ void FilamentRenderer::writeMasks() {
 
         filament::RenderableManager::Builder builder(1);
         builder.boundingBox({{0, 0, 0}, {8192, 8192, 8192}})
+            .layerMask(0xFF, layer_)
             .culling(false)
             .priority(band)
             .material(0, instance)
@@ -1953,6 +1955,7 @@ void FilamentRenderer::issue(const Batch& batch) {
 
         filament::RenderableManager::Builder builder(1);
         builder.boundingBox({{0, 0, 0}, {8192, 8192, 8192}})
+            .layerMask(0xFF, layer_)
             .culling(false)
             .priority(band)
             // Painter order within the pass, enforced rather than hoped for.

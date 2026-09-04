@@ -15,7 +15,8 @@ std::unique_ptr<MapView> MapView::create(filament::Engine* engine,
                                          const double latitude,
                                          const double longitude,
                                          const double zoom,
-                                         std::string* error) {
+                                         std::string* error,
+                                         const std::uint8_t layer) {
   if (engine == nullptr || scene == nullptr) {
     if (error != nullptr) {
       *error = "map view needs an engine and a scene";
@@ -23,7 +24,8 @@ std::unique_ptr<MapView> MapView::create(filament::Engine* engine,
     return nullptr;
   }
 
-  auto renderer = std::make_unique<FilamentRenderer>(engine, scene, materialDir, width, height);
+  auto renderer =
+      std::make_unique<FilamentRenderer>(engine, scene, materialDir, width, height, layer);
 
   tessella_config config{};
   config.style_json = styleJson.c_str();

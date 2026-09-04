@@ -41,7 +41,8 @@ class MapView {
                                          double latitude,
                                          double longitude,
                                          double zoom,
-                                         std::string* error);
+                                         std::string* error,
+                                         std::uint8_t layer = 0x01);
 
   ~MapView();
 

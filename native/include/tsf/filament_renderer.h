@@ -55,11 +55,20 @@ public:
     /// Loads every `.filamat` in `materialDir`, named for the shader family it serves.
     /// `width` and `height` are the view's, needed to turn a tile's clip-space box into the
     /// scissor rectangle that keeps its geometry inside its own tile.
+    /// `layer` is the Filament layer every renderable this builds is put on.
+    ///
+    /// Fluorite gives all its platform views one shared scene and differs them
+    /// by camera, so without a layer four maps would each draw in all four
+    /// panes. One bit per view and `View::setVisibleLayers` on the other side
+    /// keeps them apart. Defaults to 0x01, which is Filament's default
+    /// renderable layer and what a view shows unless told otherwise -- so a
+    /// single-view caller passes nothing and sees what it saw before.
     FilamentRenderer(filament::Engine* engine,
                      filament::Scene* scene,
                      const std::string& materialDir,
                      std::uint32_t width,
-                     std::uint32_t height);
+                     std::uint32_t height,
+                     std::uint8_t layer = 0x01);
     ~FilamentRenderer() override;
 
     FilamentRenderer(const FilamentRenderer&) = delete;
@@ -243,6 +252,8 @@ private:
     filament::VertexBuffer* maskVertices_ = nullptr;
     filament::IndexBuffer* maskIndices_ = nullptr;
     std::uint64_t masked_ = 0;
+    /// The layer every renderable goes on. See the constructor.
+    std::uint8_t layer_ = 0x01;
     std::uint64_t glyphsDrawn_ = 0;
     std::uint64_t glyphsHidden_ = 0;
     std::uint64_t unmasked_ = 0;
