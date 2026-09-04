@@ -182,6 +182,13 @@ int main(int argc, char** argv) {
         // as one that has finished -- so the frame could be measured while it was still filling
         // in, and the same scene gave 0, 272 and 9,520 differing pixels across runs that all
         // reported themselves settled. `pending` is what distinguishes the two.
+        if (::getenv("TSF_TRACE") && settled % 50 == 0) {
+            std::fprintf(stderr, "t=%d records=%llu pending=%llu prims=%llu glyphs=%llu\n",
+                         settled, (unsigned long long)host->records(),
+                         (unsigned long long)host->pending(),
+                         (unsigned long long)backend.primitives(),
+                         (unsigned long long)backend.glyphsDrawn());
+        }
         if (host->records() == held && host->pending() == 0) {
             quiet++;
         } else {
