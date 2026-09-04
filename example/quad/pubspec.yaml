@@ -1,0 +1,20 @@
+name: tessella_quad
+description: Four tessella maps, four ihs platform views, one app.
+publish_to: 'none'
+
+environment:
+  sdk: ^3.8.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  fluorite:
+    path: ../../../ihs_filament_view/packages/fluorite
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.3
+
+flutter:
+  uses-material-design: true
