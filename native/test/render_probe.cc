@@ -177,7 +177,12 @@ int main(int argc, char** argv) {
     for (; settled < 6000 && quiet < quietTicks; settled++) {
         const std::uint64_t seen = host->tick(backend);
         host->retire(seen);
-        if (host->records() == held) {
+        // Both conditions, and the second is the one that was missing. A silence only means the
+        // producer emitted nothing, which a source *blocked* on a fetch satisfies exactly as well
+        // as one that has finished -- so the frame could be measured while it was still filling
+        // in, and the same scene gave 0, 272 and 9,520 differing pixels across runs that all
+        // reported themselves settled. `pending` is what distinguishes the two.
+        if (host->records() == held && host->pending() == 0) {
             quiet++;
         } else {
             held = host->records();

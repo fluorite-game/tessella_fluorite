@@ -105,6 +105,10 @@ public:
     /// How far along the map's sources are, and why if they failed.
     tessella_readiness readiness(std::string* reason = nullptr) const;
 
+    /// How much work is still in flight: tiles asked for and not yet answered, plus an unfinished
+    /// glyph fetch. Zero means nothing further arrives without another tick.
+    [[nodiscard]] std::uint64_t pending() const;
+
     /// The last status any call returned, for a caller that wants the producer's own word.
     [[nodiscard]] tessella_result lastResult() const noexcept { return last_; }
 

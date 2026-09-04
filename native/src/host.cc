@@ -129,6 +129,14 @@ void Host::retire(std::uint64_t upTo) {
     __atomic_store_n(tail, upTo, __ATOMIC_RELEASE);
 }
 
+std::uint64_t Host::pending() const {
+    std::uint64_t value = 0;
+    if (map_ == nullptr || tessella_pending(map_, &value) != TESSELLA_OK) {
+        return 0;
+    }
+    return value;
+}
+
 tessella_readiness Host::readiness(std::string* reason) const {
     std::int32_t value = TESSELLA_IDLE;
     if (reason == nullptr) {
