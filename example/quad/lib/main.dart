@@ -4,11 +4,13 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:fluorite/fluorite.dart';
 import 'package:tessella_fluorite/tessella_fluorite.dart';
 
 import 'cities.dart';
 import 'hud.dart';
+import 'zoom_sweep.dart';
 
 /// The style every pane draws, and the compiled Filament materials the consumer
 /// binds. Both are host layout, so both come from the environment rather than
@@ -70,10 +72,68 @@ void main() {
 /// pane is its own `FluoriteView`, so each is its own ihs platform view -- and
 /// they share the engine's one scene, which is why each map is on its own
 /// Filament layer and each view is narrowed to it.
-class QuadApp extends StatelessWidget {
+class QuadApp extends StatefulWidget {
   const QuadApp({super.key, required this.engine});
 
   final FluoriteEngine engine;
+
+  @override
+  State<QuadApp> createState() => _QuadAppState();
+}
+
+class _QuadAppState extends State<QuadApp> with SingleTickerProviderStateMixin {
+  /// One ticker for all four panes, not one each: they sweep together, and four
+  /// tickers would each wake the frame pipeline to set one camera.
+  late final Ticker _ticker;
+  Duration _started = Duration.zero;
+  bool _sweeping = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = createTicker(_onTick)..start();
+  }
+
+  void _onTick(final Duration elapsed) {
+    if (!_sweeping) return;
+    // The first tick is the origin, so the sweep starts where the map already
+    // is rather than a frame into it.
+    if (_started == Duration.zero) {
+      _started = elapsed;
+      return;
+    }
+    final Duration into = elapsed - _started;
+    bool running = false;
+    for (int slot = 0; slot < kQuad.length; slot++) {
+      final MapCamera city = kQuad[slot];
+      final ZoomSweep sweep = ZoomSweep(home: city.zoom);
+      running = running || !sweep.isDone(into);
+      TessellaMaps.setCamera(
+        slot,
+        MapPosition(
+          latitude: city.latitude,
+          longitude: city.longitude,
+          zoom: sweep.zoomAt(into),
+          bearing: city.bearing,
+          pitch: city.pitch,
+        ),
+      );
+    }
+    if (!running) {
+      // Stop the ticker rather than setting the same camera for ever: a settled
+      // map publishes nothing, and this is what lets it settle.
+      _sweeping = false;
+      _ticker.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _ticker.dispose();
+    super.dispose();
+  }
+
+  FluoriteEngine get engine => widget.engine;
 
   @override
   Widget build(final BuildContext context) {

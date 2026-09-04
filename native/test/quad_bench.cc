@@ -17,6 +17,9 @@
 //   motion  every camera moving every frame. Against solo this says whether
 //           four maps cost four times one, or more -- they share a worker pool
 //           and a tile cache, and contention would show here and nowhere else.
+//   sweep   the whole zoom range and back: out to 0, in to 18, home. The
+//           hardest thing the pipeline is asked to do -- a pan moves the camera,
+//           this replaces everything it is looking at, twenty times over.
 //
 // Motion is a realistic rate, not a stress test: the pan covers a screen width
 // in about a second at 60fps, the zoom moves 0.3 levels a second and the bearing
@@ -154,6 +157,11 @@ Summary summarise(std::vector<double> samples) {
 }
 
 void report(const char* phase, const char* what, const Summary& summary) {
+    // A phase TSF_BENCH_ONLY skipped has no samples, and printing zeros for it
+    // reads as a phase that cost nothing rather than one that did not run.
+    if (summary.max == 0.0 && summary.mean == 0.0) {
+        return;
+    }
     std::printf("  %-6s %-6s mean %7.3f  p50 %7.3f  p95 %7.3f  p99 %7.3f  max %7.3f\n", phase, what,
                 summary.mean, summary.p50, summary.p95, summary.p99, summary.max);
     std::printf("bench %s.%s.mean=%.4f %s.%s.p50=%.4f %s.%s.p95=%.4f %s.%s.p99=%.4f %s.%s.max=%.4f\n",
@@ -338,7 +346,7 @@ int main(int argc, char** argv) {
             stillFrame.push_back(render);
         }
     }
-    std::printf("still  (nothing moving)\n");
+    if (wanted("still")) std::printf("still  (nothing moving)\n");
     report("still", "tick", summarise(stillTick));
     report("still", "frame", summarise(stillFrame));
     std::printf("bench still.records=%llu\n",
@@ -358,7 +366,7 @@ int main(int argc, char** argv) {
             soloFrame.push_back(render);
         }
     }
-    std::printf("solo   (one camera moving, three still)\n");
+    if (wanted("solo")) std::printf("solo   (one camera moving, three still)\n");
     report("solo", "tick", summarise(soloTick));
     report("solo", "frame", summarise(soloFrame));
 
@@ -383,7 +391,7 @@ int main(int argc, char** argv) {
             motionFrame.push_back(render);
         }
     }
-    std::printf("motion (all four cameras moving)\n");
+    if (wanted("motion")) std::printf("motion (all four cameras moving)\n");
     report("motion", "tick", summarise(motionTick));
     report("motion", "frame", summarise(motionFrame));
     const std::uint64_t motionRecords = panes[0].map->records() - recordsBeforeMotion;
@@ -420,6 +428,119 @@ int main(int argc, char** argv) {
                 (unsigned long long)motionRecords,
                 static_cast<double>(motionRecords) / (frames + warmup));
 
+    // --- sweep: the whole zoom range and back --------------------------------
+    //
+    // The same three legs the app runs, eased the same way, so what is measured
+    // here is what a user sees when the quad starts. Zoom is interpolated
+    // rather than scale, because a level is a doubling and linear-in-zoom is
+    // what makes the rate constant.
+    std::vector<double> sweepTick;
+    std::vector<double> sweepFrame;
+    sweepTick.reserve(frames);
+    sweepFrame.reserve(frames);
+    std::uint64_t sweepFull = 0;
+    // A frame the producer emitted with nothing in it. `beginFrame` clears the
+    // scene and rebuilds it from the frame's order, so an empty order is a pane
+    // that goes black -- which is what a zoom sweep looked like on screen.
+    std::array<std::uint64_t, 4> sweepBlank{};
+    std::array<std::uint64_t, 4> sweepEmitted{};
+    std::array<std::uint64_t, 4> sweepLowest{};
+    sweepLowest.fill(~0ull);
+    const auto ease = [](const double t) {
+        const double clamped = t < 0.0 ? 0.0 : (t > 1.0 ? 1.0 : t);
+        return 0.5 - 0.5 * std::cos(clamped * M_PI);
+    };
+    for (int frame = 0; wanted("sweep") && frame < frames + warmup; frame++) {
+        // Three legs of the run: out for a third, in for a half, home for the
+        // rest.
+        const double t = static_cast<double>(frame) / (frames + warmup);
+        double sweepZoom = 0.0;
+        for (std::size_t i = 0; i < panes.size(); i++) {
+            const double home = kCities[i].zoom;
+            double zoom = home;
+            if (t < 0.33) {
+                zoom = home + (0.0 - home) * ease(t / 0.33);
+            } else if (t < 0.80) {
+                zoom = 0.0 + (18.0 - 0.0) * ease((t - 0.33) / 0.47);
+            } else {
+                zoom = 18.0 + (home - 18.0) * ease((t - 0.80) / 0.20);
+            }
+            panes[i].map->setCamera(kCities[i].latitude, kCities[i].longitude, zoom, 0.0, 0.0);
+            if (i == 0) sweepZoom = zoom;
+        }
+        const double tick = tickAll();
+        const double render = renderFrame();
+        // One frame of the sweep, written out. A count of blank frames says how
+        // often the screen goes empty; this says what it goes to.
+        if (const char* at = std::getenv("TSF_BENCH_SWEEP_DUMP");
+            at != nullptr && frame == std::atoi(at)) {
+            std::vector<std::uint8_t> shot(static_cast<std::size_t>(W) * H * 4);
+            filament::backend::PixelBufferDescriptor pb(
+                shot.data(), shot.size(), filament::backend::PixelDataFormat::RGBA,
+                filament::backend::PixelDataType::UBYTE);
+            if (renderer->beginFrame(swapChain)) {
+                for (Pane& pane : panes) renderer->render(pane.view);
+                renderer->readPixels(0, 0, W, H, std::move(pb));
+                renderer->endFrame();
+            }
+            engine->flushAndWait();
+            if (std::FILE* ppm = std::fopen("sweep_frame.ppm", "wb")) {
+                std::fprintf(ppm, "P6\n%u %u\n255\n", W, H);
+                for (std::uint32_t y = 0; y < H; y++) {
+                    const std::uint8_t* row = shot.data() + (std::size_t)(H - 1 - y) * W * 4;
+                    for (std::uint32_t x = 0; x < W; x++) {
+                        std::fwrite(row + (std::size_t)x * 4, 1, 3, ppm);
+                    }
+                }
+                std::fclose(ppm);
+                std::printf("sweep_dump frame %d\n", frame);
+            }
+        }
+        for (std::size_t i = 0; i < panes.size(); i++) {
+            if (panes[i].map->lastResult() == TESSELLA_REGION_FULL) sweepFull++;
+            // Only frames the producer actually emitted: one that published
+            // nothing leaves the scene alone, and the pane keeps what it had.
+            if (panes[i].map->drainNs() == 0) continue;
+            const std::uint64_t prims = panes[i].map->renderer().primitives();
+            sweepEmitted[i]++;
+            if (prims == 0) sweepBlank[i]++;
+            if (std::getenv("TSF_BENCH_SWEEP_TRACE") != nullptr && i == 0) {
+                std::printf(
+                    "trace frame=%d zoom=%.2f prims=%llu rend=%llu miss=%llu drain=%.3f "
+                    "prod=%.3f\n",
+                    frame, sweepZoom, (unsigned long long)prims,
+                    (unsigned long long)panes[i].map->renderer().renderables(),
+                    (unsigned long long)panes[i].map->renderer().missing(),
+                    static_cast<double>(panes[i].map->drainNs()) / 1.0e6,
+                    static_cast<double>(panes[i].map->produceNs()) / 1.0e6);
+            }
+            if (prims < sweepLowest[i]) sweepLowest[i] = prims;
+        }
+        if (frame >= warmup) {
+            sweepTick.push_back(tick);
+            sweepFrame.push_back(render);
+        }
+    }
+    if (wanted("sweep")) std::printf("sweep  (zoom 0 to 18 and home, all four)\n");
+    report("sweep", "tick", summarise(sweepTick));
+    report("sweep", "frame", summarise(sweepFrame));
+    std::printf("  region-full ticks %llu\n", (unsigned long long)sweepFull);
+    std::printf("bench sweep.region_full=%llu\n", (unsigned long long)sweepFull);
+    for (std::size_t i = 0; i < panes.size(); i++) {
+        std::printf("  %-10s emitted %llu, blank %llu, fewest primitives %llu\n", kCities[i].name,
+                    (unsigned long long)sweepEmitted[i], (unsigned long long)sweepBlank[i],
+                    (unsigned long long)(sweepLowest[i] == ~0ull ? 0 : sweepLowest[i]));
+        std::printf("bench sweep.%s.blank=%llu sweep.%s.emitted=%llu\n", kCities[i].name,
+                    (unsigned long long)sweepBlank[i], kCities[i].name,
+                    (unsigned long long)sweepEmitted[i]);
+    }
+    for (std::size_t i = 0; i < panes.size(); i++) {
+        const auto [live, slabs] = panes[i].map->slabOccupancy();
+        std::printf("  %-10s region %.1f MiB, live %.1f MiB in %llu slabs\n", kCities[i].name,
+                    static_cast<double>(panes[i].map->slabUsed()) / (1024.0 * 1024.0),
+                    static_cast<double>(live) / (1024.0 * 1024.0), (unsigned long long)slabs);
+    }
+
     const Summary motion = summarise(motionFrame);
     std::printf("peak rss %.0f MiB\n", peak_rss_mib());
     std::printf("bench rss.peak_mib=%.0f fps.motion_p50=%.1f fps.motion_p99=%.1f\n", peak_rss_mib(),
@@ -437,6 +558,9 @@ int main(int argc, char** argv) {
             }
             for (std::size_t i = 0; i < motionTick.size(); i++) {
                 std::fprintf(out, "motion,%zu,%.4f,%.4f\n", i, motionTick[i], motionFrame[i]);
+            }
+            for (std::size_t i = 0; i < sweepTick.size(); i++) {
+                std::fprintf(out, "sweep,%zu,%.4f,%.4f\n", i, sweepTick[i], sweepFrame[i]);
             }
             std::fclose(out);
             std::printf("samples %s\n", csv);
