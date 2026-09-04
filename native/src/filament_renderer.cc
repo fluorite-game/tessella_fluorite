@@ -248,7 +248,7 @@ FilamentRenderer::FilamentRenderer(filament::Engine* engine,
                                    std::uint32_t width,
                                    std::uint32_t height,
                                    std::uint8_t layer)
-    : engine_(engine), scene_(scene), width_(width), height_(height), layer_(layer) {
+    : engine_(engine), scene_(scene), layer_(layer), width_(width), height_(height) {
     std::error_code ec;
     for (const auto& entry : std::filesystem::directory_iterator(materialDir, ec)) {
         if (entry.path().extension() != ".filamat") {

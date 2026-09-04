@@ -252,8 +252,6 @@ private:
     filament::VertexBuffer* maskVertices_ = nullptr;
     filament::IndexBuffer* maskIndices_ = nullptr;
     std::uint64_t masked_ = 0;
-    /// The layer every renderable goes on. See the constructor.
-    std::uint8_t layer_ = 0x01;
     std::uint64_t glyphsDrawn_ = 0;
     std::uint64_t glyphsHidden_ = 0;
     std::uint64_t unmasked_ = 0;
@@ -284,6 +282,8 @@ private:
     std::map<std::tuple<std::uint32_t, std::int32_t, std::uint32_t>, filament::MaterialInstance*>
         instances_;
 
+    /// The layer every renderable goes on. See the constructor.
+    std::uint8_t layer_ = 0x01;
     std::uint32_t width_ = 0;
     std::uint32_t height_ = 0;
 
