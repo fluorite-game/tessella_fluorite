@@ -24,6 +24,7 @@ class ZoomSweep {
     this.out = const Duration(seconds: 5),
     this.into = const Duration(seconds: 7),
     this.back = const Duration(seconds: 3),
+    this.hold = const Duration(seconds: 2),
   });
 
   /// Where the sweep starts and ends: the pane's own camera.
@@ -38,7 +39,12 @@ class ZoomSweep {
   final Duration into;
   final Duration back;
 
-  Duration get total => out + into + back;
+  /// A rest at home before the next pass. A sweep that restarts the instant it
+  /// arrives reads as a stutter rather than as a loop, and it is the only part
+  /// of the cycle where the map is worth looking at.
+  final Duration hold;
+
+  Duration get total => out + into + back + hold;
 
   /// Whether [zoomAt] has anything left to do.
   bool isDone(final Duration elapsed) => elapsed >= total;

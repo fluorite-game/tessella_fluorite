@@ -85,8 +85,14 @@ class _QuadAppState extends State<QuadApp> with SingleTickerProviderStateMixin {
   /// One ticker for all four panes, not one each: they sweep together, and four
   /// tickers would each wake the frame pipeline to set one camera.
   late final Ticker _ticker;
-  Duration _started = Duration.zero;
-  bool _sweeping = true;
+
+  /// When the current pass began, or null while still waiting to start.
+  Duration? _passBegan;
+
+  /// The last readiness check, so waiting does not poll the native side at the
+  /// frame rate for an answer that changes on a network round trip.
+  Duration _lastCheck = Duration.zero;
+  static const Duration _checkEvery = Duration(milliseconds: 250);
 
   @override
   void initState() {
@@ -94,20 +100,46 @@ class _QuadAppState extends State<QuadApp> with SingleTickerProviderStateMixin {
     _ticker = createTicker(_onTick)..start();
   }
 
+  /// Whether every pane has its sources and nothing outstanding.
+  ///
+  /// The sweep starts from here rather than from the first frame. Started cold,
+  /// the whole of the first leg runs against a cache that has nothing in it --
+  /// the camera is through a zoom before its tiles land -- so the one pass
+  /// anybody watches from the beginning is the one pass with no map in it.
+  static bool _settled() {
+    for (int slot = 0; slot < kQuad.length; slot++) {
+      final MapStats? stats = TessellaMaps.statsFor(slot);
+      if (stats == null ||
+          stats.readiness != MapReadiness.ready ||
+          stats.pending != 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   void _onTick(final Duration elapsed) {
-    if (!_sweeping) return;
-    // The first tick is the origin, so the sweep starts where the map already
-    // is rather than a frame into it.
-    if (_started == Duration.zero) {
-      _started = elapsed;
+    final Duration? began = _passBegan;
+    if (began == null) {
+      if (elapsed - _lastCheck < _checkEvery) return;
+      _lastCheck = elapsed;
+      if (_settled()) _passBegan = elapsed;
       return;
     }
-    final Duration into = elapsed - _started;
-    bool running = false;
+
+    Duration into = elapsed - began;
+    // One sweep is a pass, and the passes run on: this is a demo of a camera
+    // that never stops, and stopping it would leave the quad wherever the last
+    // leg happened to end.
+    final ZoomSweep first = ZoomSweep(home: kQuad.first.zoom);
+    if (into >= first.total) {
+      _passBegan = elapsed;
+      into = Duration.zero;
+    }
+
     for (int slot = 0; slot < kQuad.length; slot++) {
       final MapCamera city = kQuad[slot];
       final ZoomSweep sweep = ZoomSweep(home: city.zoom);
-      running = running || !sweep.isDone(into);
       TessellaMaps.setCamera(
         slot,
         MapPosition(
@@ -118,12 +150,6 @@ class _QuadAppState extends State<QuadApp> with SingleTickerProviderStateMixin {
           pitch: city.pitch,
         ),
       );
-    }
-    if (!running) {
-      // Stop the ticker rather than setting the same camera for ever: a settled
-      // map publishes nothing, and this is what lets it settle.
-      _sweeping = false;
-      _ticker.stop();
     }
   }
 
