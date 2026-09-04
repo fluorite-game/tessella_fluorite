@@ -2,6 +2,8 @@
 
 #include <tsf/reader.h>
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace tsf {
@@ -105,6 +107,14 @@ std::size_t Reader::drain(FrameSink& sink) {
             break;
         }
 
+        // Every record's bytes to a file, for diffing two runs. Off unless TSF_DUMP names a path.
+        if (const char* path = ::getenv("TSF_DUMP")) {
+            static std::FILE* dump = std::fopen(path, "wb");
+            if (dump != nullptr) {
+                std::fwrite(data + offset, 1, (std::size_t)header.total_len, dump);
+                std::fflush(dump);
+            }
+        }
         // A wrap record is padding to the end of the buffer, not content.
         if ((header.flags & TSL_RECORD_FLAG_SKIP) == 0) {
             const std::uint64_t body = alignUp(header.record_len, TSL_PAYLOAD_ALIGN);
