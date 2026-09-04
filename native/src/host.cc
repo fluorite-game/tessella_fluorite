@@ -120,6 +120,18 @@ std::uint64_t Host::tick(Renderer& renderer) {
         return reader_ ? reader_->cursor() : 0;
     }
 
+    // Before the drain, which is the only point the ring holds a whole frame. Read directly
+    // rather than atomically: the producer is this thread and the consumer is this thread.
+    if (regions.ring_len >= sizeof(tsl_ring_control)) {
+        tsl_ring_control control{};
+        std::memcpy(&control, regions.ring, sizeof control);
+        ringCapacity_ = control.capacity;
+        const std::uint64_t held = control.head - control.tail;
+        if (held > ringPeak_) {
+            ringPeak_ = held;
+        }
+    }
+
     const Region ring{regions.ring, regions.ring_len};
     const Region slabs{regions.slabs, regions.slabs_len};
     if (!reader_) {

@@ -115,6 +115,16 @@ public:
     /// has not yet reclaimed. What a caller sizes `slab_capacity` from.
     [[nodiscard]] std::uint64_t slabUsed() const;
 
+    /// The most bytes the ring has ever held unread, and its capacity.
+    ///
+    /// Taken inside `tick`, between the producer publishing a frame and this draining it, which
+    /// is the only moment the figure means anything: after the drain the ring is empty. What a
+    /// caller sizes `ring_capacity` from -- a ring is one frame's records, not a buffer, and
+    /// nothing had measured which.
+    [[nodiscard]] std::pair<std::uint64_t, std::uint64_t> ringPeak() const noexcept {
+        return {ringPeak_, ringCapacity_};
+    }
+
     /// Bytes the region's table still claims, and how many slabs claim them.
     ///
     /// Against `slabUsed` this separates the two ways a region fills: live geometry that is
@@ -146,6 +156,8 @@ private:
     tessella_result last_ = TESSELLA_OK;
     std::uint64_t records_ = 0;
     std::uint64_t produceNs_ = 0;
+    std::uint64_t ringPeak_ = 0;
+    std::uint64_t ringCapacity_ = 0;
     std::uint64_t drainNs_ = 0;
 };
 

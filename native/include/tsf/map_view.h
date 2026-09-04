@@ -76,6 +76,10 @@ class MapView {
   /// How far the slab region extends, in bytes. See `Host::slabUsed`.
   [[nodiscard]] std::uint64_t slabUsed() const;
 
+  /// The most bytes the ring has ever held unread, and its capacity. See
+  /// `Host::ringPeak`.
+  [[nodiscard]] std::pair<std::uint64_t, std::uint64_t> ringPeak() const;
+
   /// Bytes the slab table still claims, and how many slabs claim them. See
   /// `Host::slabOccupancy`.
   [[nodiscard]] std::pair<std::uint64_t, std::uint64_t> slabOccupancy() const;

@@ -288,6 +288,15 @@ int main(int argc, char** argv) {
         if (pixels[i] || pixels[i + 1] || pixels[i + 2]) lit++;
     }
     std::printf("lit_pixels %zu of %u\n", lit, W * H);
+    {
+        const auto [held, capacity] = map->ringPeak();
+        const auto [live, slabs] = map->slabOccupancy();
+        std::printf("ring_peak_mib %.3f of %.0f\n", (double)held / (1024.0 * 1024.0),
+                    (double)capacity / (1024.0 * 1024.0));
+        std::printf("slab_mib %.3f live %.3f in %llu slabs\n",
+                    (double)map->slabUsed() / (1024.0 * 1024.0), (double)live / (1024.0 * 1024.0),
+                    (unsigned long long)slabs);
+    }
 
     // Plain PPM: no encoder to link, and anything can read it.
     if (std::FILE* png = std::fopen(out, "wb")) {

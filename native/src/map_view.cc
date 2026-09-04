@@ -31,12 +31,23 @@ std::unique_ptr<MapView> MapView::create(filament::Engine* engine,
   config.style_json = styleJson.c_str();
   config.width = width;
   config.height = height;
-  // 256 MB, which is what the probe has used throughout. A cover's worth of
-  // records has never come close; the headroom is for a pan that outruns the
-  // consumer, where a full ring drops a frame rather than corrupting one.
-  config.ring_capacity = static_cast<std::size_t>(256) << 20;
-  // Zero takes the producer's default. The region holds the geometry of everything on screen
-  // plus what compaction has not reclaimed, and a view is one of several sharing a process.
+  // Sixty-four mebibytes, about six times the largest frame anything has
+  // measured. The worst is not the densest style: an all-families scene at
+  // 900x700 peaks at 11.0 MiB of unread ring, liberty's hundred and eleven
+  // layers at 1920x1080 reach 6.0, and the quad's four street-level views at
+  // 640x480 sit between 0.3 and 1.8. It was 256 MiB on the grounds that a cover
+  // had never come close -- which was true, and was not a measurement, and four
+  // views of it were most of a gigabyte of resident memory.
+  //
+  // The margin is asymmetric on purpose. A ring that fills mid-pan drops a frame
+  // and the next one retries, but a ring that cannot hold *one* frame can never
+  // make progress -- a frame is emitted whole or not at all. So this is sized
+  // for the largest single frame rather than for the average, and a viewport far
+  // beyond 1080p should raise it: the records scale with the tiles on screen.
+  config.ring_capacity = static_cast<std::size_t>(64) << 20;
+  // Zero takes the producer's default, which is 64 MiB. The region holds the
+  // geometry of everything on screen plus what compaction has not reclaimed;
+  // liberty at 1920x1080 reaches 13.8 MiB of it, and the quad 3 to 10.
   config.slab_capacity = 0;
 
   std::unique_ptr<Host> host = Host::create(config, latitude, longitude, zoom, error);
@@ -71,6 +82,8 @@ void MapView::tick() {
 std::uint64_t MapView::pending() const { return host_->pending(); }
 
 std::uint64_t MapView::slabUsed() const { return host_->slabUsed(); }
+
+std::pair<std::uint64_t, std::uint64_t> MapView::ringPeak() const { return host_->ringPeak(); }
 
 std::pair<std::uint64_t, std::uint64_t> MapView::slabOccupancy() const {
   return host_->slabOccupancy();

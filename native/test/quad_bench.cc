@@ -27,6 +27,9 @@
 // frame (submit and wait). The wait is deliberate: without it the loop measures
 // how fast frames can be *recorded*, and a GPU-bound quad would look free.
 //
+// TSF_BENCH_ONLY=<phase> runs the cold load and then just that phase, for
+// attaching a profiler to one of them without the others in the sample.
+//
 // Env: TSF_BENCH_FRAMES (default 600), TSF_BENCH_WARMUP (60),
 //      TSF_BENCH_COLD_MS (default 120000), TSF_BENCH_COLD_QUIET (default 200),
 //      TSF_BENCH_CSV (per-frame samples).
@@ -191,6 +194,10 @@ int main(int argc, char** argv) {
 
     const int frames = env_int("TSF_BENCH_FRAMES", 600);
     const int warmup = env_int("TSF_BENCH_WARMUP", 60);
+    const char* onlyPhase = std::getenv("TSF_BENCH_ONLY");
+    const auto wanted = [&](const char* phase) {
+        return onlyPhase == nullptr || std::strcmp(onlyPhase, phase) == 0;
+    };
     const int coldBudgetMs = env_int("TSF_BENCH_COLD_MS", 120000);
     // Quiet iterations before the cold phase is called settled, each with a 5ms
     // pause. Two hundred is a second, which has to outlast a tile round trip:
@@ -323,7 +330,7 @@ int main(int argc, char** argv) {
     stillTick.reserve(frames);
     stillFrame.reserve(frames);
     const std::uint64_t recordsBeforeStill = panes[0].map->records();
-    for (int frame = 0; frame < frames + warmup; frame++) {
+    for (int frame = 0; wanted("still") && frame < frames + warmup; frame++) {
         const double tick = tickAll();
         const double render = renderFrame();
         if (frame >= warmup) {
@@ -342,7 +349,7 @@ int main(int argc, char** argv) {
     std::vector<double> soloFrame;
     soloTick.reserve(frames);
     soloFrame.reserve(frames);
-    for (int frame = 0; frame < frames + warmup; frame++) {
+    for (int frame = 0; wanted("solo") && frame < frames + warmup; frame++) {
         moveTo(0, 2.0 * M_PI * frame / (frames + warmup));
         const double tick = tickAll();
         const double render = renderFrame();
@@ -366,7 +373,7 @@ int main(int argc, char** argv) {
     motionFrame.reserve(frames);
     const std::uint64_t recordsBeforeMotion = panes[0].map->records();
     recordPerPane = true;
-    for (int frame = 0; frame < frames + warmup; frame++) {
+    for (int frame = 0; wanted("motion") && frame < frames + warmup; frame++) {
         const double turn = 2.0 * M_PI * frame / (frames + warmup);
         for (std::size_t i = 0; i < panes.size(); i++) moveTo(i, turn);
         const double tick = tickAll();
@@ -390,6 +397,12 @@ int main(int argc, char** argv) {
                     kCities[i].name, static_cast<int>(panes[i].map->lastResult()),
                     static_cast<double>(panes[i].map->slabUsed()) / (1024.0 * 1024.0),
                     static_cast<double>(live) / (1024.0 * 1024.0), (unsigned long long)slabs);
+        const auto [ringHeld, ringCapacity] = panes[i].map->ringPeak();
+        std::printf("  %-10s ring peak %.2f MiB of %.0f MiB\n", kCities[i].name,
+                    static_cast<double>(ringHeld) / (1024.0 * 1024.0),
+                    static_cast<double>(ringCapacity) / (1024.0 * 1024.0));
+        std::printf("bench motion.%s.ring_peak_mib=%.3f\n", kCities[i].name,
+                    static_cast<double>(ringHeld) / (1024.0 * 1024.0));
         std::printf("bench motion.%s.slab_mib=%.2f motion.%s.result=%d\n", kCities[i].name,
                     static_cast<double>(panes[i].map->slabUsed()) / (1024.0 * 1024.0),
                     kCities[i].name, static_cast<int>(panes[i].map->lastResult()));
