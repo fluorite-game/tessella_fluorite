@@ -7,7 +7,7 @@
 // and no compositor -- a headless swap chain and `readPixels` -- which is what makes this runnable
 // where the goldens are produced rather than only on a desktop.
 //
-//   render_probe <style.json> <materialDir> <out.ppm> [lat lon zoom width height]
+//   render_probe <style.json> <materialDir> <out.ppm> [lat lon zoom width height pitch bearing]
 
 #include <tsf/filament_renderer.h>
 #include <tsf/host.h>
@@ -59,7 +59,8 @@ std::string slurp(const char* path) {
 int main(int argc, char** argv) {
     if (argc < 4) {
         std::fprintf(stderr,
-                     "usage: %s <style.json> <materialDir> <out.ppm> [lat lon zoom w h]\n",
+                     "usage: %s <style.json> <materialDir> <out.ppm> "
+                     "[lat lon zoom w h pitch bearing]\n",
                      argv[0]);
         return 2;
     }
@@ -75,6 +76,11 @@ int main(int argc, char** argv) {
     const double zoom = argc > 6 ? std::atof(argv[6]) : 14.0;
     const uint32_t W = argc > 7 ? (uint32_t)std::atoi(argv[7]) : 900;
     const uint32_t H = argc > 8 ? (uint32_t)std::atoi(argv[8]) : 700;
+    // Degrees, both, and both default to the flat north-up camera every earlier measurement used.
+    // `mbgl-render` spells them `--pitch` and `--bearing` and takes degrees too, so a scene can be
+    // asked of the oracle and of this with the same two numbers.
+    const double pitch = argc > 9 ? std::atof(argv[9]) : 0.0;
+    const double bearing = argc > 10 ? std::atof(argv[10]) : 0.0;
 
     auto* engine = filament::Engine::Builder()
                        .backend(filament::Engine::Backend::VULKAN)
@@ -126,6 +132,16 @@ int main(int argc, char** argv) {
     if (!host) {
         std::fprintf(stderr, "probe: %s\n", error.c_str());
         return 1;
+    }
+
+    // `create` places the camera flat and north-up; anything else is a second call. Only made
+    // when it would change something, so the flat path stays exactly the sequence of calls every
+    // measurement so far was taken through.
+    if (pitch != 0.0 || bearing != 0.0) {
+        if (!host->setCamera(lat, lon, zoom, bearing, pitch)) {
+            std::fprintf(stderr, "probe: camera refused pitch %g bearing %g\n", pitch, bearing);
+            return 1;
+        }
     }
 
     const int budgetMs = std::getenv("TSF_PROBE_BUDGET_MS")
