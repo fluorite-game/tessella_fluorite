@@ -10,6 +10,8 @@ dependencies:
     sdk: flutter
   fluorite:
     path: ../../../ihs_filament_view/packages/fluorite
+  tessella_fluorite:
+    path: ../..
 
 dev_dependencies:
   flutter_test:
@@ -18,3 +20,21 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+# The native half is built by tessella_fluorite's hook, and everything it has to
+# locate is host layout. user_defines are the only channel that reaches a hook:
+# hooks_runner strips the environment down to a short allow-list.
+hooks:
+  user_defines:
+    tessella_fluorite:
+      # Relative values resolve against the tessella_fluorite package root, not
+      # this app -- the hook protocol does not specify a working directory, so
+      # the package it belongs to is the only stable anchor.
+      tessella_dir: ../tessella
+      # The Filament fluorite actually links, which is the emb overlay's --
+      # filament_DIR (a CMake package config) wins over its own
+      # FILAMENT_INCLUDE_DIR. One Filament in the process, so the extension
+      # compiles against the headers the host linked; a different release
+      # changes Builder::build's constness and the symbols do not resolve.
+      filament_include: /mnt/dev/ihs_filament_view/.config/flutter_workspace/overlay-x86_64-linux-gnu/usr/include/filament
+      fluorite_include: ../ihs_filament_view/packages/fluorite/include

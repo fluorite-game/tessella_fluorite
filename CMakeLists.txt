@@ -63,3 +63,24 @@ target_include_directories(tsf_consumer
         ${FILAMENT_INCLUDE_DIR})
 
 target_link_libraries(tsf_consumer PUBLIC ${TESSELLA_LIB})
+
+# The Dart-facing half: a map in every Fluorite platform view.
+#
+# Built only when FLUORITE_INCLUDE_DIR is given, because the extension ABI is
+# fluorite's header and there is nothing to register against without it. The
+# probes in native/test need none of this, which is why it is not the default.
+#
+# Not linked against libfluorite_core_ffi.so. `fluorite_set_view_extension` is
+# resolved at load time out of the process that already has it -- the shell
+# loads fluorite first, and a link here would either duplicate it or bake in a
+# soname the Dart hooks runner does not place. `-undefined dynamic_lookup` is
+# the macOS spelling; on ELF an undefined symbol in a shared object is the
+# default, so nothing is needed.
+if (FLUORITE_INCLUDE_DIR)
+    add_library(tessella_fluorite SHARED native/src/extension.cc)
+    target_include_directories(tessella_fluorite PRIVATE ${FLUORITE_INCLUDE_DIR})
+    target_link_libraries(tessella_fluorite PRIVATE tsf_consumer)
+    set_target_properties(tessella_fluorite PROPERTIES
+            CXX_VISIBILITY_PRESET hidden
+            VISIBILITY_INLINES_HIDDEN ON)
+endif ()

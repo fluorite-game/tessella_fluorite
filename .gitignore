@@ -1,3 +1,6 @@
 example/quad/.dart_tool/
 example/quad/.flutter-plugins*
 example/quad/pubspec.lock
+.dart_tool/
+pubspec.lock
+example/quad/build/
