@@ -28,13 +28,17 @@ class MapCamera {
   final double pitch;
 }
 
-/// The quad, in reading order: Seattle, Tokyo, Switzerland, China.
+/// The quad, in reading order: Seattle, Tokyo, Liestal, Shanghai.
+///
+/// All four sit at street zoom. A country-scale pane exercises a different part
+/// of the pipeline -- coarse tiles, few labels -- and is worth having, but not
+/// at the cost of the quad showing what a map looks like where it is used.
 const List<MapCamera> kQuad = <MapCamera>[
   MapCamera(name: 'Seattle', latitude: 47.6062, longitude: -122.3321, zoom: 13),
-  MapCamera(name: 'Tokyo', latitude: 35.6812, longitude: 139.7671, zoom: 13),
-  // The country, not a city: centred on the Bernese Alps at a zoom that holds
-  // the whole of it.
-  MapCamera(name: 'Switzerland', latitude: 46.8182, longitude: 8.2275, zoom: 8),
-  // Likewise -- centred inland so the coast and the interior are both in frame.
-  MapCamera(name: 'China', latitude: 35.8617, longitude: 104.1954, zoom: 4),
+  MapCamera(name: 'Tokyo', latitude: 35.6812, longitude: 139.7671, zoom: 15),
+  // Basel-Landschaft, wider than the other three so the Jura around it is in
+  // frame rather than just the town.
+  MapCamera(name: 'Liestal', latitude: 47.4839, longitude: 7.7345, zoom: 12),
+  // People's Square, so the Bund and both banks of the Huangpu are in frame.
+  MapCamera(name: 'Shanghai', latitude: 31.2304, longitude: 121.4737, zoom: 14),
 ];

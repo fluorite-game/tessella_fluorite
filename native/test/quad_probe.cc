@@ -45,9 +45,9 @@ struct City {
 // Reading order, matching the Flutter app's `kQuad`.
 constexpr std::array<City, 4> kCities{{
     {"Seattle", 47.6062, -122.3321, 13.0},
-    {"Tokyo", 35.6812, 139.7671, 13.0},
-    {"Switzerland", 46.8182, 8.2275, 8.0},
-    {"China", 35.8617, 104.1954, 4.0},
+    {"Tokyo", 35.6812, 139.7671, 15.0},
+    {"Liestal", 47.4839, 7.7345, 12.0},
+    {"Shanghai", 31.2304, 121.4737, 14.0},
 }};
 
 std::string slurp(const char* path) {
