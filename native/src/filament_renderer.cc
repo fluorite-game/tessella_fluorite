@@ -1746,11 +1746,16 @@ void FilamentRenderer::issue(const Batch& batch) {
                 // pixels. That is a second arrangement of the same three matrices, and this
                 // shader implements the viewport one; drawing an on-map label through it puts the
                 // offsets in the wrong space. Counted and skipped until it is written.
-                // Drawn, not skipped. The two arrangements differ only in the three matrices the
-                // producer builds, and the shader's arithmetic is the same for both -- so once a
-                // line label's glyphs are walked along its road and its plane matrix is honestly
-                // the identity, there is nothing here to branch on. Still counted, because a
-                // label laid out in the map's plane is what a pitched camera exercises first.
+                // Drawn, not skipped -- and the paragraph above was right the first time. A
+                // line label under a pitched camera draws an opaque slab the size of its own
+                // extent with the text over it: the quad is expanded in the wrong space, so it
+                // reaches far enough past the glyph to sample the atlas either side of it.
+                // Reproduced at Seattle z15, pitch 15, with the road layer alone -- point labels
+                // in the same frame are clean, and `pitchedLabels_` is zero for them.
+                //
+                // Left drawing rather than skipped, because a pane with no road labels at all is
+                // not obviously better than one with slabs, and because the count is what makes
+                // the case: the arrangement wants writing, not a branch here.
                 if (block.pitch_with_map) {
                     pitchedLabels_++;
                 }
