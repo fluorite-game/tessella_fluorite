@@ -91,6 +91,12 @@ std::pair<std::uint64_t, std::uint64_t> MapView::slabOccupancy() const {
   return host_->slabOccupancy();
 }
 
+std::uint64_t MapView::orphanedOrders() const { return host_->orphanedOrders(); }
+
+std::uint64_t MapView::lastOrderEntries() const { return host_->lastOrderEntries(); }
+
+std::uint64_t MapView::lastBatches() const { return host_->lastBatches(); }
+
 tessella_result MapView::lastResult() const { return host_->lastResult(); }
 
 std::uint64_t MapView::produceNs() const { return host_->produceNs(); }

@@ -17,8 +17,8 @@ namespace {
 /// Forwards what the reader delivers to a `Renderer`, batching the order on the way through.
 class HostSink final : public FrameSink {
 public:
-    HostSink(Renderer& renderer, DrawList& drawlist) noexcept
-        : renderer_(renderer), drawlist_(drawlist) {}
+    HostSink(Renderer& renderer, DrawList& drawlist, std::uint64_t* orphaned) noexcept
+        : renderer_(renderer), drawlist_(drawlist), orphaned_(orphaned) {}
 
     void beginFrame(std::uint64_t frameNo) override { renderer_.beginFrame(frameNo); }
     void endFrame(std::uint64_t frameNo) override { renderer_.endFrame(frameNo); }
@@ -47,9 +47,26 @@ public:
         // not published a camera for, so drawing it would put this frame's geometry under the
         // last frame's camera. Held rather than drawn, and the next order supersedes it.
         if (!order.camera) {
+            if (orphaned_ != nullptr) {
+                (*orphaned_)++;
+            }
             return;
         }
-        for (const Batch& batch : drawlist_.build(order)) {
+        // An order with no entries is a camera arriving for an order this reader has not seen,
+        // not a frame that draws nothing. Rebuilding the scene from it would empty the screen.
+        if (order.entries.empty()) {
+            if (orphaned_ != nullptr) {
+                orphaned_[1] = 0;
+                orphaned_[2] = 0;
+            }
+            return;
+        }
+        const std::vector<Batch> batches = drawlist_.build(order);
+        if (orphaned_ != nullptr) {
+            orphaned_[1] = order.entries.size();
+            orphaned_[2] = batches.size();
+        }
+        for (const Batch& batch : batches) {
             renderer_.onBatch(batch);
         }
     }
@@ -57,6 +74,7 @@ public:
 private:
     Renderer& renderer_;
     DrawList& drawlist_;
+    std::uint64_t* orphaned_;
 };
 
 } // namespace
@@ -102,6 +120,10 @@ std::uint64_t now_ns() {
 }  // namespace
 
 std::uint64_t Host::tick(Renderer& renderer) {
+    // A sentinel, so "this frame carried no order" is distinguishable from "its order was
+    // empty". Read back stale, the two look identical and only one of them is a bug.
+    orderCounts_[1] = kNoOrder;
+    orderCounts_[2] = kNoOrder;
     const std::uint64_t producing = now_ns();
     last_ = tessella_tick(map_);
     produceNs_ = now_ns() - producing;
@@ -142,7 +164,7 @@ std::uint64_t Host::tick(Renderer& renderer) {
         reader_->rebind(ring, slabs);
     }
 
-    HostSink sink(renderer, drawlist_);
+    HostSink sink(renderer, drawlist_, orderCounts_);
     const std::uint64_t draining = now_ns();
     records_ += reader_->drain(sink);
     drainNs_ = now_ns() - draining;

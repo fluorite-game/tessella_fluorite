@@ -131,6 +131,21 @@ public:
     /// genuinely held, and dead space under a bump cursor that nothing has reclaimed.
     [[nodiscard]] std::pair<std::uint64_t, std::uint64_t> slabOccupancy() const;
 
+    /// Frame orders dropped for want of a camera at their epoch.
+    ///
+    /// `beginFrame` has already cleared the scene by the time an order is refused, so each one of
+    /// these is a frame that draws nothing.
+    [[nodiscard]] std::uint64_t orphanedOrders() const noexcept { return orderCounts_[0]; }
+
+    /// Entries in the last order that reached the draw list, and batches it made of them.
+    /// Together with the renderable count these say where a blank frame lost its drawables:
+    /// an empty order, an order that batched to nothing, or batches the renderer refused.
+    /// What `lastOrderEntries` reports for a frame that carried no order record at all.
+    static constexpr std::uint64_t kNoOrder = ~0ull;
+
+    [[nodiscard]] std::uint64_t lastOrderEntries() const noexcept { return orderCounts_[1]; }
+    [[nodiscard]] std::uint64_t lastBatches() const noexcept { return orderCounts_[2]; }
+
     /// The last status any call returned, for a caller that wants the producer's own word.
     [[nodiscard]] tessella_result lastResult() const noexcept { return last_; }
 
@@ -159,6 +174,7 @@ private:
     std::uint64_t ringPeak_ = 0;
     std::uint64_t ringCapacity_ = 0;
     std::uint64_t drainNs_ = 0;
+    std::uint64_t orderCounts_[3] = {0, 0, 0};
 };
 
 } // namespace tsf

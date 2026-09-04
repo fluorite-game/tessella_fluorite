@@ -331,11 +331,19 @@ void Reader::dispatch(const tsl_record_header& header,
         if (havePending_ && pending_.orderEpoch == camera.order_epoch) {
             pending_.camera = camera;
             sink.onFrameOrder(pending_);
-            havePending_ = false;
+            // Held, not consumed. An order is durable -- the producer sends one when the draw
+            // list changes and not otherwise -- so a later frame that moves only the camera
+            // carries a camera and no order, and names the epoch of the order already sent.
+            // Clearing the flag here made the next such frame fall through to the branch below
+            // and dispatch an order with no entries; the sink rebuilds its scene from the order
+            // it is given, so that is a frame that draws nothing. On the quad's zoom sweep it
+            // was 777 of 930 frames, and on screen a flicker between the map and black.
         } else {
-            // A camera whose epoch is not the one held. The obligation is to *hold* it, not to
-            // apply it against the wrong order -- which would draw this frame's camera over the
-            // last frame's painter order, one frame of the wrong thing on every restyle.
+            // A camera naming an epoch this reader has never seen an order for. The obligation
+            // is to hold it rather than apply it against the wrong order -- which would draw
+            // this frame's camera over the last frame's painter order, one frame of the wrong
+            // thing on every restyle. What goes to the sink carries the camera and no entries,
+            // and the sink must leave its scene alone rather than rebuild it from nothing.
             FrameOrder held;
             held.view = camera.view;
             held.orderEpoch = camera.order_epoch;

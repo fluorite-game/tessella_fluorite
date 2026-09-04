@@ -506,11 +506,15 @@ int main(int argc, char** argv) {
             if (prims == 0) sweepBlank[i]++;
             if (std::getenv("TSF_BENCH_SWEEP_TRACE") != nullptr && i == 0) {
                 std::printf(
-                    "trace frame=%d zoom=%.2f prims=%llu rend=%llu miss=%llu drain=%.3f "
+                    "trace frame=%d zoom=%.2f prims=%llu entries=%lld batches=%lld drain=%.3f "
                     "prod=%.3f\n",
                     frame, sweepZoom, (unsigned long long)prims,
-                    (unsigned long long)panes[i].map->renderer().renderables(),
-                    (unsigned long long)panes[i].map->renderer().missing(),
+                    (long long)(panes[i].map->lastOrderEntries() == ~0ull
+                                    ? -1
+                                    : (long long)panes[i].map->lastOrderEntries()),
+                    (long long)(panes[i].map->lastBatches() == ~0ull
+                                    ? -1
+                                    : (long long)panes[i].map->lastBatches()),
                     static_cast<double>(panes[i].map->drainNs()) / 1.0e6,
                     static_cast<double>(panes[i].map->produceNs()) / 1.0e6);
             }
@@ -527,9 +531,13 @@ int main(int argc, char** argv) {
     std::printf("  region-full ticks %llu\n", (unsigned long long)sweepFull);
     std::printf("bench sweep.region_full=%llu\n", (unsigned long long)sweepFull);
     for (std::size_t i = 0; i < panes.size(); i++) {
-        std::printf("  %-10s emitted %llu, blank %llu, fewest primitives %llu\n", kCities[i].name,
-                    (unsigned long long)sweepEmitted[i], (unsigned long long)sweepBlank[i],
-                    (unsigned long long)(sweepLowest[i] == ~0ull ? 0 : sweepLowest[i]));
+        std::printf(
+            "  %-10s emitted %llu, blank %llu, fewest primitives %llu, orders without a camera "
+            "%llu\n",
+            kCities[i].name, (unsigned long long)sweepEmitted[i],
+            (unsigned long long)sweepBlank[i],
+            (unsigned long long)(sweepLowest[i] == ~0ull ? 0 : sweepLowest[i]),
+            (unsigned long long)panes[i].map->orphanedOrders());
         std::printf("bench sweep.%s.blank=%llu sweep.%s.emitted=%llu\n", kCities[i].name,
                     (unsigned long long)sweepBlank[i], kCities[i].name,
                     (unsigned long long)sweepEmitted[i]);

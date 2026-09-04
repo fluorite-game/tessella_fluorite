@@ -91,6 +91,11 @@ class MapView {
   /// `Host::slabOccupancy`.
   [[nodiscard]] std::pair<std::uint64_t, std::uint64_t> slabOccupancy() const;
 
+  /// Frame orders dropped for want of a camera. See `Host::orphanedOrders`.
+  [[nodiscard]] std::uint64_t orphanedOrders() const;
+  [[nodiscard]] std::uint64_t lastOrderEntries() const;
+  [[nodiscard]] std::uint64_t lastBatches() const;
+
   /// The producer's own word on the last call. A tick that emitted nothing
   /// because the ring or the region was full says so here and nowhere else.
   [[nodiscard]] tessella_result lastResult() const;
