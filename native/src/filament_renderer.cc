@@ -554,11 +554,18 @@ void FilamentRenderer::clearScene() {
     maskInstances_.clear();
 }
 
-void FilamentRenderer::configureCamera(filament::Camera& camera) {
-    // Identity but for the Y flip: `clip = viewProj * worldPosition` has to reduce to
-    // `clip = matrix * position`, because the producer's matrix already reaches clip space.
+void FilamentRenderer::configureCamera(filament::Camera& camera, bool flipY) {
+    // Identity, because `clip = viewProj * worldPosition` has to reduce to
+    // `clip = matrix * position` -- the producer's matrix already reaches clip space.
+    //
+    // The Y sign is the target's, not the producer's. An offscreen target read back with
+    // `readPixels` comes out bottom-up, and every probe here writes it top-down again, so the
+    // two flips cancel and the camera carries one. A swapchain presented straight to a
+    // compositor is read by nobody: its first row is the top of the image, and flipping here
+    // puts the map on its head -- which is exactly what a platform view showed.
+    const double y = flipY ? -1.0 : 1.0;
     camera.setCustomProjection(filament::math::mat4{filament::math::float4{1.0, 0.0, 0.0, 0.0},
-                                                    filament::math::float4{0.0, -1.0, 0.0, 0.0},
+                                                    filament::math::float4{0.0, y, 0.0, 0.0},
                                                     filament::math::float4{0.0, 0.0, 1.0, 0.0},
                                                     filament::math::float4{0.0, 0.0, 0.0, 1.0}},
                                -1.0, 1.0);
@@ -1927,13 +1934,13 @@ void FilamentRenderer::issue(const Batch& batch) {
                 }
                 minX = std::min(minX, clip.x / clip.w);
                 maxX = std::max(maxX, clip.x / clip.w);
-                // Y negated, for the same reason `configureCamera` flips the projection: the
-                // producer's clip space has +Y up and Filament's has it down. This box is
-                // measured in the producer's space but names a region of the screen, so it has
-                // to be carried across the same way the geometry is. Left unflipped it is the
+                // The same Y sign `configureCamera` was given, because this box is measured in
+                // the producer's clip space and names a region of the screen: it has to be
+                // carried across exactly as the geometry was. Carried the other way it is the
                 // mirror of what it should bound, and a tile is clipped to where its own
-                // reflection overlaps it -- a band across the middle of the map.
-                const float screenY = -clip.y / clip.w;
+                // reflection overlaps it -- a band across the middle of the map, which is what
+                // a platform view showed when its camera stopped flipping and this did not.
+                const float screenY = (flipY_ ? -clip.y : clip.y) / clip.w;
                 minY = std::min(minY, screenY);
                 maxY = std::max(maxY, screenY);
             }

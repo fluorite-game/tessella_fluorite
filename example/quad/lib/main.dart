@@ -8,6 +8,7 @@ import 'package:fluorite/fluorite.dart';
 import 'package:tessella_fluorite/tessella_fluorite.dart';
 
 import 'cities.dart';
+import 'hud.dart';
 
 /// The style every pane draws, and the compiled Filament materials the consumer
 /// binds. Both are host layout, so both come from the environment rather than
@@ -122,19 +123,9 @@ class MapPane extends StatelessWidget {
       children: <Widget>[
         FluoriteView(engine: engine),
         Positioned(
-          left: 12,
-          top: 10,
-          child: IgnorePointer(
-            child: Text(
-              camera.name,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.w600,
-                shadows: <Shadow>[Shadow(blurRadius: 6, color: Colors.black87)],
-              ),
-            ),
-          ),
+          left: 10,
+          top: 8,
+          child: MapHud(slot: slot, name: camera.name),
         ),
       ],
     );

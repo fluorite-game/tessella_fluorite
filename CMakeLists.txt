@@ -70,12 +70,21 @@ target_link_libraries(tsf_consumer PUBLIC ${TESSELLA_LIB})
 # fluorite's header and there is nothing to register against without it. The
 # probes in native/test need none of this, which is why it is not the default.
 #
-# Not linked against libfluorite_core_ffi.so. `fluorite_set_view_extension` is
-# resolved at load time out of the process that already has it -- the shell
-# loads fluorite first, and a link here would either duplicate it or bake in a
-# soname the Dart hooks runner does not place. `-undefined dynamic_lookup` is
-# the macOS spelling; on ELF an undefined symbol in a shared object is the
-# default, so nothing is needed.
+# Linked against libfluorite_core_ffi.so, which is where both Filament and
+# `fluorite_set_view_extension` come from.
+#
+# Leaving them undefined does not work, and the way it fails is worth writing
+# down. Dart's native-assets loader dlopens each asset with RTLD_LOCAL, so
+# fluorite's symbols are not in the global scope when this library is loaded,
+# and the first call into it dies with `undefined symbol:
+# fluorite_set_view_extension` -- after the app has started, from inside the
+# loader, with no way to catch it.
+#
+# A DT_NEEDED plus an $ORIGIN rpath is what fixes it: the two libraries sit in
+# the same bundle directory, so the loader resolves the soname to the file Dart
+# has already mapped. Same path, same inode, one copy -- which is the property
+# that matters, because a second Filament in the process hands the caller
+# different globals from the Engine it was given.
 if (FLUORITE_INCLUDE_DIR)
     add_library(tessella_fluorite SHARED native/src/extension.cc)
     target_include_directories(tessella_fluorite PRIVATE ${FLUORITE_INCLUDE_DIR})
@@ -83,4 +92,18 @@ if (FLUORITE_INCLUDE_DIR)
     set_target_properties(tessella_fluorite PROPERTIES
             CXX_VISIBILITY_PRESET hidden
             VISIBILITY_INLINES_HIDDEN ON)
+    if (FLUORITE_CORE_FFI_LIB)
+        target_link_libraries(tessella_fluorite PRIVATE ${FLUORITE_CORE_FFI_LIB})
+        set_target_properties(tessella_fluorite PROPERTIES
+                BUILD_RPATH "$ORIGIN"
+                INSTALL_RPATH "$ORIGIN"
+                BUILD_WITH_INSTALL_RPATH ON)
+        # Every filament:: and utils:: symbol this leaves undefined is one
+        # fluorite exports, so there should be nothing else outstanding. Say so
+        # at link time rather than at the first call.
+        target_link_options(tessella_fluorite PRIVATE -Wl,--no-undefined)
+    else ()
+        message(WARNING "FLUORITE_CORE_FFI_LIB unset: tessella_fluorite will not "
+                "resolve fluorite's symbols at runtime under Dart's loader")
+    endif ()
 endif ()

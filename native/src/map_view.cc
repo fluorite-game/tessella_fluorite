@@ -64,7 +64,9 @@ MapView::MapView(std::unique_ptr<FilamentRenderer> renderer, std::unique_ptr<Hos
 // engine made, so it goes before anything the caller destroys the engine with.
 MapView::~MapView() = default;
 
-void MapView::configureCamera(filament::Camera& camera) { FilamentRenderer::configureCamera(camera); }
+void MapView::configureCamera(filament::Camera& camera, bool flipY) {
+  FilamentRenderer::configureCamera(camera, flipY);
+}
 
 bool MapView::setCamera(const double latitude,
                         const double longitude,

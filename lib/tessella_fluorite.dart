@@ -41,20 +41,100 @@ class MapPosition {
   final double pitch;
 }
 
+/// What one pane cost on its last frames.
+///
+/// Read rather than pushed: a HUD samples this a couple of times a second, and
+/// a callback per frame would cost more than the thing it measures.
+class MapStats {
+  const MapStats({
+    required this.frames,
+    required this.fps,
+    required this.produceMs,
+    required this.drainMs,
+    required this.produceMsMax,
+    required this.drainMsMax,
+    required this.pending,
+    required this.records,
+    required this.primitives,
+    required this.slabMib,
+    required this.slabLiveMib,
+    required this.ringPeakMib,
+    required this.position,
+    required this.readiness,
+  });
+
+  /// Frames this pane has been ticked, and its rate over the recent window.
+  final int frames;
+  final double fps;
+
+  /// The last tick, split at the FFI boundary: [produceMs] is tessella's frame
+  /// -- cover, layout, placement -- and [drainMs] is walking the ring into
+  /// Filament. A slow pane is one or the other, never both.
+  final double produceMs;
+  final double drainMs;
+
+  /// The worst of the last 120 ticks, which is what says whether a pane drops
+  /// frames rather than merely running slow on average.
+  final double produceMsMax;
+  final double drainMsMax;
+
+  /// Tiles asked for and not yet answered, plus an unfinished glyph fetch.
+  final int pending;
+
+  /// Records read since the map was created, and primitives now in the scene.
+  final int records;
+  final int primitives;
+
+  /// The slab region: what the bump cursor has reached, and what the table
+  /// still claims. The gap is what compaction has yet to take back.
+  final double slabMib;
+  final double slabLiveMib;
+
+  /// The most the ring has ever held unread.
+  final double ringPeakMib;
+
+  /// Where this pane is looking, as last applied.
+  final MapPosition position;
+
+  final MapReadiness readiness;
+
+  /// Total frame cost on the last tick.
+  double get tickMs => produceMs + drainMs;
+}
+
 /// How far along a slot's map is.
+///
+/// The four live values mirror `tessella_readiness`, which is about the
+/// *sources* rather than about the tiles: a map is ready once its manifests
+/// have resolved, and goes on filling in afterwards. [MapStats.pending] is what
+/// says whether anything is still arriving.
 enum MapReadiness {
   /// Nothing attached: the view has not come up, or was given no camera.
   absent,
 
-  /// Attached and still fetching.
-  loading,
+  /// Attached; the first tick has not started resolution yet.
+  idle,
 
-  /// Everything the camera covers has arrived.
+  /// The style's sources are resolving. No tile can be asked for until they do.
+  resolving,
+
+  /// Resolved. Tiles are built as they are wanted and land as they finish.
   ready,
 
-  /// Attached but not going to finish. [TessellaMaps.reasonFor] says why.
+  /// A source did not resolve, and nothing retries.
+  /// [TessellaMaps.reasonFor] says why.
   failed,
 }
+
+/// `tessella_readiness` as this package spells it. Anything else is [absent],
+/// which is what a slot with no map reports.
+MapReadiness _readinessOf(final int value) => switch (value) {
+      0 => MapReadiness.idle,
+      1 => MapReadiness.resolving,
+      2 => MapReadiness.ready,
+      3 => MapReadiness.failed,
+      _ => MapReadiness.absent,
+    };
 
 /// The maps, one per platform view.
 ///
@@ -131,13 +211,41 @@ abstract final class TessellaMaps {
   /// How far along this slot is.
   static MapReadiness readiness(int slot) {
     _checkSlot(slot);
-    final value = ffi.tessella_fluorite_readiness(slot, nullptr, 0);
-    return switch (value) {
-      0 => MapReadiness.loading,
-      1 => MapReadiness.ready,
-      2 => MapReadiness.failed,
-      _ => MapReadiness.absent,
-    };
+    return _readinessOf(ffi.tessella_fluorite_readiness(slot, nullptr, 0));
+  }
+
+  /// What this pane cost on its last frames, or null when nothing is attached.
+  static MapStats? statsFor(int slot) {
+    _checkSlot(slot);
+    final buffer = calloc<ffi.TessellaStats>();
+    try {
+      if (ffi.tessella_fluorite_stats_of(slot, buffer) != 0) return null;
+      final s = buffer.ref;
+      return MapStats(
+        frames: s.frames,
+        fps: s.fps,
+        produceMs: s.produceMs,
+        drainMs: s.drainMs,
+        produceMsMax: s.produceMsMax,
+        drainMsMax: s.drainMsMax,
+        pending: s.pending,
+        records: s.records,
+        primitives: s.primitives,
+        slabMib: s.slabMib,
+        slabLiveMib: s.slabLiveMib,
+        ringPeakMib: s.ringPeakMib,
+        position: MapPosition(
+          latitude: s.latitude,
+          longitude: s.longitude,
+          zoom: s.zoom,
+          bearing: s.bearing,
+          pitch: s.pitch,
+        ),
+        readiness: _readinessOf(s.readiness),
+      );
+    } finally {
+      calloc.free(buffer);
+    }
   }
 
   /// Why this slot is where it is, or null when nothing is attached. Worth

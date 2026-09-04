@@ -34,3 +34,46 @@ external int tessella_fluorite_attached(int slot);
 
 @Native<Int32 Function(Uint32, Pointer<Char>, Int32)>()
 external int tessella_fluorite_readiness(int slot, Pointer<Char> reason, int reasonCapacity);
+
+/// Mirrors `tessella_fluorite_stats`. Field order and types are the ABI.
+final class TessellaStats extends Struct {
+  @Uint64()
+  external int frames;
+  @Double()
+  external double fps;
+  @Double()
+  external double produceMs;
+  @Double()
+  external double drainMs;
+  @Double()
+  external double produceMsMax;
+  @Double()
+  external double drainMsMax;
+  @Uint64()
+  external int pending;
+  @Uint64()
+  external int records;
+  @Uint64()
+  external int primitives;
+  @Double()
+  external double slabMib;
+  @Double()
+  external double slabLiveMib;
+  @Double()
+  external double ringPeakMib;
+  @Double()
+  external double latitude;
+  @Double()
+  external double longitude;
+  @Double()
+  external double zoom;
+  @Double()
+  external double bearing;
+  @Double()
+  external double pitch;
+  @Int32()
+  external int readiness;
+}
+
+@Native<Int32 Function(Uint32, Pointer<TessellaStats>)>()
+external int tessella_fluorite_stats_of(int slot, Pointer<TessellaStats> out);

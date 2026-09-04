@@ -53,7 +53,14 @@ class MapView {
   /// Points a camera the way the capture stream expects. Call once per camera;
   /// it is a property of the camera rather than of this map, which is why it
   /// stays static on `FilamentRenderer`.
-  static void configureCamera(filament::Camera& camera);
+  ///
+  /// `flipY` is whether the render target's first row is the bottom of the
+  /// image. It is for an offscreen target read back with `readPixels`, which is
+  /// what every probe here uses and what the PPM writers then flip again. It is
+  /// not for a swapchain handed straight to a compositor -- a platform view's
+  /// dma-buf is presented with its first row at the top, so flipping puts the
+  /// map on its head.
+  static void configureCamera(filament::Camera& camera, bool flipY = true);
 
   /// Moves the map's camera. Degrees for bearing and pitch, as the C API takes
   /// them. Emits nothing when nothing moved.

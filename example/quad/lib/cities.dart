@@ -34,11 +34,10 @@ class MapCamera {
 /// of the pipeline -- coarse tiles, few labels -- and is worth having, but not
 /// at the cost of the quad showing what a map looks like where it is used.
 const List<MapCamera> kQuad = <MapCamera>[
-  MapCamera(name: 'Seattle', latitude: 47.6062, longitude: -122.3321, zoom: 13),
+  MapCamera(name: 'Seattle', latitude: 47.6062, longitude: -122.3321, zoom: 15),
   MapCamera(name: 'Tokyo', latitude: 35.6812, longitude: 139.7671, zoom: 15),
-  // Basel-Landschaft, wider than the other three so the Jura around it is in
-  // frame rather than just the town.
-  MapCamera(name: 'Liestal', latitude: 47.4839, longitude: 7.7345, zoom: 12),
+  // Basel-Landschaft: the town itself rather than the Jura around it.
+  MapCamera(name: 'Liestal', latitude: 47.4839, longitude: 7.7345, zoom: 14),
   // People's Square, so the Bund and both banks of the Huangpu are in frame.
   MapCamera(name: 'Shanghai', latitude: 31.2304, longitude: 121.4737, zoom: 14),
 ];

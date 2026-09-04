@@ -26,6 +26,12 @@ flutter:
 # hooks_runner strips the environment down to a short allow-list.
 hooks:
   user_defines:
+    # The platform-view seam lives in an ivi-homescreen worktree rather than in
+    # the emb overlay, which stages Filament and not the shell. Without this
+    # fluorite_register_ihs_pv compiles to its no-op stub and every pane fails
+    # with "No platform-view factory registered for view type".
+    fluorite:
+      ihs_dir: /mnt/dev/ivi-homescreen
     tessella_fluorite:
       # Relative values resolve against the tessella_fluorite package root, not
       # this app -- the hook protocol does not specify a working directory, so
@@ -38,3 +44,9 @@ hooks:
       # changes Builder::build's constness and the symbols do not resolve.
       filament_include: /mnt/dev/ihs_filament_view/.config/flutter_workspace/overlay-x86_64-linux-gnu/usr/include/filament
       fluorite_include: ../ihs_filament_view/packages/fluorite/include
+      # Linked against, so fluorite's symbols resolve under Dart's loader --
+      # which opens each native asset RTLD_LOCAL, leaving nothing in the global
+      # scope for an undefined reference to find. Any copy with the right
+      # soname does for the link; $ORIGIN resolves the bundled one at runtime.
+      # Built by fluorite's own hook.
+      fluorite_core_ffi: ../ihs_filament_view/packages/fluorite/build/native_assets/linux/libfluorite_core_ffi.so

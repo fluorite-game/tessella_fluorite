@@ -108,7 +108,11 @@ int main(int argc, char** argv) {
     // bloom and dithering -- and a map is not a photograph: the style already says exactly what
     // colour each thing is, so anything applied on top of that is a deviation from the oracle by
     // construction. It is what left the first correct frame looking bleached.
-    view->setPostProcessingEnabled(false);
+    // Off, because a map is display-referred sRGB and Filament's post-processing
+    // tone-maps what a shader wrote as though it were scene-referred light.
+    // TSF_POSTPROCESS turns it back on, which is how the washed-out platform
+    // view was reproduced headlessly: roads vanish, water goes grey.
+    view->setPostProcessingEnabled(std::getenv("TSF_POSTPROCESS") != nullptr);
     // The clip masks need somewhere to go.
     view->setStencilBufferEnabled(true);
     renderer->setClearOptions({.clearColor = {0.0f, 0.0f, 0.0f, 1.0f}, .clear = true});

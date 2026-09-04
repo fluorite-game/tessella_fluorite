@@ -13,6 +13,7 @@
 //         tessella_dir: ...     # tessella checkout (for the capture ABI header)
 //         filament_include: ... # Filament headers
 //         fluorite_include: ... # fluorite's include/, for view_extension.h
+//         fluorite_core_ffi: ... # libfluorite_core_ffi.so, to link against
 //         cargo_profile: release
 //
 // Each also reads an environment variable of the same name upcased and
@@ -35,13 +36,21 @@ void main(List<String> args) async {
         _dir(input, 'tessella_dir', 'TESSELLA_DIR') ?? '${packageRoot}../tessella';
     final filamentInclude = _dir(input, 'filament_include', 'TESSELLA_FILAMENT_INCLUDE');
     final fluoriteInclude = _dir(input, 'fluorite_include', 'TESSELLA_FLUORITE_INCLUDE');
+    // Linked, not left undefined: Dart's loader opens each native asset with
+    // RTLD_LOCAL, so fluorite's symbols are not in scope for this one unless a
+    // DT_NEEDED puts them there. Any copy with the right soname does for the
+    // link; $ORIGIN resolves the bundled one at runtime.
+    final fluoriteCoreFfi = _dir(input, 'fluorite_core_ffi', 'TESSELLA_FLUORITE_CORE_FFI');
     final profile = _string(input, 'cargo_profile', 'TESSELLA_CARGO_PROFILE') ?? 'release';
 
-    if (filamentInclude == null || fluoriteInclude == null) {
+    if (filamentInclude == null || fluoriteInclude == null || fluoriteCoreFfi == null) {
       throw StateError(
-        'set filament_include and fluorite_include under '
+        'set filament_include, fluorite_include and fluorite_core_ffi under '
         'hooks: user_defines: tessella_fluorite: in the app pubspec',
       );
+    }
+    if (!File(fluoriteCoreFfi).existsSync()) {
+      throw StateError('no libfluorite_core_ffi.so at $fluoriteCoreFfi');
     }
     if (!File('$tessellaDir/Cargo.toml').existsSync()) {
       throw StateError('no tessella checkout at $tessellaDir (set tessella_dir)');
@@ -69,6 +78,7 @@ void main(List<String> args) async {
       '-DTESSELLA_LIB=$tessellaLib',
       '-DFILAMENT_INCLUDE_DIR=$filamentInclude',
       '-DFLUORITE_INCLUDE_DIR=$fluoriteInclude',
+      '-DFLUORITE_CORE_FFI_LIB=$fluoriteCoreFfi',
       if (await _which('ninja')) ...['-G', 'Ninja'],
     ]);
     await _run('cmake', ['--build', buildDir, '--parallel']);

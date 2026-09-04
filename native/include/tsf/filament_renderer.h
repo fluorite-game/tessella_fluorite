@@ -85,7 +85,15 @@ public:
     ///
     /// Without it every frame renders vertically mirrored: the map is upside down on screen, and
     /// a readback compared against the oracle looks merely translated, which is how it hid.
-    static void configureCamera(filament::Camera& camera);
+    static void configureCamera(filament::Camera& camera, bool flipY = true);
+
+    /// Whether this renderer's target has its first row at the bottom.
+    ///
+    /// The same answer `configureCamera` takes, and it has to be the same one: the scissor boxes
+    /// are computed in the producer's clip space and carried into the target's, so a camera
+    /// flipped one way and a scissor the other clips every tile to where its own reflection
+    /// overlaps it -- a band across the middle of the map.
+    void setFlipY(bool flipY) noexcept { flipY_ = flipY; }
 
     void beginFrame(std::uint64_t frameNo) override;
     void endFrame(std::uint64_t frameNo) override;
@@ -284,6 +292,7 @@ private:
 
     /// The layer every renderable goes on. See the constructor.
     std::uint8_t layer_ = 0x01;
+    bool flipY_ = true;
     std::uint32_t width_ = 0;
     std::uint32_t height_ = 0;
 
