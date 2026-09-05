@@ -1323,6 +1323,13 @@ void FilamentRenderer::endFrame(std::uint64_t) {
 }
 
 void FilamentRenderer::issue(const Batch& batch) {
+    // Read once. These are diagnostic escape hatches and this is the per-drawable path, so a
+    // getenv per drawable per frame is a syscall-shaped cost on the hot loop for a value that
+    // cannot change while the process runs.
+    static const bool noStencil = std::getenv("TSF_NO_STENCIL") != nullptr;
+    static const bool impossibleRef = std::getenv("TSF_IMPOSSIBLE_REF") != nullptr;
+    static const bool noScissor = std::getenv("TSF_NO_SCISSOR") != nullptr;
+    static const bool traceScissor = std::getenv("TSF_SCISSOR_TRACE") != nullptr;
     if (std::getenv("TSF_ONLY_MASKS")) {
         return;
     }
@@ -1955,9 +1962,9 @@ void FilamentRenderer::issue(const Batch& batch) {
         if (clipped && reference == 0) {
             unmasked_++;
         }
-        if (reference != 0 && !std::getenv("TSF_NO_STENCIL")) {
+        if (reference != 0 && !noStencil) {
             instance->setStencilWrite(false);
-            instance->setStencilReferenceValue(std::getenv("TSF_IMPOSSIBLE_REF") ? 200 : reference);
+            instance->setStencilReferenceValue(impossibleRef ? 200 : reference);
             instance->setStencilCompareFunction(filament::MaterialInstance::StencilCompareFunc::E);
         }
 
@@ -1978,11 +1985,21 @@ void FilamentRenderer::issue(const Batch& batch) {
         {
             float minX = 1e30f, minY = 1e30f, maxX = -1e30f, maxY = -1e30f;
             const float corners[4][2] = {{0, 0}, {8192, 0}, {8192, 8192}, {0, 8192}};
+            // A corner behind the camera has a negative `w`, and dividing by it mirrors that
+            // corner through the origin: the box then bounds somewhere the tile is not, and the
+            // tile is scissored to a strip of it. A pitched camera puts corners behind itself
+            // routinely -- the nearer half of a tile the camera is standing on -- so this is not
+            // a degenerate case to guard against but the ordinary one at any pitch and zoom.
+            //
+            // There is no screen-space box for such a tile: it reaches to the horizon. So it is
+            // not scissored at all, which is what the mask pass is for anyway.
+            bool boundable = true;
             for (const auto& corner : corners) {
                 const filament::math::float4 clip =
                     transform * filament::math::float4{corner[0], corner[1], 0.0f, 1.0f};
-                if (clip.w == 0.0f) {
-                    continue;
+                if (clip.w <= 0.0f) {
+                    boundable = false;
+                    break;
                 }
                 minX = std::min(minX, clip.x / clip.w);
                 maxX = std::max(maxX, clip.x / clip.w);
@@ -2004,11 +2021,27 @@ void FilamentRenderer::issue(const Batch& batch) {
             const float r = std::min(static_cast<float>(width_), std::ceil(toPixels(maxX, width_)));
             const float t =
                 std::min(static_cast<float>(height_), std::ceil(toPixels(maxY, height_)));
-            if (clipped && r > l && t > b && !std::getenv("TSF_NO_SCISSOR")) {
+            if (clipped && traceScissor) {
+                std::fprintf(stderr,
+                             "scissor tile=%u/%u/%u boundable=%d box=%.0f,%.0f,%.0f,%.0f "
+                             "view=%ux%u\n",
+                             static_cast<unsigned>(mesh->second.tile.z),
+                             static_cast<unsigned>(mesh->second.tile.x),
+                             static_cast<unsigned>(mesh->second.tile.y), boundable ? 1 : 0, l, b,
+                             r, t, width_, height_);
+            }
+            if (clipped && boundable && r > l && t > b && !noScissor) {
                 instance->setScissor(
                     static_cast<std::uint32_t>(l), static_cast<std::uint32_t>(b),
                     static_cast<std::uint32_t>(r - l), static_cast<std::uint32_t>(t - b));
                 scissored_++;
+            } else {
+                // Explicitly, not by omission. An instance is cached per (layer, shader, tile)
+                // and a scissor is state on it, so a frame that skips the call inherits the box
+                // the previous frame set. A tile that reaches past the frustum has no box, and
+                // keeping the one it had when it did is what emptied the lower two thirds of a
+                // pitched pane mid-zoom.
+                instance->unsetScissor();
             }
         }
 

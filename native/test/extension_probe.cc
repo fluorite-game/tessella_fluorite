@@ -31,10 +31,13 @@
 #include <backend/PixelBufferDescriptor.h>
 #include <utils/EntityManager.h>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <set>
 #include <ctime>
 #include <string>
 #include <vector>
@@ -217,6 +220,108 @@ int main(int argc, char** argv) {
         char reason[256] = {0};
         const int readiness = tessella_fluorite_readiness(slot, reason, sizeof reason);
         std::printf("%s readiness %d %s\n", kCities[slot].name, readiness, reason);
+    }
+
+    // The sweep the app runs, through the path the app runs it on. Settled frames are clean on
+    // every probe here and on mbgl; what the quad shows while its camera moves is not, and the
+    // rung missing between the two was a moving camera on *this* side of the extension.
+    //
+    // TSF_EXT_SWEEP is how many frames to sweep, TSF_EXT_DUMP_AT which of them to write.
+    if (const char* sweeping = std::getenv("TSF_EXT_SWEEP")) {
+        const int frames = std::max(1, std::atoi(sweeping));
+        // A comma-separated list, because the defects worth looking at are motion-only: one
+        // frame cannot show a label that is not anchored, and a second run of the same sweep is
+        // a second trajectory's worth of tile arrivals rather than the next frame of this one.
+        std::set<int> dumpAt;
+        if (const char* at = std::getenv("TSF_EXT_DUMP_AT")) {
+            for (const char* p = at; *p != '\0';) {
+                dumpAt.insert(std::atoi(p));
+                while (*p != '\0' && *p != ',') p++;
+                if (*p == ',') p++;
+            }
+        }
+        const auto ease = [](const double t) {
+            const double clamped = t < 0.0 ? 0.0 : (t > 1.0 ? 1.0 : t);
+            return 0.5 - 0.5 * std::cos(clamped * M_PI);
+        };
+        std::vector<std::uint8_t> shot(static_cast<std::size_t>(W) * H * 4);
+        const bool traceScissor = std::getenv("TSF_SCISSOR_TRACE") != nullptr;
+        for (int frame = 0; frame < frames; frame++) {
+            const double t = static_cast<double>(frame) / frames;
+            if (traceScissor) {
+                // The renderer's own trace is per drawable and says nothing about when; this is
+                // what separates one frame's boxes from the next's.
+                std::fprintf(stderr, "=== frame %d\n", frame);
+            }
+            // The zoom the first pane reached, for the dump line: every pane sweeps the same
+            // curve from its own home, so one of them names where in the sweep this frame is.
+            double leading = 0.0;
+            for (std::uint32_t slot = 0; slot < kCities.size(); slot++) {
+                const double home = kCities[slot].zoom;
+                double zoom = home;
+                if (t < 0.33) {
+                    zoom = home + (0.0 - home) * ease(t / 0.33);
+                } else if (t < 0.80) {
+                    zoom = 18.0 * ease((t - 0.33) / 0.47);
+                } else {
+                    zoom = 18.0 + (home - 18.0) * ease((t - 0.80) / 0.20);
+                }
+                tessella_fluorite_set_camera(slot, kCities[slot].latitude, kCities[slot].longitude,
+                                             zoom, 0.0, kPitch);
+                if (slot == 0) {
+                    leading = zoom;
+                }
+            }
+            if (dumpAt.count(frame) != 0) {
+                filament::backend::PixelBufferDescriptor pb(
+                    shot.data(), shot.size(), filament::backend::PixelDataFormat::RGBA,
+                    filament::backend::PixelDataType::UBYTE);
+                for (std::size_t i = 0; i < panes.size(); i++) {
+                    g_extension.frame(g_extension.user, static_cast<std::uint32_t>(i), 1.0 / 60.0);
+                }
+                if (renderer->beginFrame(swapChain)) {
+                    for (Pane& pane : panes) renderer->render(pane.view);
+                    renderer->readPixels(0, 0, W, H, std::move(pb));
+                    renderer->endFrame();
+                }
+                engine->flushAndWait();
+                char named[4096];
+                if (dumpAt.size() > 1) {
+                    std::snprintf(named, sizeof named, "%s.%03d", out, frame);
+                } else {
+                    std::snprintf(named, sizeof named, "%s", out);
+                }
+                if (std::FILE* ppm = std::fopen(named, "wb")) {
+                    std::fprintf(ppm, "P6\n%u %u\n255\n", W, H);
+                    for (std::uint32_t y = 0; y < H; y++) {
+                        const std::uint8_t* row = shot.data() + (std::size_t)(H - 1 - y) * W * 4;
+                        for (std::uint32_t x = 0; x < W; x++) {
+                            std::fwrite(row + (std::size_t)x * 4, 1, 3, ppm);
+                        }
+                    }
+                    std::fclose(ppm);
+                    std::printf("swept_dump frame %d %s zoom %.2f -> %s\n", frame,
+                                kCities[0].name, leading, named);
+                }
+            } else {
+                renderFrame();
+            }
+            pause_ms(5);
+        }
+        for (std::size_t i = 0; i < panes.size(); i++) {
+            g_extension.detach(g_extension.user, static_cast<std::uint32_t>(i));
+        }
+        tessella_fluorite_uninstall();
+        for (Pane& pane : panes) {
+            engine->destroy(pane.view);
+            engine->destroyCameraComponent(pane.cameraEntity);
+            utils::EntityManager::get().destroy(pane.cameraEntity);
+        }
+        engine->destroy(scene);
+        engine->destroy(renderer);
+        engine->destroy(swapChain);
+        filament::Engine::destroy(&engine);
+        return 0;
     }
 
     std::vector<std::uint8_t> pixels(static_cast<std::size_t>(W) * H * 4);
