@@ -346,15 +346,32 @@ void FilamentRenderer::onTexture(const TextureUpdate& update) {
     // placeholder is replaced rather than written into. Both of those uploads are whole-texture,
     // so nothing is lost; a *rect* update that disagreed with the held size would be, and there is
     // no sensible way to honour one, since the bytes for the rest of the atlas never arrive twice.
+    //
+    // A resize is honoured whether or not it carries rects, and the rects are then ignored. The
+    // payload of every texture update is the *whole* image -- the rects say which parts of it
+    // changed, not which parts were sent -- so a resize loses nothing by uploading all of it,
+    // and every texel is new anyway.
+    //
+    // This used to refuse a resize that carried rects, on the reasoning that the bytes for the
+    // rest of the atlas never arrive twice. They arrive every time. What the refusal actually
+    // did was keep the *old* atlas, at the old size, while the producer went on addressing the
+    // new one -- and the glyph atlas always carries a rect, so this fired every time a fetch
+    // found a new script and grew it. Every label in the pane then drew as fragments.
+    bool resized = false;
     if (found != textures_.end() && (found->second->getWidth() != update.width ||
                                      found->second->getHeight() != update.height)) {
-        if (!update.rects.empty()) {
+        // Except when the payload cannot cover the new size, which is the one case where bytes
+        // really would be missing. Keeping what is there beats replacing it with a hole.
+        const std::size_t needed = static_cast<std::size_t>(update.width) * update.height *
+                                   update.pixelSize();
+        if (update.pixelSize() == 0 || needed > update.pixels.size) {
             textureSkipped_++;
             return;
         }
         engine_->destroy(found->second);
         textures_.erase(found);
         found = textures_.end();
+        resized = true;
     }
     if (found == textures_.end()) {
         auto* built = filament::Texture::Builder()
@@ -394,7 +411,7 @@ void FilamentRenderer::onTexture(const TextureUpdate& update) {
         textureUploads_++;
     };
 
-    if (update.rects.empty()) {
+    if (update.rects.empty() || resized) {
         const std::size_t bytes =
             static_cast<std::size_t>(update.width) * update.height * pixel;
         if (bytes <= update.pixels.size) {
