@@ -127,6 +127,12 @@ public:
         return zooms_;
     }
 
+    /// Symbol drawables whose `texsize` did not match the atlas bound for them.
+    ///
+    /// The shader divides by it, so any mismatch is every glyph drawn at the ratio between the
+    /// two -- which reads as text made of fragments rather than as text at the wrong size.
+    [[nodiscard]] std::uint64_t atlasMismatched() const noexcept { return atlasMismatched_; }
+
     /// Drawables skipped because their matrix slot was past the end of the layer's buffer.
     [[nodiscard]] std::uint64_t unplaced() const noexcept { return unplaced_; }
 
@@ -302,6 +308,7 @@ private:
     std::map<std::uint8_t, std::uint64_t> overZooms_;
     std::uint64_t ordered_ = 0;
     std::uint64_t unplaced_ = 0;
+    std::uint64_t atlasMismatched_ = 0;
     std::uint64_t scissored_ = 0;
     std::set<std::pair<std::uint32_t, std::uint32_t>> slotsThisFrame_;
     std::uint64_t sharedSlots_ = 0;

@@ -227,6 +227,8 @@ int main(int argc, char** argv) {
     std::printf("textures %zu\n", map->renderer().textures());
     std::printf("texture_uploads %llu\n", (unsigned long long)map->renderer().textureUploads());
     std::printf("texture_skipped %llu\n", (unsigned long long)map->renderer().textureSkipped());
+    std::printf("atlas_mismatched %llu\n",
+                (unsigned long long)map->renderer().atlasMismatched());
     std::printf("missing_atlas %llu\n", (unsigned long long)map->renderer().missingAtlas());
     std::printf("pitched_labels %llu\n", (unsigned long long)map->renderer().pitchedLabels());
     std::printf("missing_batches %llu\n", (unsigned long long)map->renderer().missing());

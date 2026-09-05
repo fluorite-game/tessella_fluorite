@@ -1672,10 +1672,40 @@ void FilamentRenderer::issue(const Batch& batch) {
                 // drew nothing rather than drawing wrong.
                 const bool isIcon = batch.builtinShader == TSL_BUILTIN_SYMBOL_ICON_SHADER;
                 const float* sheet = isIcon ? block.texsize_icon : block.texsize;
+                // The shader divides its atlas coordinates by this, so it has to be the size of
+                // the texture actually bound. A drawable carrying one size against a texture of
+                // another draws each glyph at the ratio between them -- a magnified corner of
+                // itself, and its neighbour's corners around it.
+                //
+                // Taken from the texture rather than from the block. The two are the same thing
+                // said twice, and the block's copy can be a frame behind: a fetch that finds a
+                // new script hands the map a larger atlas, the upload carries the new size, and
+                // a drawable whose uniforms were not re-sent still names the old one. Every
+                // glyph then draws at the ratio between them -- a magnified corner of itself
+                // with its neighbours' corners around it, which is what the CJK panes showed and
+                // no flat, settled, Latin frame ever could.
+                //
+                // Counted as well as corrected: the staleness is a producer question, and a
+                // consumer that quietly papers over it would make the question unaskable.
+                float atlasWidth = sheet[0];
+                float atlasHeight = sheet[1];
+                if (const auto bound = textures_.find(mesh->second.texture);
+                    bound != textures_.end()) {
+                    const auto realWidth = static_cast<float>(bound->second->getWidth());
+                    const auto realHeight = static_cast<float>(bound->second->getHeight());
+                    // Only where the block made a claim. A drawable with no sheet of its own
+                    // carries zeroes, which is an absence rather than a disagreement.
+                    if (sheet[0] > 0.0f && sheet[1] > 0.0f &&
+                        (realWidth != sheet[0] || realHeight != sheet[1])) {
+                        atlasMismatched_++;
+                    }
+                    atlasWidth = realWidth;
+                    atlasHeight = realHeight;
+                }
                 instance->setParameter(
                     "texsize",
-                    filament::math::float2{sheet[0] > 0.0f ? sheet[0] : 1.0f,
-                                           sheet[1] > 0.0f ? sheet[1] : 1.0f});
+                    filament::math::float2{atlasWidth > 0.0f ? atlasWidth : 1.0f,
+                                           atlasHeight > 0.0f ? atlasHeight : 1.0f});
                 instance->setParameter("isTextProp", block.is_text_prop ? 1.0f : 0.0f);
                 instance->setParameter("rotateSymbol", block.rotate_symbol ? 1.0f : 0.0f);
                 instance->setParameter("pitchWithMap", block.pitch_with_map ? 1.0f : 0.0f);

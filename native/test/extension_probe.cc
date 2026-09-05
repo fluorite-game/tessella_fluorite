@@ -52,6 +52,9 @@ struct City {
     double zoom;
 };
 
+/// Degrees of pitch, matching the quad app.
+constexpr double kPitch = 15.0;
+
 constexpr std::array<City, 4> kCities{{
     {"Seattle", 47.6062, -122.3321, 13.0},
     {"Tokyo", 35.6812, 139.7671, 15.0},
@@ -125,8 +128,10 @@ int main(int argc, char** argv) {
     // Cameras before views, which is the point of holding them: a slot with no
     // camera gets no map, and a slot with one comes up already pointed.
     for (std::uint32_t slot = 0; slot < kCities.size(); slot++) {
+        // Pitched, because the app is: the map-aligned label arrangement is only reached with a
+        // pitch, and it is where the last defects were.
         tessella_fluorite_set_camera(slot, kCities[slot].latitude, kCities[slot].longitude,
-                                     kCities[slot].zoom, 0.0, 0.0);
+                                     kCities[slot].zoom, 0.0, kPitch);
         if (tessella_fluorite_attached(slot) != 0) {
             std::fprintf(stderr, "extension: slot %u attached before its view\n", slot);
             return 1;

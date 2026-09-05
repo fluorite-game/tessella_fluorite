@@ -80,6 +80,8 @@ struct Slot {
   /// The view this slot draws into, kept so the camera can be re-asserted. Not
   /// owned; valid between attach and detach.
   filament::View* view = nullptr;
+  /// Whether the atlas mismatch has already been reported for this slot.
+  bool reportedMismatch = false;
 };
 
 struct State {
@@ -196,6 +198,15 @@ void frame(void* /*user*/, std::uint32_t slot, double delta_s) {
     held.camera.applied = true;
   }
   held.map->tick();
+  // Said once per slot. A `texsize` that disagrees with the atlas bound for it draws every glyph
+  // as a magnified corner of itself, and the only place that has been seen is here -- so the
+  // report is here rather than in a probe that cannot reproduce it.
+  if (!held.reportedMismatch && held.map->renderer().atlasMismatched() > 0) {
+    held.reportedMismatch = true;
+    std::fprintf(stderr, "[tessella_fluorite] slot %u: %llu drawables with a texsize the bound "
+                         "atlas does not match\n",
+                 slot, (unsigned long long)held.map->renderer().atlasMismatched());
+  }
   held.history.record(static_cast<double>(held.map->produceNs()) / 1.0e6,
                       static_cast<double>(held.map->drainNs()) / 1.0e6, delta_s);
 }

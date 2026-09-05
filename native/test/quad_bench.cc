@@ -84,6 +84,9 @@ struct City {
 
 // The same four the quad draws, so the benchmark and the picture are the same
 // scene.
+/// Degrees of pitch the sweep runs at, matching the quad app.
+constexpr double kSweepPitch = 15.0;
+
 constexpr std::array<City, 4> kCities{{
     {"Seattle", 47.6062, -122.3321, 13.0},
     {"Tokyo", 35.6812, 139.7671, 15.0},
@@ -352,6 +355,30 @@ int main(int argc, char** argv) {
     std::printf("bench still.records=%llu\n",
                 (unsigned long long)(panes[0].map->records() - recordsBeforeStill));
 
+    // One frame of a phase, written out. A count of blank frames says how often the screen goes
+    // empty; this says what it looks like when it does not.
+    const auto dumpFrame = [&](const char* path, const int frame) {
+        std::vector<std::uint8_t> shot(static_cast<std::size_t>(W) * H * 4);
+        filament::backend::PixelBufferDescriptor pb(shot.data(), shot.size(),
+                                                    filament::backend::PixelDataFormat::RGBA,
+                                                    filament::backend::PixelDataType::UBYTE);
+        if (renderer->beginFrame(swapChain)) {
+            for (Pane& pane : panes) renderer->render(pane.view);
+            renderer->readPixels(0, 0, W, H, std::move(pb));
+            renderer->endFrame();
+        }
+        engine->flushAndWait();
+        if (std::FILE* ppm = std::fopen(path, "wb")) {
+            std::fprintf(ppm, "P6\n%u %u\n255\n", W, H);
+            for (std::uint32_t y = 0; y < H; y++) {
+                const std::uint8_t* row = shot.data() + (std::size_t)(H - 1 - y) * W * 4;
+                for (std::uint32_t x = 0; x < W; x++) std::fwrite(row + (std::size_t)x * 4, 1, 3, ppm);
+            }
+            std::fclose(ppm);
+            std::printf("dump %s frame %d\n", path, frame);
+        }
+    };
+
     // --- solo: one camera moving ----------------------------------------------
     std::vector<double> soloTick;
     std::vector<double> soloFrame;
@@ -385,6 +412,10 @@ int main(int argc, char** argv) {
         const double turn = 2.0 * M_PI * frame / (frames + warmup);
         for (std::size_t i = 0; i < panes.size(); i++) moveTo(i, turn);
         const double tick = tickAll();
+        if (const char* at = std::getenv("TSF_BENCH_MOTION_DUMP");
+            at != nullptr && frame == std::atoi(at)) {
+            dumpFrame("motion_frame.ppm", frame);
+        }
         const double render = renderFrame();
         if (frame >= warmup) {
             motionTick.push_back(tick);
@@ -465,7 +496,10 @@ int main(int argc, char** argv) {
             } else {
                 zoom = 18.0 + (home - 18.0) * ease((t - 0.80) / 0.20);
             }
-            panes[i].map->setCamera(kCities[i].latitude, kCities[i].longitude, zoom, 0.0, 0.0);
+            // The pitch the app runs at. A flat sweep exercises the viewport label arrangement
+            // and never the map-aligned one, which is where the last two defects were.
+            panes[i].map->setCamera(kCities[i].latitude, kCities[i].longitude, zoom, 0.0,
+                                    kSweepPitch);
             if (i == 0) sweepZoom = zoom;
         }
         const double tick = tickAll();
