@@ -252,8 +252,15 @@ int main(int argc, char** argv) {
         };
         std::vector<std::uint8_t> shot(static_cast<std::size_t>(W) * H * 4);
         const bool traceScissor = std::getenv("TSF_SCISSOR_TRACE") != nullptr;
+        // TSF_EXT_HOLD freezes the camera for the last N frames of the sweep. A settled probe
+        // starts cold and waits for the picture to stop changing, which cannot see instability
+        // that motion *leaves behind*: the fades mid-run, the cross-tile index mid-churn, a cache
+        // holding what the last camera wanted. Holding after a sweep can, because the camera is
+        // identical across the held frames and anything that still differs is ours.
+        const int hold = std::getenv("TSF_EXT_HOLD") ? std::atoi(std::getenv("TSF_EXT_HOLD")) : 0;
+        const int moving = std::max(1, frames - std::max(0, hold));
         for (int frame = 0; frame < frames; frame++) {
-            const double t = static_cast<double>(frame) / frames;
+            const double t = static_cast<double>(std::min(frame, moving)) / frames;
             if (traceScissor) {
                 // The renderer's own trace is per drawable and says nothing about when; this is
                 // what separates one frame's boxes from the next's.
