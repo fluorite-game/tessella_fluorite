@@ -368,6 +368,19 @@ void FilamentRenderer::onTexture(const TextureUpdate& update) {
             textureSkipped_++;
             return;
         }
+        // Every cached material instance goes with it. An instance is kept per (layer, shader,
+        // ubo slot) across frames and a sampler set on it in an earlier frame is never cleared,
+        // so an instance that named this texture goes on naming it after the destroy. It is only
+        // reissued -- and so rebound -- if the same key comes round again; a full re-announce
+        // reshuffles which drawable lands on which key, and the first instance reused for a
+        // drawable that binds no texture draws with a freed handle. That is
+        // "Handle (Texture) is being used after it has been freed", and it is what stopped
+        // `Map::set_fonts` re-announcing against a grown atlas.
+        //
+        // Safe here and nowhere later: `beginFrame` has already destroyed every renderable of the
+        // previous frame, and batches are only issued in `endFrame`, so at this point no instance
+        // is attached to anything. They are a cache; `issue` rebuilds and rebinds what it needs.
+        dropInstances();
         engine_->destroy(found->second);
         textures_.erase(found);
         found = textures_.end();
@@ -556,6 +569,13 @@ FilamentRenderer::~FilamentRenderer() {
         engine_->destroy(texture);
     }
     textures_.clear();
+}
+
+void FilamentRenderer::dropInstances() {
+    for (auto& [key, instance] : instances_) {
+        engine_->destroy(instance);
+    }
+    instances_.clear();
 }
 
 void FilamentRenderer::clearScene() {

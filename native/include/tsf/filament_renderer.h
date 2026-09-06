@@ -237,6 +237,13 @@ private:
     /// One layer's uniform blocks, by slot.
     using Blocks = std::unordered_map<std::uint32_t, std::vector<std::uint8_t>>;
 
+    /// Destroys every cached material instance.
+    ///
+    /// For a texture being replaced: an instance holds the samplers set on it until it is set
+    /// again, so one that named the old texture would draw with a freed handle. See the call
+    /// site for why this is safe only while no renderable exists.
+    void dropInstances();
+
     void clearScene();
 
     /// Turns a wall drawable's instances into ordinary geometry. See the definition for why.
