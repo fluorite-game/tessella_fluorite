@@ -130,11 +130,17 @@ int main(int argc, char** argv) {
 
     // Cameras before views, which is the point of holding them: a slot with no
     // camera gets no map, and a slot with one comes up already pointed.
+    // TSF_EXT_ZOOM overrides every pane's home zoom, so a camera the sweep passes through can be
+    // rendered settled. A sweep frame cannot be compared against the oracle on its own: which
+    // tiles have landed at frame N is a function of how fast the build ran, so two builds put
+    // different zooms of the same ground on the screen. Settled, the cover is the cover.
+    const char* zoomOverride = std::getenv("TSF_EXT_ZOOM");
     for (std::uint32_t slot = 0; slot < kCities.size(); slot++) {
+        const double home = zoomOverride ? std::atof(zoomOverride) : kCities[slot].zoom;
         // Pitched, because the app is: the map-aligned label arrangement is only reached with a
         // pitch, and it is where the last defects were.
-        tessella_fluorite_set_camera(slot, kCities[slot].latitude, kCities[slot].longitude,
-                                     kCities[slot].zoom, 0.0, kPitch);
+        tessella_fluorite_set_camera(slot, kCities[slot].latitude, kCities[slot].longitude, home,
+                                     0.0, kPitch);
         if (tessella_fluorite_attached(slot) != 0) {
             std::fprintf(stderr, "extension: slot %u attached before its view\n", slot);
             return 1;
