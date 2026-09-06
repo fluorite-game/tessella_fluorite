@@ -119,6 +119,10 @@ std::uint64_t now_ns() {
 
 }  // namespace
 
+void Host::advance(double elapsed_millis) {
+    tessella_advance(map_, elapsed_millis);
+}
+
 std::uint64_t Host::tick(Renderer& renderer) {
     // A sentinel, so "this frame carried no order" is distinguishable from "its order was
     // empty". Read back stale, the two look identical and only one of them is a bug.

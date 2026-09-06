@@ -98,6 +98,9 @@ public:
     /// Returns the ring position the renderer has now been shown, to be handed back to `retire`
     /// once the backend is done with those bytes. Cheap when nothing changed: a settled map
     /// publishes nothing and this walks no records.
+    /// Passes the frame's elapsed time to the producer, for the label fades.
+    void advance(double elapsed_millis);
+
     std::uint64_t tick(Renderer& renderer);
 
     /// Releases everything the producer wrote below `upTo`.

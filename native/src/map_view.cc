@@ -76,6 +76,10 @@ bool MapView::setCamera(const double latitude,
   return host_->setCamera(latitude, longitude, zoom, bearing, pitch);
 }
 
+void MapView::advance(double elapsed_millis) {
+  host_->advance(elapsed_millis);
+}
+
 void MapView::tick() {
   const std::uint64_t seen = host_->tick(*renderer_);
   host_->retire(seen);

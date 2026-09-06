@@ -67,6 +67,15 @@ class MapView {
   bool setCamera(double latitude, double longitude, double zoom, double bearing, double pitch);
 
   /// Drains one frame's records into the scene. Call before rendering.
+  /// Tells the map how much time has passed, so its labels can fade.
+  ///
+  /// A map that is never told behaves as a still picture: a fade completes in one
+  /// step, so a label appears and disappears outright. That is what a capture
+  /// wants and what `mbgl-render` does; on a moving map it is what makes a label
+  /// that stops being placed at one anchor and starts at another read as text
+  /// that moved.
+  void advance(double elapsed_millis);
+
   void tick();
 
   /// Tiles asked for and not yet answered, plus an unfinished glyph fetch. Zero
