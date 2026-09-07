@@ -135,7 +135,15 @@ int main(int argc, char** argv) {
     // tiles have landed at frame N is a function of how fast the build ran, so two builds put
     // different zooms of the same ground on the screen. Settled, the cover is the cover.
     const char* zoomOverride = std::getenv("TSF_EXT_ZOOM");
-    for (std::uint32_t slot = 0; slot < kCities.size(); slot++) {
+    // TSF_EXT_PANES limits how many cities are attached. Every map here is created with the same
+    // view id and its geometry ids restart per map, so a record's identity is only unique within
+    // one pane -- which makes a producer line and a consumer line impossible to pair when four are
+    // running. One pane removes the ambiguity outright.
+    const std::size_t paneCount = std::getenv("TSF_EXT_PANES")
+                                      ? std::min<std::size_t>(
+                                            4, std::max(1, std::atoi(std::getenv("TSF_EXT_PANES"))))
+                                      : 4;
+    for (std::uint32_t slot = 0; slot < paneCount; slot++) {
         const double home = zoomOverride ? std::atof(zoomOverride) : kCities[slot].zoom;
         // Pitched, because the app is: the map-aligned label arrangement is only reached with a
         // pitch, and it is where the last defects were.
@@ -165,7 +173,7 @@ int main(int argc, char** argv) {
     };
     std::array<Pane, 4> panes;
 
-    for (std::size_t i = 0; i < panes.size(); i++) {
+    for (std::size_t i = 0; i < paneCount; i++) {
         Pane& pane = panes[i];
         pane.cameraEntity = utils::EntityManager::get().create();
         pane.camera = engine->createCamera(pane.cameraEntity);
@@ -196,11 +204,11 @@ int main(int argc, char** argv) {
                              : 120000;
     const auto renderFrame = [&]() {
         // The order fluorite uses: the extension's per-frame work, then the draw.
-        for (std::size_t i = 0; i < panes.size(); i++) {
+        for (std::size_t i = 0; i < paneCount; i++) {
             g_extension.frame(g_extension.user, static_cast<std::uint32_t>(i), 1.0 / 60.0);
         }
         if (renderer->beginFrame(swapChain)) {
-            for (Pane& pane : panes) renderer->render(pane.view);
+            for (std::size_t i = 0; i < paneCount; i++) renderer->render(panes[i].view);
             renderer->endFrame();
         }
         engine->flushAndWait();
@@ -269,7 +277,7 @@ int main(int argc, char** argv) {
             // The zoom the first pane reached, for the dump line: every pane sweeps the same
             // curve from its own home, so one of them names where in the sweep this frame is.
             double leading = 0.0;
-            for (std::uint32_t slot = 0; slot < kCities.size(); slot++) {
+            for (std::uint32_t slot = 0; slot < paneCount; slot++) {
                 const double home = kCities[slot].zoom;
                 double zoom = home;
                 if (t < 0.33) {
@@ -289,11 +297,11 @@ int main(int argc, char** argv) {
                 filament::backend::PixelBufferDescriptor pb(
                     shot.data(), shot.size(), filament::backend::PixelDataFormat::RGBA,
                     filament::backend::PixelDataType::UBYTE);
-                for (std::size_t i = 0; i < panes.size(); i++) {
+                for (std::size_t i = 0; i < paneCount; i++) {
                     g_extension.frame(g_extension.user, static_cast<std::uint32_t>(i), 1.0 / 60.0);
                 }
                 if (renderer->beginFrame(swapChain)) {
-                    for (Pane& pane : panes) renderer->render(pane.view);
+                    for (std::size_t i = 0; i < paneCount; i++) renderer->render(panes[i].view);
                     renderer->readPixels(0, 0, W, H, std::move(pb));
                     renderer->endFrame();
                 }
@@ -321,7 +329,7 @@ int main(int argc, char** argv) {
             }
             pause_ms(5);
         }
-        for (std::size_t i = 0; i < panes.size(); i++) {
+        for (std::size_t i = 0; i < paneCount; i++) {
             g_extension.detach(g_extension.user, static_cast<std::uint32_t>(i));
         }
         tessella_fluorite_uninstall();
@@ -343,11 +351,11 @@ int main(int argc, char** argv) {
         filament::backend::PixelBufferDescriptor pb(into.data(), into.size(),
                                                     filament::backend::PixelDataFormat::RGBA,
                                                     filament::backend::PixelDataType::UBYTE);
-        for (std::size_t i = 0; i < panes.size(); i++) {
+        for (std::size_t i = 0; i < paneCount; i++) {
             g_extension.frame(g_extension.user, static_cast<std::uint32_t>(i), 1.0 / 60.0);
         }
         if (renderer->beginFrame(swapChain)) {
-            for (Pane& pane : panes) renderer->render(pane.view);
+            for (std::size_t i = 0; i < paneCount; i++) renderer->render(panes[i].view);
             renderer->readPixels(0, 0, W, H, std::move(pb));
             renderer->endFrame();
         }
@@ -396,7 +404,7 @@ int main(int argc, char** argv) {
     }
 
     // And the teardown, which fluorite drives from DestroyView.
-    for (std::size_t i = 0; i < panes.size(); i++) {
+    for (std::size_t i = 0; i < paneCount; i++) {
         g_extension.detach(g_extension.user, static_cast<std::uint32_t>(i));
         if (tessella_fluorite_attached(static_cast<std::uint32_t>(i)) != 0) {
             std::fprintf(stderr, "extension: slot %zu still attached after detach\n", i);

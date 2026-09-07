@@ -95,6 +95,12 @@ std::size_t Reader::drain(FrameSink& sink) {
         __atomic_load_n(reinterpret_cast<const std::uint64_t*>(ring_.data + offsetof(tsl_ring_control, head)),
                         __ATOMIC_ACQUIRE);
 
+    // Where the reader stands against what the producer has published, per drain. A record that
+    // is written and never dispatched and one that is never written look identical from either
+    // side alone; this is the pair of numbers that separates them.
+    static const bool tracing = std::getenv("TSF_WATCH_FADE") != nullptr;
+    const std::uint64_t entryCursor = cursor_;
+
     std::size_t consumed = 0;
     while (cursor_ < head) {
         const std::uint64_t offset = cursor_ & (capacity - 1);
@@ -125,6 +131,12 @@ std::size_t Reader::drain(FrameSink& sink) {
             }
         }
         cursor_ += header.total_len;
+    }
+    if (tracing) {
+        std::fprintf(stderr, "drain cursor=%llu->%llu head=%llu records=%zu\n",
+                     static_cast<unsigned long long>(entryCursor),
+                     static_cast<unsigned long long>(cursor_),
+                     static_cast<unsigned long long>(head), consumed);
     }
     return consumed;
 }

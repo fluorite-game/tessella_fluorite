@@ -1124,9 +1124,20 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
                     distinct++;
                 }
             }
-            std::fprintf(stderr, "recv id=%llu vertices=%u opacity_min=%.3f opacity_max=%.3f levels=%d\n",
-                         static_cast<unsigned long long>(add.id), count,
-                         static_cast<double>(lo) / 127.0, static_cast<double>(hi) / 127.0, distinct);
+            // The reference this attribute names, beside what was read through it. Compared
+            // against the producer's `sent` line for the same geometry, a disagreement in the
+            // reference and a disagreement in the contents are different defects.
+            std::fprintf(stderr,
+                         "recv layer=%u id=%llu slab=%u offset=%u length=%u first=%.3f "
+                         "vertices=%u opacity_min=%.3f opacity_max=%.3f levels=%d\n",
+                         static_cast<unsigned>(layer_),
+                         static_cast<unsigned long long>(add.id),
+                         fade != nullptr ? fade->desc.source.slab : 0u,
+                         fade != nullptr ? fade->desc.source.offset : 0u,
+                         fade != nullptr ? fade->desc.source.length : 0u,
+                         static_cast<double>(static_cast<std::uint8_t>(placed[3]) >> 1) / 127.0,
+                         count, static_cast<double>(lo) / 127.0,
+                         static_cast<double>(hi) / 127.0, distinct);
         }
     }
 
