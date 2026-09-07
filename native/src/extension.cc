@@ -197,11 +197,13 @@ void frame(void* /*user*/, std::uint32_t slot, double delta_s) {
                         held.camera.bearing, held.camera.pitch);
     held.camera.applied = true;
   }
-  // Before the tick, so this frame's fades are stepped by the time this frame took. The
-  // extension is handed the delta already; without passing it on, a fade completes in one step
-  // and a label that moves from one anchor to another along its road switches rather than
-  // crossfading -- which is read as the text flying.
-  held.map->advance(delta_s * 1000.0);
+  // The frame's elapsed time is deliberately *not* passed on yet, and `MapView::advance` is
+  // unused because of it. Running the fades needs the map to emit while one is in flight, and
+  // marking it dirty to that end renders the whole map black -- see `Map::advance`. Until that is
+  // found, a fade completes in one step: labels are drawn at full opacity, which is what
+  // `mbgl-render` does and what every capture compares. Telling the map the time without the
+  // other half leaves every settled frame's text part way through a fade, at about half the
+  // colour the style asks for.
   held.map->tick();
   // Said once per slot. A `texsize` that disagrees with the atlas bound for it draws every glyph
   // as a magnified corner of itself, and the only place that has been seen is here -- so the
