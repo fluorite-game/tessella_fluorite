@@ -76,6 +76,17 @@ bool MapView::setCamera(const double latitude,
   return host_->setCamera(latitude, longitude, zoom, bearing, pitch);
 }
 
+bool MapView::setViewport(const std::uint32_t width, const std::uint32_t height) {
+  if (width == 0 || height == 0) {
+    return false;
+  }
+  // The renderer first: it reads these when it turns a tile's clip-space box
+  // into a scissor rectangle, and the frame the producer emits for the new
+  // viewport is drawn through it.
+  renderer_->setViewportSize(width, height);
+  return host_->setViewport(width, height);
+}
+
 void MapView::advance(double elapsed_millis) {
   host_->advance(elapsed_millis);
 }

@@ -66,6 +66,15 @@ class MapView {
   /// them. Emits nothing when nothing moved.
   bool setCamera(double latitude, double longitude, double zoom, double bearing, double pitch);
 
+  /// Resizes the map in place. The tiles, the style, the atlases and the camera
+  /// are all kept: the viewport is what the cover and every screen-space
+  /// placement are computed from, so a resize is this and a frame.
+  ///
+  /// This is what a platform view's resize should reach, rather than building a
+  /// second map -- which refetches and redecodes every tile on screen and holds
+  /// two of everything while it does.
+  bool setViewport(std::uint32_t width, std::uint32_t height);
+
   /// Drains one frame's records into the scene. Call before rendering.
   /// Tells the map how much time has passed, so its labels can fade.
   ///

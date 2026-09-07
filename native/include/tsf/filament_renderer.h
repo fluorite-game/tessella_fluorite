@@ -95,6 +95,14 @@ public:
     /// overlaps it -- a band across the middle of the map.
     void setFlipY(bool flipY) noexcept { flipY_ = flipY; }
 
+    /// The view's new size. Only the scissor rectangles and `unitsToPixels` read
+    /// it -- both are computed per frame from these, so a resize is these two
+    /// numbers and nothing to rebuild.
+    void setViewportSize(std::uint32_t width, std::uint32_t height) noexcept {
+        width_ = width;
+        height_ = height;
+    }
+
     void beginFrame(std::uint64_t frameNo) override;
     void endFrame(std::uint64_t frameNo) override;
     void onGeometry(const DrawableAdd& add) override;

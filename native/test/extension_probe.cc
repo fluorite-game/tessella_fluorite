@@ -414,6 +414,48 @@ int main(int argc, char** argv) {
         std::printf("wrote 1\n");
     }
 
+    // The resize, which fluorite drives from Allocate when the view was kept.
+    // What is being checked is that the map *survived* it: fluorite used to call
+    // attach a second time here, and attach rebuilds -- so records and frames
+    // would both restart at zero and every tile on screen would be refetched.
+    if (g_extension.resize != nullptr) {
+        tessella_fluorite_stats before{};
+        tessella_fluorite_stats after{};
+        if (tessella_fluorite_stats_of(0, &before) != 0) {
+            std::fprintf(stderr, "extension: no stats before resize\n");
+            return 1;
+        }
+        for (std::size_t i = 0; i < paneCount; i++) {
+            g_extension.resize(g_extension.user, static_cast<std::uint32_t>(i), W / 2, H / 2);
+        }
+        if (tessella_fluorite_attached(0) != 1) {
+            std::fprintf(stderr, "extension: slot 0 lost its map to a resize\n");
+            return 1;
+        }
+        if (tessella_fluorite_stats_of(0, &after) != 0) {
+            std::fprintf(stderr, "extension: no stats after resize\n");
+            return 1;
+        }
+        if (after.records < before.records || after.frames < before.frames) {
+            std::fprintf(stderr,
+                         "extension: the resize rebuilt the map -- records %llu -> %llu, "
+                         "frames %llu -> %llu\n",
+                         (unsigned long long)before.records, (unsigned long long)after.records,
+                         (unsigned long long)before.frames, (unsigned long long)after.frames);
+            return 1;
+        }
+        // And it still draws: a viewport the producer never accepted leaves the
+        // next frame with nothing new to say.
+        renderFrame();
+        tessella_fluorite_stats drawn{};
+        if (tessella_fluorite_stats_of(0, &drawn) != 0 || drawn.frames <= after.frames) {
+            std::fprintf(stderr, "extension: no frame after the resize\n");
+            return 1;
+        }
+        std::printf("resized 4 to %ux%u, records %llu kept\n", W / 2, H / 2,
+                    (unsigned long long)after.records);
+    }
+
     // And the teardown, which fluorite drives from DestroyView.
     for (std::size_t i = 0; i < paneCount; i++) {
         g_extension.detach(g_extension.user, static_cast<std::uint32_t>(i));

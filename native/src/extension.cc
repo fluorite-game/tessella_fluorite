@@ -222,6 +222,25 @@ void frame(void* /*user*/, std::uint32_t slot, double delta_s) {
                       static_cast<double>(held.map->drainNs()) / 1.0e6, delta_s);
 }
 
+void resize(void* /*user*/,
+            std::uint32_t slot,
+            std::uint32_t width,
+            std::uint32_t height) {
+  State& shared = state();
+  const std::lock_guard<std::mutex> lock(shared.mutex);
+  if (slot >= shared.slots.size()) {
+    return;
+  }
+  Slot& held = shared.slots[slot];
+  // No map yet means attach has not built one -- a slot whose camera was never
+  // set, most often. The size it is eventually built at is the current one, so
+  // there is nothing to carry.
+  if (!held.map) {
+    return;
+  }
+  held.map->setViewport(width, height);
+}
+
 void detach(void* /*user*/, std::uint32_t slot) {
   State& shared = state();
   const std::lock_guard<std::mutex> lock(shared.mutex);
@@ -229,8 +248,9 @@ void detach(void* /*user*/, std::uint32_t slot) {
     return;
   }
   // The engine, scene and view this map was built against are about to go, so
-  // the map goes first. The camera stays: a resize detaches and attaches again,
-  // and the view should come back where it was.
+  // the map goes first. The camera stays: it is the slot's, not the view's, and
+  // a view that comes back should come back where it was. A resize no longer
+  // arrives here at all -- the view survives one and `resize` carries it.
   shared.slots[slot].map.reset();
   shared.slots[slot].view = nullptr;
   shared.slots[slot].camera.applied = false;
@@ -269,6 +289,7 @@ extern "C" int32_t tessella_fluorite_install(void) {
       .attach = attach,
       .frame = frame,
       .detach = detach,
+      .resize = resize,
   };
   fluorite_set_view_extension(&extension);
   return 0;

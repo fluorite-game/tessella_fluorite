@@ -108,6 +108,11 @@ bool Host::setCamera(double latitude, double longitude, double zoom, double bear
     return last_ == TESSELLA_OK;
 }
 
+bool Host::setViewport(std::uint32_t width, std::uint32_t height) {
+    last_ = tessella_set_viewport(map_, width, height);
+    return last_ == TESSELLA_OK;
+}
+
 namespace {
 
 std::uint64_t now_ns() {

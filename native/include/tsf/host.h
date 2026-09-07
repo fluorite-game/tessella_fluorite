@@ -93,6 +93,11 @@ public:
     /// Moves the camera. Does not draw.
     bool setCamera(double latitude, double longitude, double zoom, double bearing, double pitch);
 
+    /// Tells the map its viewport changed. The cover, the projection and every
+    /// screen-space placement follow from it, so this is what a resize is; the
+    /// map keeps its tiles and its camera.
+    bool setViewport(std::uint32_t width, std::uint32_t height);
+
     /// Ticks the map and drives `renderer` with whatever it published.
     ///
     /// Returns the ring position the renderer has now been shown, to be handed back to `retire`
