@@ -197,12 +197,19 @@ void frame(void* /*user*/, std::uint32_t slot, double delta_s) {
                         held.camera.bearing, held.camera.pitch);
     held.camera.applied = true;
   }
-  // The frame's elapsed time is deliberately not passed on, and `MapView::advance` is unused
-  // because of it. Running the fades has been tried three times and regressed the picture every
-  // time -- most recently to 26% gross at z14 with the text still at half its colour. The
-  // machinery is right and something downstream of it is not; see `Map::advance` and plan.md.
-  // Without it a fade completes in one step, labels draw at full opacity, and the captures agree
-  // with the oracle.
+  // The frame's elapsed time reaches the producer only when asked for. Running the fades has
+  // been tried three times and regressed the picture every time -- black frames, then text at
+  // half the colour the style asks for, then 26% gross at z14. The machinery is right and
+  // something downstream of it is not, so it is off by default: a fade completes in one step,
+  // labels draw at full opacity, and the captures agree with the oracle.
+  //
+  // TSF_FADES=1 turns it on, which is how the defect is reproduced. Behind a switch rather than
+  // behind an edit, so `TESSELLA_WATCH` can be pointed at a label with the fades running and the
+  // two runs compared without rebuilding anything. See `tessella_orchestrate::watch`.
+  static const bool fades = std::getenv("TSF_FADES") != nullptr;
+  if (fades) {
+    held.map->advance(delta_s * 1000.0);
+  }
   held.map->tick();
   // Said once per slot. A `texsize` that disagrees with the atlas bound for it draws every glyph
   // as a magnified corner of itself, and the only place that has been seen is here -- so the
