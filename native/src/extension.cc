@@ -197,17 +197,15 @@ void frame(void* /*user*/, std::uint32_t slot, double delta_s) {
                         held.camera.bearing, held.camera.pitch);
     held.camera.applied = true;
   }
-  // The frame's elapsed time reaches the producer only when asked for. Running the fades has
-  // been tried three times and regressed the picture every time -- black frames, then text at
-  // half the colour the style asks for, then 26% gross at z14. The machinery is right and
-  // something downstream of it is not, so it is off by default: a fade completes in one step,
-  // labels draw at full opacity, and the captures agree with the oracle.
+  // Before the tick, so this frame's fades are stepped by the time this frame took. Without it a
+  // fade completes in one step and a label that stops being placed at one anchor and starts at
+  // another along the same road switches rather than crossfading.
   //
-  // TSF_FADES=1 turns it on, which is how the defect is reproduced. Behind a switch rather than
-  // behind an edit, so `TESSELLA_WATCH` can be pointed at a label with the fades running and the
-  // two runs compared without rebuilding anything. See `tessella_orchestrate::watch`.
-  static const bool fades = std::getenv("TSF_FADES") != nullptr;
-  if (fades) {
+  // TSF_NO_FADES turns them off, which is what a capture wants: `mbgl-render` runs in static map
+  // mode where `symbolFadeChange` returns one, so instant fades are what a parity comparison is
+  // against, and a settled probe that stops mid-fade reads a label at part of its colour.
+  static const bool noFades = std::getenv("TSF_NO_FADES") != nullptr;
+  if (!noFades) {
     held.map->advance(delta_s * 1000.0);
   }
   held.map->tick();
