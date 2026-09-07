@@ -32,17 +32,26 @@ hooks:
     # with "No platform-view factory registered for view type".
     fluorite:
       ihs_dir: /mnt/dev/ivi-homescreen
+      # Filament 1.75, not the 1.65.4 the emb overlay stages. fluorite's own
+      # sources need it -- GT7 tone mapping, ColorGrading::customLut and the
+      # gpuFrameDuration rename are all past 1.65 -- so a build against the
+      # overlay fails to compile fluorite itself, before reaching anything here.
+      # The staging tree ships a CMake package config, so find_package resolves
+      # it from this prefix.
+      overlay_prefix: /mnt/dev/maplibre-frontend/filament/build/release/staging
     tessella_fluorite:
       # Relative values resolve against the tessella_fluorite package root, not
       # this app -- the hook protocol does not specify a working directory, so
       # the package it belongs to is the only stable anchor.
       tessella_dir: ../tessella
-      # The Filament fluorite actually links, which is the emb overlay's --
-      # filament_DIR (a CMake package config) wins over its own
-      # FILAMENT_INCLUDE_DIR. One Filament in the process, so the extension
-      # compiles against the headers the host linked; a different release
-      # changes Builder::build's constness and the symbols do not resolve.
-      filament_include: /mnt/dev/ihs_filament_view/.config/flutter_workspace/overlay-x86_64-linux-gnu/usr/include/filament
+      # The Filament fluorite actually links. One Filament in the process, so
+      # the extension compiles against the headers the host linked; a different
+      # release changes Builder::build's constness and the symbols do not
+      # resolve -- which is not hypothetical, it is what pointing this at the
+      # overlay while fluorite built against 1.75 produced, as an undefined
+      # `filament::VertexBuffer::Builder::build` at dlopen. Kept in step with
+      # fluorite's overlay_prefix above.
+      filament_include: /mnt/dev/maplibre-frontend/filament/build/release/staging/include
       fluorite_include: ../ihs_filament_view/packages/fluorite/include
       # Linked against, so fluorite's symbols resolve under Dart's loader --
       # which opens each native asset RTLD_LOCAL, leaving nothing in the global
