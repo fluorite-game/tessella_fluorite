@@ -366,6 +366,21 @@ int main(int argc, char** argv) {
     }
     std::printf("image_stable %d\n", rounds < 60 ? 1 : 0);
 
+    // And a few more after it, because "two captures matched" is a weaker stopping rule than it
+    // looks. A label fading in moves by one increment per emitted frame, and the map emits only
+    // while a fade is in flight -- so a round that happens to fall between emits sees two equal
+    // pictures and stops with the fade half done. Cheap insurance: keep capturing until the
+    // picture has held still for several rounds rather than one.
+    for (int settled = 0, extra = 0; settled < 4 && extra < 40; extra++) {
+        previous.swap(pixels);
+        for (int t = 0; t < 20; t++) {
+            renderFrame();
+            pause_ms(5);
+        }
+        capture(pixels);
+        settled = (pixels == previous) ? settled + 1 : 0;
+    }
+
     if (std::FILE* ppm = std::fopen(out, "wb")) {
         std::fprintf(ppm, "P6\n%u %u\n255\n", W, H);
         for (std::uint32_t y = 0; y < H; y++) {

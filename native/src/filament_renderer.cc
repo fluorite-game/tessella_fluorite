@@ -1100,6 +1100,36 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
         }
     }
 
+    // The consumer half of `tessella_orchestrate::watch`: what actually arrived, against what
+    // the producer says it sent. TSF_WATCH_FADE prints the first quad's packed opacity for every
+    // symbol geometry received, decoded the same way the producer packs it -- opacity in the high
+    // seven bits, whether it was placed in the low one.
+    {
+        static const bool watching = std::getenv("TSF_WATCH_FADE") != nullptr;
+        if (watching && placed.size() >= 4) {
+            // The range across the whole buffer, not the first vertex: a buffer whose labels are
+            // at different points of their fades is the expected picture, and one that is
+            // uniformly a single value is a buffer nobody rewrote.
+            std::uint8_t lo = 255;
+            std::uint8_t hi = 0;
+            int distinct = 0;
+            bool seen[128] = {false};
+            for (std::size_t i = 3; i < placed.size(); i += 4) {
+                const auto bits = static_cast<std::uint8_t>(placed[i]);
+                const std::uint8_t level = bits >> 1;
+                lo = level < lo ? level : lo;
+                hi = level > hi ? level : hi;
+                if (level < 128 && !seen[level]) {
+                    seen[level] = true;
+                    distinct++;
+                }
+            }
+            std::fprintf(stderr, "recv id=%llu vertices=%u opacity_min=%.3f opacity_max=%.3f levels=%d\n",
+                         static_cast<unsigned long long>(add.id), count,
+                         static_cast<double>(lo) / 127.0, static_cast<double>(hi) / 127.0, distinct);
+        }
+    }
+
     auto* vertices = filament::VertexBuffer::Builder()
                          .vertexCount(count)
                          .bufferCount(4)
