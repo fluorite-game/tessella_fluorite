@@ -377,6 +377,17 @@ int main(int argc, char** argv) {
         if (pixels == previous) break;
     }
     std::printf("image_stable %d\n", rounds < 60 ? 1 : 0);
+    for (std::size_t i = 0; i < paneCount; i++) {
+        tessella_fluorite_stats stats{};
+        if (tessella_fluorite_stats_of(static_cast<std::uint32_t>(i), &stats) != 0) {
+            continue;
+        }
+        std::printf("pane %zu frames %llu records %llu primitives %llu pending %llu\n", i,
+                    static_cast<unsigned long long>(stats.frames),
+                    static_cast<unsigned long long>(stats.records),
+                    static_cast<unsigned long long>(stats.primitives),
+                    static_cast<unsigned long long>(stats.pending));
+    }
 
     // And a few more after it, because "two captures matched" is a weaker stopping rule than it
     // looks. A label fading in moves by one increment per emitted frame, and the map emits only
