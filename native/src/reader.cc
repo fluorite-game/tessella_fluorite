@@ -77,6 +77,53 @@ std::vector<T> Reader::span(const std::uint8_t* payload,
     return out;
 }
 
+void Reader::join(const Geometry& held, const tsl_view_use& use, FrameSink& sink) {
+        // Joined here. Everything shared comes from the add, everything per-view from the use.
+        DrawableAdd out;
+        out.view = use.view;
+        out.id = use.geometry;
+        out.reason = held.record.reason;
+        out.builtinShader = held.record.builtin_shader;
+        out.permutationKey = held.record.permutation_key;
+        out.vertexCount = held.record.vertex_count;
+        out.vertexType = held.record.vertex_type;
+        out.layerIndex = use.layer_index;
+        out.subLayerIndex = use.sub_layer_index;
+        out.renderPass = use.render_pass;
+        if (use.has_tile != 0) {
+            out.tileID = TileID{use.tile.z, use.tile.x, use.tile.y, use.tile.wrap,
+                                use.tile.overscaled_z};
+        }
+        out.is3D = (use.draw_flags & TSL_DRAW_FLAG_IS_3D) != 0;
+        out.enableStencil = (use.draw_flags & TSL_DRAW_FLAG_ENABLE_STENCIL) != 0;
+        out.enableDepth = (use.draw_flags & TSL_DRAW_FLAG_ENABLE_DEPTH) != 0;
+        out.enableColor = (use.draw_flags & TSL_DRAW_FLAG_ENABLE_COLOR) != 0;
+        out.indexes = resolve(held.record.indexes);
+        out.announcedAt = held.announcedAt;
+
+        // The attribute descriptors live in the *add's* payload, which the ring has since
+        // reused — so they were copied when the add arrived, and each one's buffer is resolved
+        // here. A mirror cannot resolve a slab reference itself: it has the record and not the
+        // region.
+        const auto withData = [&](const std::vector<tsl_attribute_desc>& from) {
+            std::vector<Attribute> out;
+            out.reserve(from.size());
+            for (const auto& desc : from) {
+                out.push_back(Attribute{desc, resolve(desc.source)});
+            }
+            return out;
+        };
+        out.attrs = withData(held.attrs);
+        out.instanceAttrs = withData(held.instanceAttrs);
+        out.segments = held.segments;
+        out.textureRefs.reserve(held.textureRefs.size());
+        for (const auto& ref : held.textureRefs) {
+            out.textureRefs.push_back(TextureBinding{ref.slot, ref.texture, ref.filter});
+        }
+
+    sink.onDrawableAdd(out);
+}
+
 std::size_t Reader::drain(FrameSink& sink) {
     tsl_ring_control control{};
     if (ring_.size < sizeof control) {
@@ -175,6 +222,14 @@ void Reader::dispatch(const tsl_record_header& header,
         held.segments = span<tsl_segment>(payload, payloadLen, add.segments);
         held.textureRefs = span<tsl_texture_ref>(payload, payloadLen, add.texture_refs);
         geometry_[add.geometry] = std::move(held);
+        // A drawable the producer has announced before is being replaced, not introduced: its
+        // vertices carry the camera for a symbol, so a new announcement is the only way its
+        // opacities and along-line positions reach the consumer. The use that joined it the first
+        // time is durable and will not come again, so the join is done here instead.
+        const auto used = uses_.find(add.geometry);
+        if (used != uses_.end()) {
+            join(geometry_[add.geometry], used->second, sink);
+        }
         break;
     }
     case TSL_ENVELOPE_KIND_VIEW_USE: {
@@ -182,6 +237,7 @@ void Reader::dispatch(const tsl_record_header& header,
         if (!read(fixed, header.record_len, use)) {
             return;
         }
+        uses_[use.geometry] = use;
         const auto found = geometry_.find(use.geometry);
         if (found == geometry_.end()) {
             // A use naming an id nothing declared is a protocol fault, and the ABI says so. It
@@ -190,50 +246,7 @@ void Reader::dispatch(const tsl_record_header& header,
             return;
         }
         openFrame();
-        // Joined here. Everything shared comes from the add, everything per-view from the use.
-        DrawableAdd out;
-        out.view = use.view;
-        out.id = use.geometry;
-        out.reason = found->second.record.reason;
-        out.builtinShader = found->second.record.builtin_shader;
-        out.permutationKey = found->second.record.permutation_key;
-        out.vertexCount = found->second.record.vertex_count;
-        out.vertexType = found->second.record.vertex_type;
-        out.layerIndex = use.layer_index;
-        out.subLayerIndex = use.sub_layer_index;
-        out.renderPass = use.render_pass;
-        if (use.has_tile != 0) {
-            out.tileID = TileID{use.tile.z, use.tile.x, use.tile.y, use.tile.wrap,
-                                use.tile.overscaled_z};
-        }
-        out.is3D = (use.draw_flags & TSL_DRAW_FLAG_IS_3D) != 0;
-        out.enableStencil = (use.draw_flags & TSL_DRAW_FLAG_ENABLE_STENCIL) != 0;
-        out.enableDepth = (use.draw_flags & TSL_DRAW_FLAG_ENABLE_DEPTH) != 0;
-        out.enableColor = (use.draw_flags & TSL_DRAW_FLAG_ENABLE_COLOR) != 0;
-        out.indexes = resolve(found->second.record.indexes);
-        out.announcedAt = found->second.announcedAt;
-
-        // The attribute descriptors live in the *add's* payload, which the ring has since
-        // reused — so they were copied when the add arrived, and each one's buffer is resolved
-        // here. A mirror cannot resolve a slab reference itself: it has the record and not the
-        // region.
-        const auto withData = [&](const std::vector<tsl_attribute_desc>& from) {
-            std::vector<Attribute> out;
-            out.reserve(from.size());
-            for (const auto& desc : from) {
-                out.push_back(Attribute{desc, resolve(desc.source)});
-            }
-            return out;
-        };
-        out.attrs = withData(found->second.attrs);
-        out.instanceAttrs = withData(found->second.instanceAttrs);
-        out.segments = found->second.segments;
-        out.textureRefs.reserve(found->second.textureRefs.size());
-        for (const auto& ref : found->second.textureRefs) {
-            out.textureRefs.push_back(TextureBinding{ref.slot, ref.texture, ref.filter});
-        }
-
-        sink.onDrawableAdd(out);
+        join(found->second, use, sink);
         break;
     }
     case TSL_ENVELOPE_KIND_VIEW_RELEASE: {
@@ -242,6 +255,10 @@ void Reader::dispatch(const tsl_record_header& header,
             return;
         }
         openFrame();
+        // The view stops drawing it, so the join that would re-apply a re-announcement stops
+        // too. A displaced drawable is released and announced afresh, and re-joining it against
+        // the use it had before the release would put it back in a view that let it go.
+        uses_.erase(release.geometry);
         DrawableRemove out;
         out.id = release.geometry;
         out.view = release.view;
@@ -255,6 +272,10 @@ void Reader::dispatch(const tsl_record_header& header,
         }
         openFrame();
         geometry_.erase(gone.geometry);
+        // And the use that joined it. A geometry id goes back into circulation once it is
+        // removed, so a use left behind would be joined onto whatever takes the id next --
+        // giving a fresh drawable another one's layer, tile and draw flags.
+        uses_.erase(gone.geometry);
         DrawableRemove out;
         out.id = gone.geometry;
         sink.onDrawableRemove(out);

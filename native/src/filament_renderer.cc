@@ -1209,8 +1209,16 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
 }
 
 void FilamentRenderer::onGeometry(const DrawableAdd& add) {
-
     if (add.vertexCount == 0 || add.indexes.empty()) {
+        // Silent until now, and the one place a delivered record can vanish without a trace: a
+        // geometry whose index reference resolved to nothing looks exactly like one that was
+        // never sent.
+        static const bool tracing = std::getenv("TSF_WATCH_FADE") != nullptr;
+        if (tracing) {
+            std::fprintf(stderr, "drop id=%llu shader=%d vertices=%u indexes=%zu\n",
+                         static_cast<unsigned long long>(add.id), add.builtinShader,
+                         static_cast<unsigned>(add.vertexCount), add.indexes.size);
+        }
         return;
     }
 

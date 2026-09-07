@@ -102,12 +102,26 @@ private:
         std::vector<tsl_texture_ref> textureRefs;
     };
 
+    /// Joins a held geometry with the view that uses it and hands the pair to the sink.
+    ///
+    /// Called from both halves: when the use arrives after the add, and when a re-announced add
+    /// arrives after the use. See `uses_`.
+    void join(const Geometry& held, const tsl_view_use& use, FrameSink& sink);
+
     /// The shared half of every drawable, until a view uses it.
     ///
     /// Kept across frames, not per frame: geometry is announced once and used by any number of
     /// views over any number of frames, which is the whole point of the split. Retired on
     /// `tsl_geometry_remove`.
     std::unordered_map<std::uint64_t, Geometry> geometry_;
+    /// The last `ViewUse` seen for each geometry, so a re-announcement can be re-joined.
+    ///
+    /// A `GeometryAdd` is only half a drawable: everything per-view arrives with the use, and the
+    /// two are joined when the use does. But a use is *durable* -- the producer sends one when a
+    /// drawable enters a view's cover and not again -- so a geometry re-announced afterwards had
+    /// nothing to join it to and was stored and never applied. Keeping the use is what lets the
+    /// second announcement of a drawable reach the sink.
+    std::unordered_map<std::uint64_t, tsl_view_use> uses_;
 
     /// The order awaiting the camera that commits it.
     FrameOrder pending_;
