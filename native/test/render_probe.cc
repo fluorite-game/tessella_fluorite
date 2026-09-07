@@ -229,6 +229,21 @@ int main(int argc, char** argv) {
     std::printf("texture_skipped %llu\n", (unsigned long long)map->renderer().textureSkipped());
     std::printf("atlas_mismatched %llu\n",
                 (unsigned long long)map->renderer().atlasMismatched());
+    // Before anything else is believed. A directory with no usable packages
+    // renders black, and a probe that compares two of its own black frames
+    // reports agreement -- which is how this was missed for a session.
+    {
+        const auto [loaded, rejected] = map->renderer().materialsLoaded();
+        std::printf("materials_loaded %zu rejected %zu\n", loaded, rejected);
+        if (loaded == 0) {
+            std::fprintf(stderr,
+                         "probe: no materials loaded from %s (%zu packages rejected). "
+                         "Compile them for this backend's shader model -- filament resolves "
+                         "Vulkan here as mobile, so matc needs -p desktop -p mobile.\n",
+                         materialDir.c_str(), rejected);
+            return 1;
+        }
+    }
     std::printf("missing_atlas %llu\n", (unsigned long long)map->renderer().missingAtlas());
     std::printf("pitched_labels %llu\n", (unsigned long long)map->renderer().pitchedLabels());
     std::printf("missing_batches %llu\n", (unsigned long long)map->renderer().missing());

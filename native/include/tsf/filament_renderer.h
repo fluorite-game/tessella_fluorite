@@ -95,6 +95,18 @@ public:
     /// overlaps it -- a band across the middle of the map.
     void setFlipY(bool flipY) noexcept { flipY_ = flipY; }
 
+    /// Material packages loaded, and packages found but rejected by Filament.
+    ///
+    /// Zero loaded means nothing can draw, and the reason is almost always that
+    /// the packages were compiled for the wrong shader model: Filament resolves
+    /// Vulkan on this class of GPU as *mobile*, and a `matc -p desktop` package
+    /// is refused with "not built for mobile" on stderr and a null material
+    /// here. The frame then comes out black, which a caller comparing two of
+    /// its own renders will happily report as agreement.
+    [[nodiscard]] std::pair<std::size_t, std::size_t> materialsLoaded() const noexcept {
+        return {materials_.size(), materialsRejected_};
+    }
+
     /// The view's new size. Only the scissor rectangles and `unitsToPixels` read
     /// it -- both are computed per frame from these, so a resize is these two
     /// numbers and nothing to rebuild.
@@ -289,6 +301,7 @@ private:
     filament::Scene* scene_ = nullptr;
 
     std::unordered_map<std::int32_t, filament::Material*> materials_;
+    std::size_t materialsRejected_ = 0;
     std::unordered_map<std::uint64_t, Mesh> meshes_;
     std::unordered_map<std::int32_t, Blocks> uniforms_;
 

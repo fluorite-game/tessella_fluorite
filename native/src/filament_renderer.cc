@@ -268,6 +268,11 @@ FilamentRenderer::FilamentRenderer(filament::Engine* engine,
             filament::Material::Builder().package(package.data(), package.size()).build(*engine_);
         if (material != nullptr) {
             materials_[family] = material;
+        } else {
+            // Filament has already said why on stderr. Counted so a caller can
+            // tell "this directory has no materials" from "these materials were
+            // refused", which are different mistakes with the same black frame.
+            materialsRejected_++;
         }
     }
 
