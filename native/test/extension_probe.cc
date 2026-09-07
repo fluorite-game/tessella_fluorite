@@ -352,6 +352,10 @@ int main(int argc, char** argv) {
             renderer->endFrame();
         }
         engine->flushAndWait();
+        if (std::getenv("TESSELLA_WATCH") != nullptr) {
+            std::printf("capture\n");
+            std::fflush(stdout);
+        }
     };
     capture(pixels);
     int rounds = 0;
