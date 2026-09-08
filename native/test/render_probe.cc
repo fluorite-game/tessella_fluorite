@@ -33,6 +33,21 @@
 
 namespace {
 
+/// How long a tick waits, in milliseconds.
+///
+/// Five by default, which measures the producer as fast as a consumer can drive it. A consumer
+/// locked to a frame clock is a different question and gets a different answer: there, what
+/// costs the user is the *number* of ticks a map takes to fill in, not what each one costs, and
+/// a change that makes ticks cheaper while needing more of them looks like a win at five
+/// milliseconds and a loss at sixteen. `TSF_PROBE_TICK_MS` is how that gets measured rather than
+/// argued about.
+long tick_ms() {
+    static const long ms = std::getenv("TSF_PROBE_TICK_MS")
+                               ? std::atol(std::getenv("TSF_PROBE_TICK_MS"))
+                               : 5;
+    return ms;
+}
+
 void pause_ms(long ms) {
     struct timespec req;
     req.tv_sec = ms / 1000;
@@ -150,8 +165,8 @@ int main(int argc, char** argv) {
         if (map->renderer().primitives() > 0 && map->readiness() == TESSELLA_READY) {
             break;
         }
-        pause_ms(5);
-        waited += 5;
+        pause_ms(tick_ms());
+        waited += tick_ms();
     }
     // Then until the map goes quiet, rather than for a fixed number of ticks.
     //
@@ -190,7 +205,7 @@ int main(int argc, char** argv) {
             held = map->records();
             quiet = 0;
         }
-        pause_ms(5);
+        pause_ms(tick_ms());
     }
     std::printf("quiescent %d\n", quiet >= quietTicks ? 1 : 0);
     std::printf("settle_ticks %d\n", settled);
