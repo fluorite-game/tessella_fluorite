@@ -1,0 +1,95 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The fill family, bent onto a sphere -- plan.md §13.4's consumer half.
+//
+// A separate material rather than a branch in `fill.mat`. The two differ in what a vertex *is*:
+// a Mercator fill's matrix reaches clip space and this one's reaches normalized Mercator, with
+// two more steps after it. A uniform branch would put that fork on every vertex of every flat
+// map ever drawn, to serve a mode most of them never enter, and would leave the Mercator path
+// no longer byte-identical to what the parity sweep passed.
+//
+// # The bend
+//
+// `tile-local -> normalized Mercator -> sphere -> clip`. The first step is `matrix`, which the
+// producer fills with `mercator_matrix_for_tile`; the last is `globeMatrix`, which is
+// `tsl_camera_update.globe_matrix`. What is between them is this file's whole reason to exist,
+// and it transcribes `tessella-tile`'s `globe::sphere_point_from_mercator` -- not a second
+// derivation of it. That module's tests pin the chain end to end on the CPU, so a disagreement
+// here is a transcription error rather than an open question.
+//
+// # The depth bias, and why it arrives in z
+//
+// Coincident layers are separated by a nudge to element 14 of the projection. A globe has no
+// per-drawable projection to fold that into -- `globeMatrix` is one matrix for the whole frame --
+// so the producer parks it in the placement's own `[14]`, which tile geometry never uses. The
+// multiply below therefore carries it out in `merc.z` for free, and it is added to clip z after
+// the bend. Same arithmetic, same place in the pipeline.
+//
+// # Where this stops working
+//
+// `merc` is a position in 0..1 across the whole world in 32-bit float, so one tile unit is
+// `1 / (2^z * 8192)` against an ulp of about 6e-8 near the middle of that range. Measured, not
+// estimated: `the_bends_f32_placement_resolves_a_tile_unit_through_z11` in tessella-tile walks
+// the zooms and finds **z11 the last that resolves a tile unit, and z12 collapsing it to zero**.
+// Below that there is headroom -- 128x at z4, 32x at z6. MapLibre GL JS switches its globe to
+// Mercator around z12, which is the same boundary arrived at from the other side. Past it the
+// bend has to be re-anchored per tile; a wider float is not available, GLSL ES having no double.
+material {
+    name : tessella_fill_globe,
+    shadingModel : unlit,
+    blending : transparent,
+    // The `y` flip in `globe::clip_matrix` reverses triangle winding, so a globe patch wound like
+    // a Mercator one comes out back-facing. `none` rather than a reversed cull: the far side of
+    // the planet is removed by the horizon test, not by a winding rule, and a fill's rings arrive
+    // in whatever order `fixup_polygons` left them.
+    culling : none,
+    parameters : [
+        { type : float4,   name : color },
+        { type : float,    name : opacity },
+        // Tile-local to normalized Mercator, with the depth bias in [3][2].
+        { type : float4x4, name : matrix },
+        // Unit sphere to clip.
+        { type : float4x4, name : globeMatrix }
+    ],
+    requires : [ position ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        // `PI` is Filament's own, from its shader prelude. Declaring one here shadows nothing
+        // and expands to `const float 3.14159...`, which is a syntax error rather than a warning.
+
+        // Tile-local to normalized Mercator. `merc.z` comes out as the depth bias: the input z is
+        // zero, so the only thing reaching it is the matrix's own translation.
+        vec4 merc = materialParams.matrix * vec4(getPosition().xy, 0.0, 1.0);
+
+        // `globe::sphere_point_from_mercator`, transcribed. The clamp is that function's: a tile
+        // edge running off the top of the world lands on the pole instead of diverging.
+        float lon = merc.x * 360.0 - 180.0;
+        float fraction = clamp(merc.y, 0.0, 1.0);
+        // `camera::latitude_of`. Bounded either side -- the exponent's argument runs -PI..PI over
+        // the clamped fraction, so this is exp(-PI)..exp(PI) and cannot overflow.
+        float lat = atan(exp((180.0 - fraction * 360.0) * PI / 180.0)) * 360.0 / PI - 90.0;
+
+        // `globe::sphere_point`, y negated: GL JS's convention, kept because everything downstream
+        // of it there assumes the sign, and `globe::clip_matrix` carries the compensating flip.
+        float latR = lat * PI / 180.0;
+        float lonR = lon * PI / 180.0;
+        vec3 sphere = vec3(cos(latR) * sin(lonR), -sin(latR), cos(latR) * cos(lonR));
+
+        vec4 clip = materialParams.globeMatrix * vec4(sphere, 1.0);
+        // The bias, in clip space before the divide, which is where the Mercator path applies it.
+        clip.z += merc.z;
+        material.worldPosition = clip;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        // Straight alpha, as `fill.mat` writes it and for the same reason: Filament's transparent
+        // mode composites the source already multiplied, so multiplying here as well darkens the
+        // result once per composite.
+        material.baseColor = materialParams.color * materialParams.opacity;
+    }
+}
