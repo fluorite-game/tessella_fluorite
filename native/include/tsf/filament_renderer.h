@@ -310,6 +310,20 @@ private:
 
     /// The grid for `cells` a side, made once and kept.
     MaskGrid maskGrid(std::uint32_t cells);
+
+    /// The globe's depth shell -- an opaque sphere just beneath the surface, which is what stops
+    /// the far side of the planet drawing through the near one. See `globe_shell.mat`.
+    filament::Material* shellMaterial_ = nullptr;
+    filament::MaterialInstance* shellInstance_ = nullptr;
+    filament::VertexBuffer* shellVertices_ = nullptr;
+    filament::IndexBuffer* shellIndices_ = nullptr;
+    std::uint32_t shellIndexCount_ = 0;
+    /// The colour the shell is painted, taken from the last background drawable seen. A tile that
+    /// has not arrived then reads as ocean rather than as a hole through the planet.
+    filament::math::float4 shellColor_{0.0f, 0.0f, 0.0f, 1.0f};
+
+    /// Adds the shell to the scene for this frame, building it on first use.
+    void writeShell();
     std::uint64_t masked_ = 0;
     std::uint64_t glyphsDrawn_ = 0;
     std::uint64_t glyphsHidden_ = 0;

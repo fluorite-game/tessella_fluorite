@@ -285,6 +285,18 @@ FilamentRenderer::FilamentRenderer(filament::Engine* engine,
         }
     }
 
+    // The globe's depth shell.
+    const auto shellPath = std::filesystem::path(materialDir) / "globe_shell.filamat";
+    if (std::filesystem::exists(shellPath, ec)) {
+        std::ifstream file(shellPath, std::ios::binary);
+        const std::vector<std::uint8_t> package((std::istreambuf_iterator<char>(file)),
+                                                std::istreambuf_iterator<char>());
+        if (!package.empty()) {
+            shellMaterial_ =
+                filament::Material::Builder().package(package.data(), package.size()).build(*engine_);
+        }
+    }
+
     // The bent mask, for the same reason the flat one is not a family. Loaded before the flat one
     // so a directory carrying only the flat mask still leaves a globe unmasked rather than masked
     // by a quad that reaches the wrong space.
@@ -582,6 +594,107 @@ FilamentRenderer::MaskGrid FilamentRenderer::maskGrid(const std::uint32_t cells)
     return grid;
 }
 
+/// The globe's depth shell, added to the scene for this frame.
+///
+/// A lat/lon sphere at 96 by 48, which keeps its silhouette within a fraction of a pixel of the
+/// tile geometry's at any zoom. That matters in one direction: the shell sits a thousandth of a
+/// radius *inside* the surface, and a coarser one would poke through and occlude the very content
+/// it exists to let past.
+void FilamentRenderer::writeShell() {
+    if (projection_ != TSL_PROJECTION_MODE_GLOBE || shellMaterial_ == nullptr) {
+        return;
+    }
+    if (shellVertices_ == nullptr) {
+        constexpr int kRings = 48;
+        constexpr int kSegments = 96;
+        std::vector<filament::math::float3> points;
+        points.reserve(static_cast<std::size_t>(kRings + 1) * (kSegments + 1));
+        for (int ring = 0; ring <= kRings; ++ring) {
+            const double phi =
+                M_PI * (static_cast<double>(ring) / kRings - 0.5);
+            for (int seg = 0; seg <= kSegments; ++seg) {
+                const double theta = 2.0 * M_PI * static_cast<double>(seg) / kSegments;
+                // `globe::sphere_point`'s axes, y negated -- the same convention the bend uses, so
+                // the shell and the surface are the same sphere rather than two that nearly agree.
+                points.emplace_back(static_cast<float>(std::cos(phi) * std::sin(theta)),
+                                    static_cast<float>(-std::sin(phi)),
+                                    static_cast<float>(std::cos(phi) * std::cos(theta)));
+            }
+        }
+        std::vector<std::uint16_t> indices;
+        indices.reserve(static_cast<std::size_t>(kRings) * kSegments * 6);
+        const auto at = [](int ring, int seg) {
+            return static_cast<std::uint16_t>(ring * (kSegments + 1) + seg);
+        };
+        for (int ring = 0; ring < kRings; ++ring) {
+            for (int seg = 0; seg < kSegments; ++seg) {
+                for (const std::uint16_t index :
+                     {at(ring, seg), at(ring + 1, seg), at(ring, seg + 1), at(ring, seg + 1),
+                      at(ring + 1, seg), at(ring + 1, seg + 1)}) {
+                    indices.push_back(index);
+                }
+            }
+        }
+        shellIndexCount_ = static_cast<std::uint32_t>(indices.size());
+
+        shellVertices_ = filament::VertexBuffer::Builder()
+                             .vertexCount(static_cast<std::uint32_t>(points.size()))
+                             .bufferCount(1)
+                             .attribute(filament::VertexAttribute::POSITION, 0,
+                                        filament::VertexBuffer::AttributeType::FLOAT3, 0,
+                                        sizeof(filament::math::float3))
+                             .build(*engine_);
+        const std::size_t vertexBytes = points.size() * sizeof(filament::math::float3);
+        auto* vertexCopy = new filament::math::float3[points.size()];
+        std::memcpy(vertexCopy, points.data(), vertexBytes);
+        shellVertices_->setBufferAt(
+            *engine_, 0,
+            filament::VertexBuffer::BufferDescriptor(
+                vertexCopy, vertexBytes, [](void* buffer, std::size_t, void*) {
+                    delete[] static_cast<filament::math::float3*>(buffer);
+                }));
+
+        shellIndices_ = filament::IndexBuffer::Builder()
+                            .indexCount(shellIndexCount_)
+                            .bufferType(filament::IndexBuffer::IndexType::USHORT)
+                            .build(*engine_);
+        const std::size_t indexBytes = indices.size() * sizeof(std::uint16_t);
+        auto* indexCopy = new std::uint16_t[indices.size()];
+        std::memcpy(indexCopy, indices.data(), indexBytes);
+        shellIndices_->setBuffer(
+            *engine_, filament::IndexBuffer::BufferDescriptor(
+                          indexCopy, indexBytes, [](void* buffer, std::size_t, void*) {
+                              delete[] static_cast<std::uint16_t*>(buffer);
+                          }));
+        shellInstance_ = shellMaterial_->createInstance();
+    }
+    if (shellInstance_ == nullptr) {
+        return;
+    }
+    shellInstance_->setParameter("globeMatrix", globeMatrix_);
+    shellInstance_->setParameter("color", shellColor_);
+
+    filament::RenderableManager::Builder builder(1);
+    builder.boundingBox({{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}})
+        .layerMask(0xFF, layer_)
+        .culling(false)
+        // Before every band a map layer uses, which is what "the ground beneath the ground" means.
+        .priority(0)
+        .material(0, shellInstance_)
+        .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES, shellVertices_,
+                  shellIndices_, 0, shellIndexCount_);
+    utils::Entity entity = utils::EntityManager::get().create();
+    if (builder.build(*engine_, entity) != filament::RenderableManager::Builder::Success) {
+        utils::EntityManager::get().destroy(entity);
+        return;
+    }
+    // The shell places itself through `globeMatrix`, so the renderable carries the identity.
+    auto& transforms = engine_->getTransformManager();
+    transforms.setTransform(transforms.getInstance(entity), filament::math::mat4f());
+    scene_->addEntity(entity);
+    entities_.push_back(entity);
+}
+
 void FilamentRenderer::writeMasks() {
     references_.clear();
     if (maskMaterial_ == nullptr || masks_.empty()) {
@@ -711,6 +824,22 @@ FilamentRenderer::~FilamentRenderer() {
         engine_->destroy(grid.indices);
     }
     maskGrids_.clear();
+    if (shellInstance_ != nullptr) {
+        engine_->destroy(shellInstance_);
+        shellInstance_ = nullptr;
+    }
+    if (shellVertices_ != nullptr) {
+        engine_->destroy(shellVertices_);
+        shellVertices_ = nullptr;
+    }
+    if (shellIndices_ != nullptr) {
+        engine_->destroy(shellIndices_);
+        shellIndices_ = nullptr;
+    }
+    if (shellMaterial_ != nullptr) {
+        engine_->destroy(shellMaterial_);
+        shellMaterial_ = nullptr;
+    }
     // Before the engine, like everything else it made.
     for (auto& [id, texture] : textures_) {
         engine_->destroy(texture);
@@ -1512,6 +1641,7 @@ void FilamentRenderer::onBatch(const Batch& batch) {
 
 void FilamentRenderer::endFrame(std::uint64_t) {
     // The clip masks first, so every drawable issued below has a reference to test against.
+    writeShell();
     writeMasks();
     // Reversed: see `pending_`. The producer's order is front-to-back and this pass blends.
     // Reversed in place: `pending_` is cleared below either way, and a `Batch` owns two vectors,
@@ -1697,6 +1827,14 @@ void FilamentRenderer::issue(const Batch& batch) {
                 coloured_++;
                 instance->setParameter(
                     "color", filament::math::float4{colour[0], colour[1], colour[2], colour[3]});
+                // The globe's shell is painted in this, so a tile that has not arrived reads as
+                // ocean rather than as a hole through the planet. Taken from the background
+                // family rather than configured: it is the style's own answer to "what is under
+                // everything", which is exactly what the shell is.
+                if (batch.builtinShader == TSL_BUILTIN_BACKGROUND_SHADER) {
+                    shellColor_ =
+                        filament::math::float4{colour[0], colour[1], colour[2], 1.0f};
+                }
             }
 
             // Opacity is not a property of having a shared colour, and nesting it inside that
@@ -2182,7 +2320,16 @@ void FilamentRenderer::issue(const Batch& batch) {
             // order already puts these layers in the right sequence -- it is what the reversal in
             // `endFrame` is for -- and a flat layer in mbgl neither writes depth nor loses to
             // anything that does.
-            instance->setDepthCulling(false);
+            // Except on a globe, where the far side exists and has to lose. The shell is the only
+            // thing that writes depth there, a whole diameter behind the near surface, so a flat
+            // layer testing against it passes on the hemisphere facing the viewer and fails behind
+            // it. Never writing keeps the reason this is off for a plane intact: layers resolve
+            // against each other by draw order, not by the depth nudge, which translates depth
+            // rather than banding it.
+            instance->setDepthCulling(bent);
+            if (bent) {
+                instance->setDepthWrite(false);
+            }
         }
 
         // An extrusion is not clipped to its tile, in either pass.
@@ -2234,13 +2381,78 @@ void FilamentRenderer::issue(const Batch& batch) {
         // box is what a scissor takes. Exact while the map is north-up; a rotated or pitched view
         // needs the stencil buffer proper, which is why the record exists.
         //
-        // A globe is not scissored. This box comes from pushing the tile's corners through the
-        // drawable's matrix, which is exact only while that matrix reaches clip space and the tile
-        // is a flat rectangle in it. Under a globe it reaches normalized Mercator and the tile is
-        // a curved patch, so four corners neither land in screen space nor bound the bulge between
-        // them. The comment above already says this device is the coarse one and the stencil is
-        // the exact one; a globe simply has neither until the mask is bent.
-        if (!bent) {
+        // A globe scissors too, and has to. This is the device that clips a tile's *overhang* --
+        // the stencil above is for ancestors, and most drawables are not stencil-clipped at all,
+        // so without a box the buffer that hides seams paints straight into the neighbour. That
+        // was the wedges of water lying across the map.
+        //
+        // The box cannot come from four corners through the drawable's matrix, which under a globe
+        // reaches normalized Mercator rather than clip space and describes a curved patch rather
+        // than a rectangle. So it is sampled: the tile's own grid, bent the way the vertex stage
+        // bends it, and the screen box that contains the samples. A bound rather than the bend --
+        // this is the third copy of that arithmetic and the only one that does not have to be
+        // exact, because a box too large clips nothing and a box too small cuts a tile's edge off.
+        // Hence the margin, and hence sampling the interior as well as the border: a bent patch
+        // bulges away from its corners.
+        if (bent) {
+            constexpr int kSamples = 4;
+            float minX = 1e30f, minY = 1e30f, maxX = -1e30f, maxY = -1e30f;
+            bool boundable = true;
+            for (int row = 0; row <= kSamples && boundable; ++row) {
+                for (int column = 0; column <= kSamples; ++column) {
+                    const filament::math::float4 merc =
+                        transform * filament::math::float4{
+                                        8192.0f * static_cast<float>(column) / kSamples,
+                                        8192.0f * static_cast<float>(row) / kSamples, 0.0f, 1.0f};
+                    // `globe::sphere_point_from_mercator`, as `fill_globe.mat` runs it.
+                    constexpr float kPi = 3.14159265358979323846f;
+                    const float lon = merc.x * 360.0f - 180.0f;
+                    const float fraction = std::clamp(merc.y, 0.0f, 1.0f);
+                    const float lat =
+                        std::atan(std::exp((180.0f - fraction * 360.0f) * kPi / 180.0f)) * 360.0f /
+                            kPi -
+                        90.0f;
+                    const float latR = lat * kPi / 180.0f;
+                    const float lonR = lon * kPi / 180.0f;
+                    const filament::math::float4 clip =
+                        globeMatrix_ * filament::math::float4{std::cos(latR) * std::sin(lonR),
+                                                              -std::sin(latR),
+                                                              std::cos(latR) * std::cos(lonR),
+                                                              1.0f};
+                    if (clip.w <= 0.0f) {
+                        boundable = false;
+                        break;
+                    }
+                    minX = std::min(minX, clip.x / clip.w);
+                    maxX = std::max(maxX, clip.x / clip.w);
+                    // The same Y sign the flat box is carried across with, and for the same
+                    // reason: this is the producer's clip space naming a region of the screen.
+                    const float screenY = (flipY_ ? -clip.y : clip.y) / clip.w;
+                    minY = std::min(minY, screenY);
+                    maxY = std::max(maxY, screenY);
+                }
+            }
+            const auto toPixels = [](float ndc, std::uint32_t extent) {
+                return (ndc * 0.5f + 0.5f) * static_cast<float>(extent);
+            };
+            // A pixel each way, for the sampling and for the gap between this bound and the curve
+            // the vertex stage actually draws. Too large clips nothing; too small cuts a tile's
+            // own edge off, which is a seam.
+            const float l = std::max(0.0f, std::floor(toPixels(minX, width_)) - 1.0f);
+            const float b = std::max(0.0f, std::floor(toPixels(minY, height_)) - 1.0f);
+            const float r =
+                std::min(static_cast<float>(width_), std::ceil(toPixels(maxX, width_)) + 1.0f);
+            const float t =
+                std::min(static_cast<float>(height_), std::ceil(toPixels(maxY, height_)) + 1.0f);
+            if (clipped && boundable && r > l && t > b && !noScissor) {
+                instance->setScissor(
+                    static_cast<std::uint32_t>(l), static_cast<std::uint32_t>(b),
+                    static_cast<std::uint32_t>(r - l), static_cast<std::uint32_t>(t - b));
+                scissored_++;
+            } else {
+                instance->unsetScissor();
+            }
+        } else {
             float minX = 1e30f, minY = 1e30f, maxX = -1e30f, maxY = -1e30f;
             const float corners[4][2] = {{0, 0}, {8192, 0}, {8192, 8192}, {0, 8192}};
             // A corner behind the camera has a negative `w`, and dividing by it mirrors that
@@ -2301,12 +2513,6 @@ void FilamentRenderer::issue(const Batch& batch) {
                 // pitched pane mid-zoom.
                 instance->unsetScissor();
             }
-        } else {
-            // Explicitly here too, and for the same reason one zoom further up: the projection is
-            // a runtime toggle, so an instance cached while the map was flat still carries the box
-            // that frame set. Switching to a globe would then draw the planet through a rectangle
-            // cut for a tile on a plane.
-            instance->unsetScissor();
         }
 
         filament::RenderableManager::Builder builder(1);

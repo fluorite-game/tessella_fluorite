@@ -1,0 +1,72 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The globe's depth shell -- what hides the far side of the planet.
+//
+// A flat map needs no depth buffer: layers composite in painter's order and never overlap in
+// depth, which is why `filament_renderer.cc` turns depth testing *off* for every flat family. A
+// sphere has a far side, and with depth off it draws straight through the near one. The symptoms
+// are not subtle once named: an ocean drawn over the continents in front of it at z0, and wedges
+// of water lying across the map at mid zooms -- geometry from beyond the horizon, bent round the
+// back and painted over the hemisphere facing the viewer.
+//
+// This is transcribed from maplibre_fluorite's `map_globe_depth.mat`, which solved the same
+// problem against the same engine and recorded the two fixes that do not work. Both were tried
+// there on screen:
+//
+//   Back-face culling. The far side is back-facing geometry, so this looks free. But a map
+//   material declares `culling : none` for a reason -- tile geometry is authored in tile space and
+//   the tile matrix can flip winding -- so the winding is not consistent and culling eats
+//   correctly-placed triangles.
+//
+//   Letting the background write depth. It is `blending : transparent`, so Filament orders it back
+//   to front by bounding boxes that are in tile space and mean nothing on a sphere. The order is
+//   arbitrary, so the picture depends on it: a whole sphere one frame and half of one the next.
+//
+// So the depth comes from geometry of its own: an opaque shell a thousandth of a radius beneath
+// the surface. Opaque puts it in the pass before every transparent map layer, with no sorting
+// question to get wrong. Map content then only has to *test* depth, never write it -- the near
+// side passes, being nearer than the shell, and the far side fails by a whole diameter, while
+// layers still resolve against each other by draw order, which is what a map wants.
+material {
+    name : tessella_globe_shell,
+    shadingModel : unlit,
+    // The point: the opaque pass runs before anything transparent.
+    blending : opaque,
+    // Both faces. With depth write on and no culling the nearest surface wins anyway, which is
+    // the near hemisphere this exists to be. Culling the back half would be free only if the
+    // winding were guaranteed outward, and getting that wrong is quiet: the shell would write
+    // depth for the far half and the near half would never be occluded.
+    culling : none,
+    depthWrite : true,
+    depthCulling : true,
+    parameters : [
+        // Sphere to clip -- `tsl_camera_update.globe_matrix`, the same matrix the bent families
+        // are drawn through.
+        { type : float4x4, name : globeMatrix },
+        // The style's background colour. The shell is painted as well as depth-written, which
+        // costs nothing and closes a class of artifact: tiles arrive over a network, so a zoom
+        // always has moments with tiles missing, and a missing tile would otherwise leave a hole
+        // straight through the planet. In the background colour the same moment reads as ocean
+        // nothing has been drawn on yet, which is what it is.
+        { type : float4, name : color }
+    ],
+    requires : [ position ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        // Just beneath the surface. Far enough in that the shell never pokes through the tile
+        // geometry it exists to let past -- which would occlude the very content it is for -- and
+        // near enough that nothing on the surface falls behind it.
+        const float kBeneath = 0.999;
+        material.worldPosition =
+            materialParams.globeMatrix * vec4(getPosition().xyz * kBeneath, 1.0);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = materialParams.color;
+    }
+}
