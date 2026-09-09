@@ -1484,6 +1484,88 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
     return true;
 }
 
+/// Uploads a drawable's indices, rebasing them onto the whole vertex buffer where the producer
+/// split them into segments.
+///
+/// Indices are `u16`, so a bucket with more than 65,535 vertices cannot address itself with one
+/// range: the producer splits it, and every segment's indices are relative to that segment's
+/// `vertex_offset`. §12.4 says so and the ABI carries the offsets.
+///
+/// This consumer used to ignore them and draw the whole index buffer as one flat range. For a
+/// single-segment bucket that is right, because the base is zero. For a split one it is not:
+/// segment 1's indices were read as absolute, so its triangles were assembled from the *first*
+/// vertices of the buffer instead of its own. Both halves of that are visible -- the polygons that
+/// should have been drawn are missing, and triangles built from unrelated vertices appear
+/// somewhere else as wedges across the map.
+///
+/// It only bites where a bucket passes 65,535 vertices, which is a dense layer at a low zoom: a
+/// z9 landuse tile here carries 2,274 polygons and 66,972 vertices, 1,477 of them past the split.
+/// At street zoom no bucket comes close, which is why every parity camera missed it.
+///
+/// Rebasing into `u32` rather than issuing one primitive per segment: Filament's geometry call
+/// takes an index range but no base vertex, so a second primitive would need its own vertex
+/// buffer. Widening the indices keeps one buffer, one primitive and one draw. A bucket that needs
+/// no rebasing keeps its `u16` buffer, so nothing that was already correct changes size.
+filament::IndexBuffer* FilamentRenderer::uploadIndices(const DrawableAdd& add) {
+    const auto count = static_cast<std::uint32_t>(add.indexes.size / sizeof(std::uint16_t));
+    const auto* source = reinterpret_cast<const std::uint16_t*>(add.indexes.data);
+    const bool split = std::any_of(add.segments.begin(), add.segments.end(),
+                                   [](const tsl_segment& s) { return s.vertex_offset != 0; });
+    if (!split) {
+        auto* buffer = filament::IndexBuffer::Builder()
+                           .indexCount(count)
+                           .bufferType(filament::IndexBuffer::IndexType::USHORT)
+                           .build(*engine_);
+        if (buffer == nullptr) {
+            return nullptr;
+        }
+        auto* owned = static_cast<std::uint8_t*>(std::malloc(add.indexes.size));
+        if (owned == nullptr) {
+            engine_->destroy(buffer);
+            return nullptr;
+        }
+        std::memcpy(owned, add.indexes.data, add.indexes.size);
+        buffer->setBuffer(*engine_, filament::IndexBuffer::BufferDescriptor(
+                                        owned, add.indexes.size,
+                                        [](void* b, std::size_t, void*) { std::free(b); }));
+        return buffer;
+    }
+
+    auto* widened = static_cast<std::uint32_t*>(std::malloc(count * sizeof(std::uint32_t)));
+    if (widened == nullptr) {
+        return nullptr;
+    }
+    // Copied through unchanged first, so an index outside every segment's range keeps its value
+    // rather than becoming zero. The producer covers the whole buffer, but a consumer that assumed
+    // it did and was wrong would draw a fan from vertex zero, which is the artifact this fixes.
+    for (std::uint32_t i = 0; i < count; ++i) {
+        widened[i] = source[i];
+    }
+    for (const tsl_segment& segment : add.segments) {
+        // In 64 bits: a malformed length must clamp, not wrap past the start of the buffer.
+        const std::uint64_t last = static_cast<std::uint64_t>(segment.index_offset) +
+                                   static_cast<std::uint64_t>(segment.index_length);
+        const auto end = static_cast<std::uint32_t>(std::min<std::uint64_t>(count, last));
+        for (std::uint32_t i = segment.index_offset; i < end; ++i) {
+            widened[i] = static_cast<std::uint32_t>(source[i]) + segment.vertex_offset;
+        }
+    }
+    auto* buffer = filament::IndexBuffer::Builder()
+                       .indexCount(count)
+                       .bufferType(filament::IndexBuffer::IndexType::UINT)
+                       .build(*engine_);
+    if (buffer == nullptr) {
+        std::free(widened);
+        return nullptr;
+    }
+    buffer->setBuffer(*engine_,
+                      filament::IndexBuffer::BufferDescriptor(
+                          widened, count * sizeof(std::uint32_t),
+                          [](void* b, std::size_t, void*) { std::free(b); }));
+    rebased_++;
+    return buffer;
+}
+
 void FilamentRenderer::onGeometry(const DrawableAdd& add) {
     if (add.vertexCount == 0 || add.indexes.empty()) {
         // Silent until now, and the one place a delivered record can vanish without a trace: a
@@ -1569,25 +1651,11 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
     }
 
     const std::uint32_t indexCount = static_cast<std::uint32_t>(add.indexes.size / sizeof(std::uint16_t));
-    auto* indices = filament::IndexBuffer::Builder()
-                        .indexCount(indexCount)
-                        .bufferType(filament::IndexBuffer::IndexType::USHORT)
-                        .build(*engine_);
+    auto* indices = uploadIndices(add);
     if (indices == nullptr) {
         engine_->destroy(vertices);
         return;
     }
-    auto* ownedIndices = static_cast<std::uint8_t*>(std::malloc(add.indexes.size));
-    if (ownedIndices == nullptr) {
-        engine_->destroy(indices);
-        engine_->destroy(vertices);
-        return;
-    }
-    std::memcpy(ownedIndices, add.indexes.data, add.indexes.size);
-    indices->setBuffer(*engine_,
-                       filament::IndexBuffer::BufferDescriptor(
-                           ownedIndices, add.indexes.size,
-                           [](void* buffer, std::size_t, void*) { std::free(buffer); }));
 
     onRetire(add.id);
     meshes_[add.id] = Mesh{vertices, indices, indexCount, add.layerIndex,

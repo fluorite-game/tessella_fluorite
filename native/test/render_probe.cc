@@ -234,6 +234,7 @@ int main(int argc, char** argv) {
         std::printf("scale %.5f %llu\n", scale, (unsigned long long)n);
     }
     std::printf("masked %llu\n", (unsigned long long)map->renderer().masked());
+    std::printf("rebased %llu\n", (unsigned long long)map->renderer().rebased());
     std::printf("glyph_quads_drawn %llu\n", (unsigned long long)map->renderer().glyphsDrawn());
     std::printf("glyph_quads_hidden %llu\n", (unsigned long long)map->renderer().glyphsHidden());
     std::printf("scissored %llu\n", (unsigned long long)map->renderer().scissored());

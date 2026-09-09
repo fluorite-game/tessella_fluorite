@@ -190,6 +190,12 @@ public:
     /// How many clip masks were written this frame.
     [[nodiscard]] std::uint64_t masked() const noexcept { return masked_; }
 
+    /// Buckets whose indices had to be widened to `u32` because the producer split them.
+    ///
+    /// Nonzero means some layer passed 65,535 vertices in one tile, which is the regime the
+    /// segment offsets exist for. Zero at street zoom is expected.
+    [[nodiscard]] std::uint64_t rebased() const noexcept { return rebased_; }
+
     /// Label quads placement kept, and label quads it hid.
     ///
     /// The producer shapes every label a tile holds and hides the ones that lost their space, so
@@ -311,6 +317,9 @@ private:
     /// The grid for `cells` a side, made once and kept.
     MaskGrid maskGrid(std::uint32_t cells);
 
+    /// Uploads a drawable's indices, rebasing a segmented bucket onto its whole vertex buffer.
+    filament::IndexBuffer* uploadIndices(const DrawableAdd& add);
+
     /// The globe's depth shell -- an opaque sphere just beneath the surface, which is what stops
     /// the far side of the planet drawing through the near one. See `globe_shell.mat`.
     filament::Material* shellMaterial_ = nullptr;
@@ -324,6 +333,7 @@ private:
 
     /// Adds the shell to the scene for this frame, building it on first use.
     void writeShell();
+    std::uint64_t rebased_ = 0;
     std::uint64_t masked_ = 0;
     std::uint64_t glyphsDrawn_ = 0;
     std::uint64_t glyphsHidden_ = 0;
