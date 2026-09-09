@@ -119,6 +119,7 @@ public:
     void endFrame(std::uint64_t frameNo) override;
     void onGeometry(const DrawableAdd& add) override;
     void onRetire(std::uint64_t id) override;
+    void onCamera(const tsl_camera_update& camera) override;
     void onBatch(const Batch& batch) override;
 
     /// Builds one batch into the scene. Called from `endFrame`, in painter order.
@@ -301,6 +302,23 @@ private:
     filament::Scene* scene_ = nullptr;
 
     std::unordered_map<std::int32_t, filament::Material*> materials_;
+    /// The same families bent onto a sphere, loaded from `<stem>_globe.filamat`.
+    ///
+    /// A second map rather than a variant inside the first: the two differ in what a vertex *is*
+    /// -- a Mercator drawable's matrix reaches clip space and a globe's reaches normalized
+    /// Mercator -- so they are different materials with different parameters, not one material in
+    /// two moods. A family with no globe package is skipped under a globe rather than drawn flat,
+    /// because a flat layer over a bent one is a worse picture than a missing layer and a much
+    /// harder one to diagnose.
+    std::unordered_map<std::int32_t, filament::Material*> globeMaterials_;
+    /// The projection the current frame's batches draw under.
+    std::int32_t projection_ = TSL_PROJECTION_MODE_MERCATOR;
+    /// Unit sphere to clip, meaningful only under `TSL_PROJECTION_MODE_GLOBE`.
+    filament::math::mat4f globeMatrix_;
+    /// Families asked for under a globe that have no globe package. Named once each, like
+    /// `missingFamilies_`, so "this style has no globe materials" reads differently from "this
+    /// layer kind has none yet".
+    std::vector<std::int32_t> missingGlobeFamilies_;
     std::size_t materialsRejected_ = 0;
     std::unordered_map<std::uint64_t, Mesh> meshes_;
     std::unordered_map<std::int32_t, Blocks> uniforms_;

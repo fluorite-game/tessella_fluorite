@@ -41,6 +41,14 @@ public:
     /// Geometry retired. Whatever was uploaded for it can go.
     virtual void onRetire(std::uint64_t /*id*/) {}
 
+    /// The camera this frame's batches are drawn under.
+    ///
+    /// Arrives before the batches, because it decides which material each of them takes: under
+    /// `TSL_PROJECTION_MODE_GLOBE` a drawable's matrix reaches normalized Mercator rather than clip
+    /// space, and the bend from there is the vertex stage's. A backend that ignores this draws a
+    /// flat map for a producer that asked for a round one, and the producer cannot tell.
+    virtual void onCamera(const tsl_camera_update& /*camera*/) {}
+
     /// A run of drawables to issue as one renderable, in painter order.
     virtual void onBatch(const Batch& /*batch*/) {}
 
@@ -92,6 +100,21 @@ public:
 
     /// Moves the camera. Does not draw.
     bool setCamera(double latitude, double longitude, double zoom, double bearing, double pitch);
+
+    /// Sets the surface the map's tiles are drawn on.
+    ///
+    /// A toggle rather than a mode the map was created in. The producer's whole part is two
+    /// matrices and a flag; the bend from normalized Mercator onto the sphere belongs to the
+    /// renderer's vertex stage, so a `Renderer` that ignores `onCamera` draws a flat map for a
+    /// producer that asked for a round one, and neither side can tell.
+    ///
+    /// A globe almost always wants `TESSELLA_WORLD_COPIES_ONE` alongside it: every wrap of a tile
+    /// bends to the same patch, so a repeated cover draws that patch twice and z-fights with
+    /// itself. Two calls rather than one, because one setting silently moving another is worse.
+    bool setProjection(tessella_projection projection);
+
+    /// Sets how many copies of the world the cover asks for.
+    bool setWorldCopies(tessella_world_copies copies);
 
     /// Tells the map its viewport changed. The cover, the projection and every
     /// screen-space placement follow from it, so this is what a resize is; the

@@ -254,7 +254,16 @@ FilamentRenderer::FilamentRenderer(filament::Engine* engine,
         if (entry.path().extension() != ".filamat") {
             continue;
         }
-        const std::int32_t family = familyOf(entry.path().stem().string());
+        // `<stem>_globe` is the same family bent onto a sphere. Stripped before the lookup so
+        // one table names the families, and filed separately so the two never shadow each other.
+        std::string stem = entry.path().stem().string();
+        const std::string suffix = "_globe";
+        const bool bent = stem.size() > suffix.size()
+                          && stem.compare(stem.size() - suffix.size(), suffix.size(), suffix) == 0;
+        if (bent) {
+            stem.erase(stem.size() - suffix.size());
+        }
+        const std::int32_t family = familyOf(stem);
         if (family == TSL_BUILTIN_NONE) {
             continue;
         }
@@ -267,7 +276,7 @@ FilamentRenderer::FilamentRenderer(filament::Engine* engine,
         auto* material =
             filament::Material::Builder().package(package.data(), package.size()).build(*engine_);
         if (material != nullptr) {
-            materials_[family] = material;
+            (bent ? globeMaterials_ : materials_)[family] = material;
         } else {
             // Filament has already said why on stderr. Counted so a caller can
             // tell "this directory has no materials" from "these materials were
@@ -488,6 +497,22 @@ std::uint8_t FilamentRenderer::referenceFor(const TileID& tile) const {
 void FilamentRenderer::writeMasks() {
     references_.clear();
     if (maskMaterial_ == nullptr || masks_.empty()) {
+        return;
+    }
+    // A globe has no mask yet, and drawing this one would be worse than drawing none. The quad is
+    // four vertices placed by the tile's matrix -- which under a globe reaches normalized Mercator
+    // rather than clip space, so every mask lands in a sliver near the origin and the stencil test
+    // below then clips the whole planet away. Black, which is what it did.
+    //
+    // Bending it needs a subdivided quad, because four corners bent onto a sphere is a flat sheet
+    // through the inside of it. That subdivision is the next piece of work and the mask grid is
+    // consumer-generated, so it can be as fine as it likes -- this lands with it.
+    //
+    // What is given up until then: a parent tile paints its whole extent rather than only where
+    // its children have not covered, and a tile's geometry overhangs into its neighbor by the
+    // buffer that exists to hide seams. Both are visible as double-blended bands at a zoom
+    // transition, and neither is black.
+    if (projection_ == TSL_PROJECTION_MODE_GLOBE) {
         return;
     }
     // The reference is the tile's *zoom*, not a serial number, and the masks are banded by zoom
@@ -1346,6 +1371,24 @@ void FilamentRenderer::onUniforms(const UboUpdate& update) {
     blocks[update.slot].assign(update.bytes.data, update.bytes.data + update.bytes.size);
 }
 
+/// The camera this frame's batches draw under.
+///
+/// Recorded rather than acted on: it arrives before the batches precisely so that each of them can
+/// be issued against the right material. A projection this build does not know is refused back to
+/// Mercator and counted, which draws a flat map -- the honest failure, since the alternative is
+/// reading a matrix for a space nobody here has agreed on.
+void FilamentRenderer::onCamera(const tsl_camera_update& camera) {
+    projection_ = camera.projection == TSL_PROJECTION_MODE_GLOBE ? TSL_PROJECTION_MODE_GLOBE
+                                                                 : TSL_PROJECTION_MODE_MERCATOR;
+    // Element by element, not a memcpy: `globe_matrix` is sixteen doubles on the wire -- f64
+    // because the sphere-to-clip step is composed from a camera distance and two rotations -- and
+    // `mat4f` is sixteen floats. A memcpy would read half the matrix as garbage and still compile.
+    float* out = &globeMatrix_[0][0];
+    for (std::size_t index = 0; index < 16; ++index) {
+        out[index] = static_cast<float>(camera.globe_matrix[index]);
+    }
+}
+
 void FilamentRenderer::onBatch(const Batch& batch) {
     pending_.push_back(batch);
 }
@@ -1418,12 +1461,19 @@ void FilamentRenderer::issue(const Batch& batch) {
         return;
     }
 
-    const auto material = materials_.find(batch.builtinShader);
-    if (material == materials_.end()) {
+    // Which surface this frame draws on decides which material, because the two take a drawable's
+    // matrix to mean different things: clip space on a plane, normalized Mercator on a globe.
+    const bool bent = projection_ == TSL_PROJECTION_MODE_GLOBE;
+    auto& table = bent ? globeMaterials_ : materials_;
+    const auto material = table.find(batch.builtinShader);
+    if (material == table.end()) {
         missing_++;
-        if (std::find(missingFamilies_.begin(), missingFamilies_.end(), batch.builtinShader) ==
-            missingFamilies_.end()) {
-            missingFamilies_.push_back(batch.builtinShader);
+        // A family with no globe package is a different fault from one with no material at all,
+        // and drawing it flat would be worse than not drawing it: a flat layer sitting across a
+        // bent one looks like a geometry bug rather than a missing file.
+        auto& named = bent ? missingGlobeFamilies_ : missingFamilies_;
+        if (std::find(named.begin(), named.end(), batch.builtinShader) == named.end()) {
+            named.push_back(batch.builtinShader);
         }
         return;
     }
@@ -1499,6 +1549,16 @@ void FilamentRenderer::issue(const Batch& batch) {
             made_++;
         }
         auto* instance = found->second;
+
+        // A bent drawable takes both halves of the bend. `transform` is the tile-local to
+        // normalized Mercator placement the producer sent -- the same sixteen floats a Mercator
+        // drawable would have used as its tile-to-clip matrix -- and `globeMatrix` is the frame's
+        // sphere-to-clip. Every material in `globeMaterials_` declares both, which is why this is
+        // unconditional here rather than per family.
+        if (bent) {
+            instance->setParameter("matrix", transform);
+            instance->setParameter("globeMatrix", globeMatrix_);
+        }
 
         if (const auto props = layer->second.find(kPropsSlot);
             props != layer->second.end() &&
@@ -2036,7 +2096,9 @@ void FilamentRenderer::issue(const Batch& batch) {
         if (clipped && reference == 0) {
             unmasked_++;
         }
-        if (reference != 0 && !noStencil) {
+        // Nothing wrote the stencil under a globe (see `writeMasks`), so a drawable testing
+        // equal to its own reference fails everywhere and draws nothing.
+        if (reference != 0 && !noStencil && !bent) {
             instance->setStencilWrite(false);
             instance->setStencilReferenceValue(impossibleRef ? 200 : reference);
             instance->setStencilCompareFunction(filament::MaterialInstance::StencilCompareFunc::E);
@@ -2056,7 +2118,14 @@ void FilamentRenderer::issue(const Batch& batch) {
         // because the matrix already says where the tile's 0..8192 box lands and a screen-space
         // box is what a scissor takes. Exact while the map is north-up; a rotated or pitched view
         // needs the stencil buffer proper, which is why the record exists.
-        {
+        //
+        // A globe is not scissored. This box comes from pushing the tile's corners through the
+        // drawable's matrix, which is exact only while that matrix reaches clip space and the tile
+        // is a flat rectangle in it. Under a globe it reaches normalized Mercator and the tile is
+        // a curved patch, so four corners neither land in screen space nor bound the bulge between
+        // them. The comment above already says this device is the coarse one and the stencil is
+        // the exact one; a globe simply has neither until the mask is bent.
+        if (!bent) {
             float minX = 1e30f, minY = 1e30f, maxX = -1e30f, maxY = -1e30f;
             const float corners[4][2] = {{0, 0}, {8192, 0}, {8192, 8192}, {0, 8192}};
             // A corner behind the camera has a negative `w`, and dividing by it mirrors that
@@ -2117,6 +2186,12 @@ void FilamentRenderer::issue(const Batch& batch) {
                 // pitched pane mid-zoom.
                 instance->unsetScissor();
             }
+        } else {
+            // Explicitly here too, and for the same reason one zoom further up: the projection is
+            // a runtime toggle, so an instance cached while the map was flat still carries the box
+            // that frame set. Switching to a globe would then draw the planet through a rectangle
+            // cut for a tile on a plane.
+            instance->unsetScissor();
         }
 
         filament::RenderableManager::Builder builder(1);
@@ -2161,7 +2236,9 @@ void FilamentRenderer::issue(const Batch& batch) {
         // A line places itself: it must extrude in tile units before the tile-to-clip transform,
         // so it takes the matrix as a parameter and its renderable carries the identity. Everything
         // else lets Filament apply the transform, which is cheaper and needs no vertex hook.
-        const bool placesItself = patternPlaces(batch.builtinShader) ||
+        // A bent drawable always places itself: its matrix reaches normalized Mercator, which is
+        // not a space Filament's transform could take it the rest of the way from.
+        const bool placesItself = bent || patternPlaces(batch.builtinShader) ||
                                   batch.builtinShader == TSL_BUILTIN_RASTER_SHADER ||
                                   batch.builtinShader == TSL_BUILTIN_SYMBOL_ICON_SHADER ||
                                   batch.builtinShader == TSL_BUILTIN_SYMBOL_SDFSHADER ||

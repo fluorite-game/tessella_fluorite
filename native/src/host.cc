@@ -61,6 +61,8 @@ public:
             }
             return;
         }
+        // Before the batches: the projection decides which material each of them takes.
+        renderer_.onCamera(*order.camera);
         const std::vector<Batch> batches = drawlist_.build(order);
         if (orphaned_ != nullptr) {
             orphaned_[1] = order.entries.size();
@@ -105,6 +107,16 @@ Host::~Host() {
 
 bool Host::setCamera(double latitude, double longitude, double zoom, double bearing, double pitch) {
     last_ = tessella_set_camera(map_, latitude, longitude, zoom, bearing, pitch);
+    return last_ == TESSELLA_OK;
+}
+
+bool Host::setProjection(tessella_projection projection) {
+    last_ = tessella_set_projection(map_, projection);
+    return last_ == TESSELLA_OK;
+}
+
+bool Host::setWorldCopies(tessella_world_copies copies) {
+    last_ = tessella_set_world_copies(map_, copies);
     return last_ == TESSELLA_OK;
 }
 

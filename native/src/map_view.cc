@@ -2,6 +2,8 @@
 
 #include <tsf/map_view.h>
 
+#include <cstdlib>
+
 #include <filament/Camera.h>
 
 namespace tsf {
@@ -54,6 +56,15 @@ std::unique_ptr<MapView> MapView::create(filament::Engine* engine,
   std::unique_ptr<Host> host = Host::create(config, latitude, longitude, zoom, error);
   if (!host) {
     return nullptr;
+  }
+  // A globe, if the environment asks for one. An env knob rather than a `create` parameter for
+  // the reason `TSF_NO_FADES` and `TSF_NO_STENCIL` are: this is how a behavior is turned on for
+  // a probe or a bug report without every caller having to carry an argument it does not use.
+  // One world copy goes with it -- every wrap of a tile bends to the same patch, so a repeated
+  // cover draws that patch twice and z-fights with itself.
+  if (std::getenv("TSF_GLOBE") != nullptr) {
+    host->setProjection(TESSELLA_PROJECTION_GLOBE);
+    host->setWorldCopies(TESSELLA_WORLD_COPIES_ONE);
   }
   return std::unique_ptr<MapView>(new MapView(std::move(renderer), std::move(host)));
 }
