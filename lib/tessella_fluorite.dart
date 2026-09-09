@@ -140,6 +140,19 @@ MapReadiness _readinessOf(final int value) => switch (value) {
 ///
 /// Static because the native side is: one style and one extension per process,
 /// which is what fluorite's `fluorite_set_view_extension` takes.
+/// The surface a map's tiles are drawn on.
+///
+/// The producer's whole part in a globe is two matrices and a flag; the bend from normalized
+/// Mercator onto the sphere is the renderer's vertex stage. Indices are the wire's, so the order
+/// here is protocol rather than taste.
+enum MapProjection {
+  /// A plane. The default, and correct at every zoom.
+  mercator,
+
+  /// A sphere. Correct below zoom eleven -- see [TessellaMaps.setProjection].
+  globe,
+}
+
 abstract final class TessellaMaps {
   /// Slots with a Filament layer of their own. Layer 0 is the ECS content.
   static const int maxSlots = 7;
@@ -197,6 +210,20 @@ abstract final class TessellaMaps {
 
   /// Tiles asked for and not yet answered on this slot, plus an unfinished
   /// glyph fetch. Zero and [attached] means the view has settled.
+  /// Sets the surface a slot's map draws its tiles on.
+  ///
+  /// Held until the slot's map exists, as a camera is, so it can be set before the platform view
+  /// attaches. [MapProjection.globe] also asks the cover for one copy of the world -- every wrap
+  /// of a tile bends to the same patch, so a repeated cover draws that patch twice.
+  ///
+  /// A globe is only correct below zoom eleven. The bend is computed in 32-bit float over a
+  /// position in `0..1` across the whole world, and at z12 one tile unit is smaller than that
+  /// number can express, so geometry quantizes. Above it a map should be [MapProjection.mercator].
+  static void setProjection(int slot, MapProjection projection) {
+    _checkSlot(slot);
+    ffi.tessella_fluorite_set_projection(slot, projection.index);
+  }
+
   static int pending(int slot) {
     _checkSlot(slot);
     return ffi.tessella_fluorite_pending(slot);

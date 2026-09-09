@@ -293,6 +293,23 @@ private:
     std::vector<filament::MaterialInstance*> maskInstances_;
     filament::VertexBuffer* maskVertices_ = nullptr;
     filament::IndexBuffer* maskIndices_ = nullptr;
+    /// The bent mask, and the subdivided quads it runs on.
+    ///
+    /// A globe's mask cannot be the flat one's four corners: bent, four corners are a sheet
+    /// through the inside of the planet, and a stencil cut from that clips the wrong region. So a
+    /// grid, and one per cell count rather than one overall -- the grid has to match the one the
+    /// producer split that tile's *fills* against, or the mask cuts a sliver off every tile edge
+    /// or leaves one. Keyed by cell count, which is a small set: one to forty-one.
+    filament::Material* maskGlobeMaterial_ = nullptr;
+    struct MaskGrid {
+        filament::VertexBuffer* vertices = nullptr;
+        filament::IndexBuffer* indices = nullptr;
+        std::uint32_t index_count = 0;
+    };
+    std::unordered_map<std::uint32_t, MaskGrid> maskGrids_;
+
+    /// The grid for `cells` a side, made once and kept.
+    MaskGrid maskGrid(std::uint32_t cells);
     std::uint64_t masked_ = 0;
     std::uint64_t glyphsDrawn_ = 0;
     std::uint64_t glyphsHidden_ = 0;

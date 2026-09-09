@@ -61,6 +61,15 @@ TSF_API void tessella_fluorite_set_camera(uint32_t slot,
 /// Tiles asked for and not yet answered on this slot, plus an unfinished glyph
 /// fetch. Zero with a live map means it has settled; zero with no map means
 /// there is nothing there.
+/// Sets the surface a slot's map draws its tiles on.
+///
+/// `mode` is a `tessella_projection`. Held until the slot's map exists, as a camera is, so a
+/// caller can configure a pane before its platform view attaches. A globe also asks the cover for
+/// one copy of the world, since every wrap of a tile bends to the same patch.
+///
+/// Anything this build does not recognize is the plane.
+TSF_API void tessella_fluorite_set_projection(uint32_t slot, int32_t mode);
+
 TSF_API uint64_t tessella_fluorite_pending(uint32_t slot);
 
 /// Whether slot `slot` has a map attached.

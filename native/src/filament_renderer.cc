@@ -285,6 +285,21 @@ FilamentRenderer::FilamentRenderer(filament::Engine* engine,
         }
     }
 
+    // The bent mask, for the same reason the flat one is not a family. Loaded before the flat one
+    // so a directory carrying only the flat mask still leaves a globe unmasked rather than masked
+    // by a quad that reaches the wrong space.
+    const auto globeMaskPath = std::filesystem::path(materialDir) / "mask_globe.filamat";
+    if (std::filesystem::exists(globeMaskPath, ec)) {
+        std::ifstream file(globeMaskPath, std::ios::binary);
+        const std::vector<std::uint8_t> package((std::istreambuf_iterator<char>(file)),
+                                                std::istreambuf_iterator<char>());
+        if (!package.empty()) {
+            maskGlobeMaterial_ = filament::Material::Builder()
+                                     .package(package.data(), package.size())
+                                     .build(*engine_);
+        }
+    }
+
     // The mask material is not a family: it draws the clip quads and writes only the stencil.
     const auto maskPath = std::filesystem::path(materialDir) / "mask.filamat";
     if (std::filesystem::exists(maskPath, ec)) {
@@ -494,27 +509,103 @@ std::uint8_t FilamentRenderer::referenceFor(const TileID& tile) const {
     return found == references_.end() ? 0 : found->second;
 }
 
+/// One subdivided unit quad, for a mask bent onto a sphere.
+///
+/// `cells` a side, in the tile's own 0..8192 units, wound as `mask.mat`'s four corners are. Made
+/// once per count and kept: the counts a cover asks for are a handful, and a grid rebuilt per
+/// frame would be the largest allocation the mask pass makes.
+FilamentRenderer::MaskGrid FilamentRenderer::maskGrid(const std::uint32_t cells) {
+    if (const auto found = maskGrids_.find(cells); found != maskGrids_.end()) {
+        return found->second;
+    }
+    const std::uint32_t side = cells + 1;
+    std::vector<std::int16_t> points;
+    points.reserve(static_cast<std::size_t>(side) * side * 2);
+    for (std::uint32_t row = 0; row < side; ++row) {
+        for (std::uint32_t column = 0; column < side; ++column) {
+            // From the exact fraction, so the last row and column land on the tile's edge rather
+            // than short of it. A gap there is a seam the neighbouring mask does not cover.
+            const auto at = [&](std::uint32_t n) {
+                return static_cast<std::int16_t>((static_cast<std::int64_t>(n) * 8192) / cells);
+            };
+            points.push_back(at(column));
+            points.push_back(at(row));
+        }
+    }
+    std::vector<std::uint16_t> indices;
+    indices.reserve(static_cast<std::size_t>(cells) * cells * 6);
+    for (std::uint32_t row = 0; row < cells; ++row) {
+        for (std::uint32_t column = 0; column < cells; ++column) {
+            const auto corner = static_cast<std::uint16_t>(row * side + column);
+            const auto below = static_cast<std::uint16_t>(corner + side);
+            for (const std::uint16_t index :
+                 {corner, static_cast<std::uint16_t>(corner + 1), below,
+                  static_cast<std::uint16_t>(corner + 1), below,
+                  static_cast<std::uint16_t>(below + 1)}) {
+                indices.push_back(index);
+            }
+        }
+    }
+
+    MaskGrid grid{};
+    grid.index_count = static_cast<std::uint32_t>(indices.size());
+    grid.vertices = filament::VertexBuffer::Builder()
+                        .vertexCount(static_cast<std::uint32_t>(points.size() / 2))
+                        .bufferCount(1)
+                        .attribute(filament::VertexAttribute::POSITION, 0,
+                                   filament::VertexBuffer::AttributeType::SHORT2, 0,
+                                   sizeof(std::int16_t) * 2)
+                        .build(*engine_);
+    const std::size_t vertexBytes = points.size() * sizeof(std::int16_t);
+    auto* vertexCopy = new std::int16_t[points.size()];
+    std::memcpy(vertexCopy, points.data(), vertexBytes);
+    grid.vertices->setBufferAt(
+        *engine_, 0,
+        filament::VertexBuffer::BufferDescriptor(
+            vertexCopy, vertexBytes,
+            [](void* buffer, std::size_t, void*) { delete[] static_cast<std::int16_t*>(buffer); }));
+
+    grid.indices = filament::IndexBuffer::Builder()
+                       .indexCount(grid.index_count)
+                       .bufferType(filament::IndexBuffer::IndexType::USHORT)
+                       .build(*engine_);
+    const std::size_t indexBytes = indices.size() * sizeof(std::uint16_t);
+    auto* indexCopy = new std::uint16_t[indices.size()];
+    std::memcpy(indexCopy, indices.data(), indexBytes);
+    grid.indices->setBuffer(
+        *engine_, filament::IndexBuffer::BufferDescriptor(
+                      indexCopy, indexBytes, [](void* buffer, std::size_t, void*) {
+                          delete[] static_cast<std::uint16_t*>(buffer);
+                      }));
+
+    maskGrids_.emplace(cells, grid);
+    return grid;
+}
+
 void FilamentRenderer::writeMasks() {
     references_.clear();
     if (maskMaterial_ == nullptr || masks_.empty()) {
         return;
     }
-    // A globe has no mask yet, and drawing this one would be worse than drawing none. The quad is
-    // four vertices placed by the tile's matrix -- which under a globe reaches normalized Mercator
-    // rather than clip space, so every mask lands in a sliver near the origin and the stencil test
-    // below then clips the whole planet away. Black, which is what it did.
+    // A globe masks with its own material over its own grid. Four corners bent onto a sphere is a
+    // flat sheet through the inside of it, and a stencil cut from that clips the wrong region --
+    // which is why this used to bail out here and leave a globe unmasked.
     //
-    // Bending it needs a subdivided quad, because four corners bent onto a sphere is a flat sheet
-    // through the inside of it. That subdivision is the next piece of work and the mask grid is
-    // consumer-generated, so it can be as fine as it likes -- this lands with it.
-    //
-    // What is given up until then: a parent tile paints its whole extent rather than only where
-    // its children have not covered, and a tile's geometry overhangs into its neighbor by the
-    // buffer that exists to hide seams. Both are visible as double-blended bands at a zoom
-    // transition, and neither is black.
-    if (projection_ == TSL_PROJECTION_MODE_GLOBE) {
+    // Unmasked was worse than it sounded. MVT geometry runs past its tile's edge into the buffer
+    // that hides seams, and with neither this nor the bounding-box scissor (meaningless on a
+    // curved patch) nothing stopped the overhang painting into the neighbor: wedges of water
+    // lying across the map. Not a bend artifact -- switching the stencil and scissor off on a
+    // *flat* map draws the same wedges at the same camera, which is what identified it.
+    const bool bent = projection_ == TSL_PROJECTION_MODE_GLOBE;
+    if (bent && maskGlobeMaterial_ == nullptr) {
         return;
     }
+    // One grid for every globe mask, at least as fine as the producer's finest -- forty-one cells
+    // a side at z0, from `subdivide::step_for_level`. Finer is safe and coarser is not: the mask
+    // has to follow the surface at least as closely as the fills it clips, or it cuts a sliver off
+    // every tile edge. Not read from the tile's zoom, because duplicating that arithmetic here is
+    // how the two drift; over-subdividing costs a stencil-only pass some triangles.
+    constexpr std::uint32_t kGlobeMaskCells = 48;
     // The reference is the tile's *zoom*, not a serial number, and the masks are banded by zoom
     // so the coarse ones are drawn first. Iteration order alone is not enough: Filament orders
     // within a priority band as it likes, so nine masks all at priority zero land in an order
@@ -542,7 +633,7 @@ void FilamentRenderer::writeMasks() {
         const auto band = static_cast<std::uint8_t>(
             std::min<int>(3, static_cast<int>(tile.overscaled_z) - coarsest));
 
-        auto* instance = maskMaterial_->createInstance();
+        auto* instance = (bent ? maskGlobeMaterial_ : maskMaterial_)->createInstance();
         maskInstances_.push_back(instance);
         instance->setColorWrite(std::getenv("TSF_SHOW_MASKS") != nullptr);
         // Each mask painted by its own reference, so the stencil's layout can be looked at.
@@ -556,14 +647,22 @@ void FilamentRenderer::writeMasks() {
         instance->setStencilCompareFunction(filament::MaterialInstance::StencilCompareFunc::A);
         instance->setStencilOpDepthStencilPass(filament::MaterialInstance::StencilOperation::REPLACE);
 
+        // The bend, from the same two matrices the geometry it clips is drawn through.
+        const MaskGrid grid = bent ? maskGrid(kGlobeMaskCells) : MaskGrid{};
+        if (bent) {
+            instance->setParameter("matrix", matrix);
+            instance->setParameter("globeMatrix", globeMatrix_);
+        }
+
         filament::RenderableManager::Builder builder(1);
         builder.boundingBox({{0, 0, 0}, {8192, 8192, 8192}})
             .layerMask(0xFF, layer_)
             .culling(false)
             .priority(band)
             .material(0, instance)
-            .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES, maskVertices_,
-                      maskIndices_, 0, 6);
+            .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                      bent ? grid.vertices : maskVertices_, bent ? grid.indices : maskIndices_, 0,
+                      bent ? grid.index_count : 6);
         utils::Entity entity = utils::EntityManager::get().create();
         // A mask that failed to build is an entity with no renderable on it: adding it to the
         // scene draws nothing and leaves a destroy to do at teardown. Returned instead, and the
@@ -574,7 +673,10 @@ void FilamentRenderer::writeMasks() {
             continue;
         }
         auto& transforms = engine_->getTransformManager();
-        transforms.setTransform(transforms.getInstance(entity), matrix);
+        // A bent mask places itself through the material, as every bent drawable does: its matrix
+        // reaches normalized Mercator, which Filament's transform could not take it on from.
+        transforms.setTransform(transforms.getInstance(entity),
+                                bent ? filament::math::mat4f() : matrix);
         scene_->addEntity(entity);
         entities_.push_back(entity);
         masked_++;
@@ -594,6 +696,21 @@ FilamentRenderer::~FilamentRenderer() {
     for (auto& [family, material] : materials_) {
         engine_->destroy(material);
     }
+    // The globe's tables, which the flat path never touches and which were leaking a material per
+    // family and a buffer pair per grid for the life of the process.
+    for (auto& [family, material] : globeMaterials_) {
+        engine_->destroy(material);
+    }
+    globeMaterials_.clear();
+    if (maskGlobeMaterial_ != nullptr) {
+        engine_->destroy(maskGlobeMaterial_);
+        maskGlobeMaterial_ = nullptr;
+    }
+    for (auto& [cells, grid] : maskGrids_) {
+        engine_->destroy(grid.vertices);
+        engine_->destroy(grid.indices);
+    }
+    maskGrids_.clear();
     // Before the engine, like everything else it made.
     for (auto& [id, texture] : textures_) {
         engine_->destroy(texture);
@@ -2096,9 +2213,7 @@ void FilamentRenderer::issue(const Batch& batch) {
         if (clipped && reference == 0) {
             unmasked_++;
         }
-        // Nothing wrote the stencil under a globe (see `writeMasks`), so a drawable testing
-        // equal to its own reference fails everywhere and draws nothing.
-        if (reference != 0 && !noStencil && !bent) {
+        if (reference != 0 && !noStencil) {
             instance->setStencilWrite(false);
             instance->setStencilReferenceValue(impossibleRef ? 200 : reference);
             instance->setStencilCompareFunction(filament::MaterialInstance::StencilCompareFunc::E);

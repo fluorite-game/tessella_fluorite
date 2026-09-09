@@ -1,0 +1,73 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The clip mask, bent onto a sphere.
+//
+// Same job as `mask.mat` -- write the stencil and nothing else -- and it exists because a globe
+// needs the clip more than a plane does, not less. MVT geometry runs past its tile's edge by
+// design, into the buffer that hides seams, and something has to stop that overhang painting into
+// the neighbour. On a plane a bounding-box scissor does most of it and the stencil refines it;
+// under a globe the box is meaningless (the tile is a curved patch and the matrix reaches
+// normalized Mercator), so the stencil is the only device left.
+//
+// Drawn without one, a globe shows the overhang as wedges of water lying across its neighbours --
+// which is not a bend artifact: switching the stencil and scissor off on a *flat* map produces the
+// same wedges at the same camera.
+//
+// # The bend is the fill's, verbatim
+//
+// A mask that traced a slightly different curve from the geometry it clips would cut a sliver off
+// every tile edge, or leave one. So this is a copy of `fill_globe.mat`'s vertex stage rather than
+// a second derivation of it -- and the quad it runs on is subdivided by the consumer to the same
+// grid the producer split that tile's fills against.
+material {
+    name : tessella_mask_globe,
+    shadingModel : unlit,
+    blending : opaque,
+    culling : none,
+    parameters : [
+        { type : float4,   name : color },
+        { type : float,    name : opacity },
+        // Tile-local to normalized Mercator.
+        { type : float4x4, name : matrix },
+        // Unit sphere to clip.
+        { type : float4x4, name : globeMatrix }
+    ],
+    requires : [ position ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        // `PI` is Filament's own, from its shader prelude. Declaring one here shadows nothing
+        // and expands to `const float 3.14159...`, which is a syntax error rather than a warning.
+
+        // Tile-local to normalized Mercator. `merc.z` comes out as the depth bias: the input z is
+        // zero, so the only thing reaching it is the matrix's own translation.
+        vec4 merc = materialParams.matrix * vec4(getPosition().xy, 0.0, 1.0);
+
+        // `globe::sphere_point_from_mercator`, transcribed. The clamp is that function's: a tile
+        // edge running off the top of the world lands on the pole instead of diverging.
+        float lon = merc.x * 360.0 - 180.0;
+        float fraction = clamp(merc.y, 0.0, 1.0);
+        // `camera::latitude_of`. Bounded either side -- the exponent's argument runs -PI..PI over
+        // the clamped fraction, so this is exp(-PI)..exp(PI) and cannot overflow.
+        float lat = atan(exp((180.0 - fraction * 360.0) * PI / 180.0)) * 360.0 / PI - 90.0;
+
+        // `globe::sphere_point`, y negated: GL JS's convention, kept because everything downstream
+        // of it there assumes the sign, and `globe::clip_matrix` carries the compensating flip.
+        float latR = lat * PI / 180.0;
+        float lonR = lon * PI / 180.0;
+        vec3 sphere = vec3(cos(latR) * sin(lonR), -sin(latR), cos(latR) * cos(lonR));
+
+        vec4 clip = materialParams.globeMatrix * vec4(sphere, 1.0);
+        // The bias, in clip space before the divide, which is where the Mercator path applies it.
+        clip.z += merc.z;
+        material.worldPosition = clip;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = vec4(0.0);
+    }
+}

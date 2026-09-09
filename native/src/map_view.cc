@@ -124,6 +124,14 @@ std::uint64_t MapView::lastOrderEntries() const { return host_->lastOrderEntries
 
 std::uint64_t MapView::lastBatches() const { return host_->lastBatches(); }
 
+bool MapView::setProjection(const tessella_projection projection) {
+  return host_->setProjection(projection);
+}
+
+bool MapView::setWorldCopies(const tessella_world_copies copies) {
+  return host_->setWorldCopies(copies);
+}
+
 tessella_result MapView::lastResult() const { return host_->lastResult(); }
 
 std::uint64_t MapView::produceNs() const { return host_->produceNs(); }

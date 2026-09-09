@@ -83,6 +83,18 @@ class MapView {
   /// wants and what `mbgl-render` does; on a moving map it is what makes a label
   /// that stops being placed at one anchor and starts at another read as text
   /// that moved.
+  /// Sets the surface this map's tiles are drawn on.
+  ///
+  /// The bend from normalized Mercator onto the sphere belongs to the renderer's vertex stage, so
+  /// a consumer that ignores it draws a flat map for a producer that asked for a round one.
+  bool setProjection(tessella_projection projection);
+
+  /// Sets how many copies of the world the cover asks for.
+  ///
+  /// A globe wants one: every wrap of a tile bends to the same patch, so a repeated cover draws
+  /// that patch twice and z-fights with itself.
+  bool setWorldCopies(tessella_world_copies copies);
+
   void advance(double elapsed_millis);
 
   void tick();

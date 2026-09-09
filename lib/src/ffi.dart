@@ -26,6 +26,9 @@ external void tessella_fluorite_set_camera(
   double pitch,
 );
 
+@Native<Void Function(Uint32, Int32)>()
+external void tessella_fluorite_set_projection(int slot, int mode);
+
 @Native<Uint64 Function(Uint32)>()
 external int tessella_fluorite_pending(int slot);
 

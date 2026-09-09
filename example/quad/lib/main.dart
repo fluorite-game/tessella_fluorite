@@ -19,6 +19,17 @@ import 'zoom_sweep.dart';
 const String _styleEnv = 'TESSELLA_STYLE';
 const String _materialsEnv = 'TESSELLA_MATERIALS';
 
+/// Which surface the panes draw on: `globe` for a sphere, anything else for the
+/// plane. An environment variable rather than a control, for the reason the
+/// style and the material directory are: this app is configured by its host, and
+/// a pane can still be switched at runtime through [TessellaMaps.setProjection].
+const String _projectionEnv = 'TESSELLA_PROJECTION';
+
+/// Whether this run draws globes. Read once: the panes are configured before any
+/// of them attaches, and the sweep's ceiling depends on it.
+final bool _globe =
+    (Platform.environment[_projectionEnv] ?? '').toLowerCase() == 'globe';
+
 void main() {
   FlutterError.onError = FlutterError.presentError;
   runZonedGuarded<Future<void>>(
@@ -45,6 +56,10 @@ void main() {
       );
       for (int slot = 0; slot < kQuad.length; slot++) {
         final MapCamera city = kQuad[slot];
+        TessellaMaps.setProjection(
+          slot,
+          _globe ? MapProjection.globe : MapProjection.mercator,
+        );
         TessellaMaps.setCamera(
           slot,
           MapPosition(
@@ -118,6 +133,15 @@ class _QuadAppState extends State<QuadApp> with SingleTickerProviderStateMixin {
     return true;
   }
 
+  /// How far in the sweep goes.
+  ///
+  /// A globe's bend is computed in 32-bit float over a position in `0..1` across the whole world,
+  /// and at z12 one tile unit is smaller than that number can express -- so geometry quantizes and
+  /// the planet comes apart. The sweep stops at eleven there rather than at eighteen, because a
+  /// demo that drives past its own limit looks like a bug in the demo. plan.md's sixth globe item
+  /// is what lifts it.
+  double get _ceiling => _globe ? 11.0 : 18.0;
+
   void _onTick(final Duration elapsed) {
     final Duration? began = _passBegan;
     if (began == null) {
@@ -131,7 +155,7 @@ class _QuadAppState extends State<QuadApp> with SingleTickerProviderStateMixin {
     // One sweep is a pass, and the passes run on: this is a demo of a camera
     // that never stops, and stopping it would leave the quad wherever the last
     // leg happened to end.
-    final ZoomSweep first = ZoomSweep(home: kQuad.first.zoom);
+    final ZoomSweep first = ZoomSweep(home: kQuad.first.zoom, maxZoom: _ceiling);
     if (into >= first.total) {
       _passBegan = elapsed;
       into = Duration.zero;
@@ -139,7 +163,7 @@ class _QuadAppState extends State<QuadApp> with SingleTickerProviderStateMixin {
 
     for (int slot = 0; slot < kQuad.length; slot++) {
       final MapCamera city = kQuad[slot];
-      final ZoomSweep sweep = ZoomSweep(home: city.zoom);
+      final ZoomSweep sweep = ZoomSweep(home: city.zoom, maxZoom: _ceiling);
       TessellaMaps.setCamera(
         slot,
         MapPosition(

@@ -29,6 +29,16 @@ struct Camera {
   bool applied = false;
 };
 
+/// Which surface a slot's map draws on, and whether that has reached it yet.
+///
+/// The same shape as `Camera` above and for the same reason: a slot is configured before its map
+/// exists, so the value is held and applied on the first frame after it does.
+struct Projection {
+  int32_t mode = TESSELLA_PROJECTION_MERCATOR;
+  /// True at rest: a map is created flat, so the default needs no applying.
+  bool applied = true;
+};
+
 /// A slot's recent frame history, for the HUD.
 ///
 /// A fixed ring rather than a growing list: a HUD wants "the worst of the last
@@ -77,6 +87,7 @@ struct Slot {
   std::unique_ptr<tsf::MapView> map;
   History history;
   Camera camera;
+  Projection projection;
   /// The view this slot draws into, kept so the camera can be re-asserted. Not
   /// owned; valid between attach and detach.
   filament::View* view = nullptr;
@@ -191,6 +202,17 @@ void frame(void* /*user*/, std::uint32_t slot, double delta_s) {
   // an ECS camera is bound to the slot. Two matrix stores against a frame.
   if (held.view != nullptr) {
     tsf::MapView::configureCamera(held.view->getCamera(), /*flipY=*/false);
+  }
+  if (!held.projection.applied) {
+    held.map->setProjection(static_cast<tessella_projection>(held.projection.mode));
+    // One world copy with a globe: every wrap of a tile bends to the same patch, so a repeated
+    // cover draws that patch twice and z-fights with itself. Set together here rather than left
+    // to the caller, because a caller that forgot would see a globe that flickers on the
+    // antimeridian and nothing naming the cause.
+    held.map->setWorldCopies(held.projection.mode == TESSELLA_PROJECTION_GLOBE
+                                 ? TESSELLA_WORLD_COPIES_ONE
+                                 : TESSELLA_WORLD_COPIES_REPEATED);
+    held.projection.applied = true;
   }
   if (!held.camera.applied) {
     held.map->setCamera(held.camera.latitude, held.camera.longitude, held.camera.zoom,
@@ -330,6 +352,21 @@ extern "C" void tessella_fluorite_set_camera(uint32_t slot,
       .set = true,
       .applied = false,
   };
+}
+
+extern "C" void tessella_fluorite_set_projection(uint32_t slot, int32_t mode) {
+  State& shared = state();
+  const std::lock_guard<std::mutex> lock(shared.mutex);
+  if (slot >= shared.slots.size()) {
+    return;
+  }
+  // Anything this build does not know is the plane. A projection nobody agreed on would draw a
+  // map through a matrix for a space nobody agreed on, and flat is the honest failure.
+  const int32_t known =
+      mode == TESSELLA_PROJECTION_GLOBE ? TESSELLA_PROJECTION_GLOBE : TESSELLA_PROJECTION_MERCATOR;
+  if (shared.slots[slot].projection.mode != known) {
+    shared.slots[slot].projection = Projection{.mode = known, .applied = false};
+  }
 }
 
 extern "C" uint64_t tessella_fluorite_pending(uint32_t slot) {
