@@ -114,7 +114,8 @@ int main(int argc, char** argv) {
     std::fclose(file);
 
     tessella_config config{};
-    config.style_json = style.c_str();
+    config.style_json = reinterpret_cast<const uint8_t*>(style.data());
+    config.style_json_len = style.size();
     config.width = 1024;
     config.height = 768;
     // A style's first frame is as big as the style. liberty draws a hundred and eleven layers

@@ -59,3 +59,6 @@ hooks:
       # soname does for the link; $ORIGIN resolves the bundled one at runtime.
       # Built by fluorite's own hook.
       fluorite_core_ffi: ../ihs_filament_view/packages/fluorite/build/native_assets/linux/libfluorite_core_ffi.so
+      # The planet this app reads is served over https. Without `tls` the
+      # producer refuses the URL at the status call rather than drawing.
+      cargo_features: tls

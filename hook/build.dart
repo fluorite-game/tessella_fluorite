@@ -15,6 +15,7 @@
 //         fluorite_include: ... # fluorite's include/, for view_extension.h
 //         fluorite_core_ffi: ... # libfluorite_core_ffi.so, to link against
 //         cargo_profile: release
+//         cargo_features: tls  # comma-separated tessella-ffi features
 //
 // Each also reads an environment variable of the same name upcased and
 // TESSELLA_-prefixed, which only helps a hook run directly with --config; under
@@ -42,6 +43,11 @@ void main(List<String> args) async {
     // link; $ORIGIN resolves the bundled one at runtime.
     final fluoriteCoreFfi = _dir(input, 'fluorite_core_ffi', 'TESSELLA_FLUORITE_CORE_FFI');
     final profile = _string(input, 'cargo_profile', 'TESSELLA_CARGO_PROFILE') ?? 'release';
+    // tessella-ffi's optional features, comma-separated. `tls` is the one an app
+    // usually wants: without it every https style URL fails at the status call with
+    // "TLS required, but transport is unsecured", and every style anyone publishes
+    // is https.
+    final features = _string(input, 'cargo_features', 'TESSELLA_CARGO_FEATURES');
 
     if (filamentInclude == null || fluoriteInclude == null || fluoriteCoreFfi == null) {
       throw StateError(
@@ -63,6 +69,7 @@ void main(List<String> args) async {
       '-p',
       'tessella-ffi',
       if (profile == 'release') '--release',
+      if (features != null) ...['--features', features],
     ], workingDirectory: tessellaDir);
     final tessellaLib = '$tessellaDir/target/$profile/libtessella_ffi.a';
     if (!File(tessellaLib).existsSync()) {

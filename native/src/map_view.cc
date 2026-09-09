@@ -28,7 +28,8 @@ std::unique_ptr<MapView> MapView::create(filament::Engine* engine,
       std::make_unique<FilamentRenderer>(engine, scene, materialDir, width, height, layer);
 
   tessella_config config{};
-  config.style_json = styleJson.c_str();
+  config.style_json = reinterpret_cast<const uint8_t*>(styleJson.data());
+  config.style_json_len = styleJson.size();
   config.width = width;
   config.height = height;
   // Sixty-four mebibytes, about six times the largest frame anything has
