@@ -28,6 +28,10 @@ material {
     // because the wall template winds consistently now -- see `WALL_INDICES` on the producer
     // side; against the old winding this took one triangle of every quad and left the other.
     culling : front,
+    constants : [
+        // The permutation. One bit, as `fill_extrusion.mat` declares it.
+        { name : colorFromAttribute, type : bool, default : false }
+    ],
     parameters : [
         { type : mat4,   name : matrix },
         { type : float4, name : color },
@@ -37,13 +41,17 @@ material {
         { type : float3, name : lightColor },
         { type : float3, name : lightPosition },
         { type : float,  name : lightIntensity },
-        { type : float,  name : verticalGradient }
+        { type : float,  name : verticalGradient },
+        // The frame's zoom-mix factor, from `FillExtrusionDrawableUBO`.
+        { type : float,  name : colorT }
     ],
-    requires : [ position, custom0, custom1 ],
+    requires : [ position, custom0, custom1, custom2 ],
     variables : [ shade ]
 }
 
 vertex {
+#include "fill_extrusion_paint.glsl"
+
     void materialVertex(inout MaterialVertexInputs material) {
         vec3 placed = getPosition().xyz;
         vec2 footprint = placed.xy;
@@ -74,7 +82,7 @@ vertex {
 
         float z = t > 0.0 ? height : base;
 
-        vec4 color = materialParams.color;
+        vec4 color = resolveExtrusionColor(getCustom2());
         float luminance = color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722;
         color += vec4(0.03, 0.03, 0.03, 1.0);
 

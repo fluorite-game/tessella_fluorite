@@ -257,6 +257,10 @@ constexpr const char* kFillConstants[] = {"colorFromAttribute", "opacityFromAttr
 constexpr const char* kLineConstants[] = {"colorFromAttribute", "blurFromAttribute",
                                           "opacityFromAttribute", "gapWidthFromAttribute",
                                           "offsetFromAttribute", "widthFromAttribute"};
+/// The extrusion family binds `base` and `height` unconditionally -- they shape the geometry and
+/// the builder synthesises a constant fill where the style did not drive them -- so the colour is
+/// the only property with a permutation, and the mask is one bit wide.
+constexpr const char* kFillExtrusionConstants[] = {"colorFromAttribute"};
 constexpr const char* kCircleConstants[] = {
     "colorFromAttribute",       "radiusFromAttribute",      "blurFromAttribute",
     "opacityFromAttribute",     "strokeColorFromAttribute", "strokeWidthFromAttribute",
@@ -271,6 +275,9 @@ std::pair<const char* const*, std::size_t> paintConstants(std::int32_t shader) {
             return {kLineConstants, std::size(kLineConstants)};
         case TSL_BUILTIN_CIRCLE_SHADER:
             return {kCircleConstants, std::size(kCircleConstants)};
+        case TSL_BUILTIN_FILL_EXTRUSION_SHADER:
+        case TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER:
+            return {kFillExtrusionConstants, std::size(kFillExtrusionConstants)};
         default:
             return {nullptr, 0};
     }
@@ -289,6 +296,7 @@ struct MixFactor {
 constexpr MixFactor kFillFactors[] = {{"colorT", 64}, {"opacityT", 68}};
 constexpr MixFactor kLineFactors[] = {{"colorT", 68},    {"blurT", 72},   {"opacityT", 76},
                                       {"gapWidthT", 80}, {"offsetT", 84}, {"widthT", 88}};
+constexpr MixFactor kFillExtrusionFactors[] = {{"colorT", 96}};
 constexpr MixFactor kCircleFactors[] = {
     {"colorT", 72},       {"radiusT", 76},      {"blurT", 80},         {"opacityT", 84},
     {"strokeColorT", 88}, {"strokeWidthT", 92}, {"strokeOpacityT", 96}};
@@ -302,6 +310,9 @@ std::pair<const MixFactor*, std::size_t> mixFactors(std::int32_t shader) {
             return {kLineFactors, std::size(kLineFactors)};
         case TSL_BUILTIN_CIRCLE_SHADER:
             return {kCircleFactors, std::size(kCircleFactors)};
+        case TSL_BUILTIN_FILL_EXTRUSION_SHADER:
+        case TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER:
+            return {kFillExtrusionFactors, std::size(kFillExtrusionFactors)};
         default:
             return {nullptr, 0};
     }
@@ -442,6 +453,22 @@ bool attributeType(std::uint8_t wire, filament::VertexBuffer::AttributeType& out
         case TSL_ATTRIBUTE_DATA_TYPE_FLOAT3: out = AT::FLOAT3; return true;
         case TSL_ATTRIBUTE_DATA_TYPE_FLOAT4: out = AT::FLOAT4; return true;
         default: return false;
+    }
+}
+
+/// How many bytes one vertex of a wire attribute type occupies.
+///
+/// Only the types a paint attribute can arrive as, which is a run of floats: the walls copy an
+/// instance's colour bytes verbatim rather than decoding them, so they need the width and not
+/// just the type.
+std::size_t attributeBytes(filament::VertexBuffer::AttributeType type) {
+    using AT = filament::VertexBuffer::AttributeType;
+    switch (type) {
+        case AT::FLOAT: return sizeof(float);
+        case AT::FLOAT2: return sizeof(float) * 2;
+        case AT::FLOAT3: return sizeof(float) * 3;
+        case AT::FLOAT4: return sizeof(float) * 4;
+        default: return 0;
     }
 }
 
@@ -1304,6 +1331,7 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
     // source and the fallback below is what reads it.
     const Attribute* base = nullptr;
     const Attribute* height = nullptr;
+    const Attribute* colour = nullptr;
     for (const Attribute& attribute : add.instanceAttrs) {
         if (attribute.desc.attr_id == TSL_UBO_ID_FILL_EXTRUSION_OUTLINE_POS_ATTRIBUTE) {
             positions = &attribute;
@@ -1313,7 +1341,20 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
             base = &attribute;
         } else if (attribute.desc.attr_id == TSL_UBO_ID_FILL_EXTRUSION_HEIGHT_VERTEX_ATTRIBUTE) {
             height = &attribute;
+        } else if (attribute.desc.attr_id == TSL_UBO_ID_FILL_EXTRUSION_COLOR_VERTEX_ATTRIBUTE) {
+            colour = &attribute;
         }
+    }
+    // The width of one instance's colour, and zero when the layer's paint is uniform. A type the
+    // wire names and this build cannot bind is treated as absent rather than as garbage.
+    filament::VertexBuffer::AttributeType colourType =
+        filament::VertexBuffer::AttributeType::FLOAT4;
+    std::size_t colourWidth = 0;
+    if (colour != nullptr && attributeType(colour->desc.data_type, colourType)) {
+        colourWidth = attributeBytes(colourType);
+    }
+    if (colourWidth == 0) {
+        colour = nullptr;
     }
     if (positions == nullptr || decimals == nullptr || add.attrs.empty()) {
         return false;
@@ -1341,6 +1382,9 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
     // the only per-instance channel Filament has here, which is the same reason the instances
     // are expanded at all.
     std::vector<float> extents;
+    // The colour, replicated the same way and copied rather than decoded: the bytes are mbgl's
+    // packed pair and the shader unpacks them, so the wall never needs to know what is in them.
+    std::vector<std::uint8_t> colours;
     std::vector<std::uint16_t> indexes;
     vertices.reserve(instanceCount * templateCount * 3);
     normals.reserve(instanceCount * templateCount * 2);
@@ -1398,6 +1442,11 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
         };
         const float instanceBase = readFloat(base, i);
         const float instanceHeight = readFloat(height, i);
+        // This instance's colour bytes, or none when the layer's paint is uniform.
+        const std::uint8_t* instanceColour =
+            colour != nullptr && i < colour->count()
+                ? colour->data.data + i * colour->desc.stride + colour->desc.offset
+                : nullptr;
 
         const auto corner = static_cast<std::uint16_t>(vertices.size() / 3);
         if (vertices.size() / 3 + templateCount > std::numeric_limits<std::uint16_t>::max()) {
@@ -1415,6 +1464,13 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
             normals.push_back(ny);
             extents.push_back(instanceBase);
             extents.push_back(instanceHeight);
+            if (colourWidth != 0) {
+                const std::size_t at = colours.size();
+                colours.resize(at + colourWidth, 0);
+                if (instanceColour != nullptr) {
+                    std::memcpy(colours.data() + at, instanceColour, colourWidth);
+                }
+            }
         }
         for (std::size_t k = 0; k < templateIndexCount; k++) {
             indexes.push_back(static_cast<std::uint16_t>(corner + templateIndexes[k]));
@@ -1424,34 +1480,65 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
         return false;
     }
 
+    const auto vertexCount = static_cast<std::uint32_t>(vertices.size() / 3);
+    auto* shared = zeroPaint(vertexCount);
+    if (shared == nullptr) {
+        return false;
+    }
     auto* built = filament::VertexBuffer::Builder()
-                      .vertexCount(static_cast<std::uint32_t>(vertices.size() / 3))
-                      .bufferCount(3)
+                      .vertexCount(vertexCount)
+                      .bufferCount(4)
+                      .enableBufferObjects()
                       .attribute(filament::VertexAttribute::POSITION, 0,
                                  filament::VertexBuffer::AttributeType::FLOAT3, 0, 12)
                       .attribute(filament::VertexAttribute::CUSTOM0, 1,
                                  filament::VertexBuffer::AttributeType::FLOAT2, 0, 8)
                       .attribute(filament::VertexAttribute::CUSTOM1, 2,
                                  filament::VertexBuffer::AttributeType::FLOAT2, 0, 8)
+                      // The colour, declared whether or not this layer drives it -- `requires` is
+                      // baked into the package -- and fed by the shared zero buffer when it does
+                      // not, which the specialization compiles away.
+                      .attribute(filament::VertexAttribute::CUSTOM2, 3,
+                                 colour != nullptr ? colourType
+                                                   : filament::VertexBuffer::AttributeType::FLOAT4,
+                                 0, static_cast<std::uint8_t>(colour != nullptr ? colourWidth : 16))
                       .build(*engine_);
     if (built == nullptr) {
         return false;
     }
-    const auto upload = [&](std::uint8_t slot, const std::vector<float>& from) {
-        const std::size_t bytes = from.size() * sizeof(float);
-        auto* owned = static_cast<std::uint8_t*>(std::malloc(bytes));
-        if (owned == nullptr) {
+    std::vector<filament::BufferObject*> owned;
+    const auto uploadBytes = [&](std::uint8_t slot, const std::uint8_t* from, std::size_t bytes) {
+        auto* object = filament::BufferObject::Builder()
+                           .size(static_cast<std::uint32_t>(bytes))
+                           .bindingType(filament::BufferObject::BindingType::VERTEX)
+                           .build(*engine_);
+        auto* copy = object == nullptr ? nullptr : static_cast<std::uint8_t*>(std::malloc(bytes));
+        if (copy == nullptr) {
+            if (object != nullptr) {
+                engine_->destroy(object);
+            }
             return;
         }
-        std::memcpy(owned, from.data(), bytes);
-        built->setBufferAt(*engine_, slot,
-                           filament::VertexBuffer::BufferDescriptor(
-                               owned, bytes,
-                               [](void* buffer, std::size_t, void*) { std::free(buffer); }));
+        std::memcpy(copy, from, bytes);
+        object->setBuffer(*engine_, filament::BufferObject::BufferDescriptor(
+                                        copy, bytes, [](void* buffer, std::size_t, void*) {
+                                            std::free(buffer);
+                                        }));
+        built->setBufferObjectAt(*engine_, slot, object);
+        owned.push_back(object);
+    };
+    const auto upload = [&](std::uint8_t slot, const std::vector<float>& from) {
+        uploadBytes(slot, reinterpret_cast<const std::uint8_t*>(from.data()),
+                    from.size() * sizeof(float));
     };
     upload(0, vertices);
     upload(1, normals);
     upload(2, extents);
+    if (colour != nullptr) {
+        uploadBytes(3, colours.data(), colours.size());
+    } else {
+        built->setBufferObjectAt(*engine_, 3, shared);
+    }
 
     const auto indexCount = static_cast<std::uint32_t>(indexes.size());
     auto* built_indexes = filament::IndexBuffer::Builder()
@@ -1459,12 +1546,18 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
                               .bufferType(filament::IndexBuffer::IndexType::USHORT)
                               .build(*engine_);
     if (built_indexes == nullptr) {
+        for (auto* object : owned) {
+            engine_->destroy(object);
+        }
         engine_->destroy(built);
         return false;
     }
     const std::size_t indexBytes = indexes.size() * sizeof(std::uint16_t);
     auto* ownedIndexes = static_cast<std::uint8_t*>(std::malloc(indexBytes));
     if (ownedIndexes == nullptr) {
+        for (auto* object : owned) {
+            engine_->destroy(object);
+        }
         engine_->destroy(built_indexes);
         engine_->destroy(built);
         return false;
@@ -1482,6 +1575,8 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
                            add.tileID ? *add.tileID : TileID{}};
     meshes_[add.id].clipped = add.enableStencil;
     meshes_[add.id].colour = add.enableColor;
+    meshes_[add.id].paintMask = colour != nullptr ? 1u : 0u;
+    meshes_[add.id].ownedBuffers = std::move(owned);
     walls_ += indexCount / 3;
     return true;
 }
@@ -1503,17 +1598,23 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
     const Attribute* decimals = nullptr;
     const Attribute* base = nullptr;
     const Attribute* height = nullptr;
+    const Attribute* colour = nullptr;
     for (const Attribute& attribute : add.attrs) {
         switch (attribute.desc.attr_id) {
             case TSL_UBO_ID_FILL_EXTRUSION_POS_VERTEX_ATTRIBUTE: position = &attribute; break;
             case TSL_UBO_ID_FILL_EXTRUSION_DECIMALS_ED_ATTRIBUTE: decimals = &attribute; break;
             case TSL_UBO_ID_FILL_EXTRUSION_BASE_VERTEX_ATTRIBUTE: base = &attribute; break;
             case TSL_UBO_ID_FILL_EXTRUSION_HEIGHT_VERTEX_ATTRIBUTE: height = &attribute; break;
+            case TSL_UBO_ID_FILL_EXTRUSION_COLOR_VERTEX_ATTRIBUTE: colour = &attribute; break;
             default: break;
         }
     }
     if (position == nullptr || decimals == nullptr) {
         return false;
+    }
+    filament::VertexBuffer::AttributeType colourType{};
+    if (colour != nullptr && !attributeType(colour->desc.data_type, colourType)) {
+        colour = nullptr;
     }
     const auto count = static_cast<std::uint32_t>(add.vertexCount);
     if (count == 0) {
@@ -1552,9 +1653,14 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
         constantPair(heightFill, constantHeight);
     }
 
+    auto* shared = zeroPaint(count);
+    if (shared == nullptr) {
+        return false;
+    }
     auto* vertices = filament::VertexBuffer::Builder()
                          .vertexCount(count)
-                         .bufferCount(4)
+                         .bufferCount(5)
+                         .enableBufferObjects()
                          .attribute(filament::VertexAttribute::POSITION, 0,
                                     filament::VertexBuffer::AttributeType::SHORT2,
                                     position->desc.offset, position->desc.stride)
@@ -1576,20 +1682,40 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
                                     filament::VertexBuffer::AttributeType::FLOAT,
                                     height ? height->desc.offset : 0,
                                     height ? height->desc.stride : 4)
+                         // The colour, when this layer's is the feature's. Declared either way,
+                         // because `requires` is baked into the package -- see
+                         // `native/test/permutation_probe.cc` -- and fed by the shared zero
+                         // buffer when it is the layer's, which the constant compiles away.
+                         .attribute(filament::VertexAttribute::CUSTOM3, 4,
+                                    colour != nullptr ? colourType
+                                                      : filament::VertexBuffer::AttributeType::FLOAT4,
+                                    colour != nullptr ? colour->desc.offset : 0,
+                                    colour != nullptr ? colour->desc.stride
+                                                      : sizeof(float) * 4)
                          .build(*engine_);
     if (vertices == nullptr) {
         return false;
     }
+    std::vector<filament::BufferObject*> owned;
     const auto upload = [&](std::uint8_t slot, const std::uint8_t* from, std::size_t bytes) {
-        auto* owned = static_cast<std::uint8_t*>(std::malloc(bytes));
-        if (owned == nullptr) {
+        auto* object = filament::BufferObject::Builder()
+                           .size(static_cast<std::uint32_t>(bytes))
+                           .bindingType(filament::BufferObject::BindingType::VERTEX)
+                           .build(*engine_);
+        auto* copy = object == nullptr ? nullptr : static_cast<std::uint8_t*>(std::malloc(bytes));
+        if (copy == nullptr) {
+            if (object != nullptr) {
+                engine_->destroy(object);
+            }
             return;
         }
-        std::memcpy(owned, from, bytes);
-        vertices->setBufferAt(*engine_, slot,
-                              filament::VertexBuffer::BufferDescriptor(
-                                  owned, bytes,
-                                  [](void* buffer, std::size_t, void*) { std::free(buffer); }));
+        std::memcpy(copy, from, bytes);
+        object->setBuffer(*engine_, filament::BufferObject::BufferDescriptor(
+                                        copy, bytes, [](void* buffer, std::size_t, void*) {
+                                            std::free(buffer);
+                                        }));
+        vertices->setBufferObjectAt(*engine_, slot, object);
+        owned.push_back(object);
     };
     upload(0, position->data.data, position->data.size);
     upload(1, decimals->data.data, decimals->data.size);
@@ -1597,6 +1723,11 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
            base ? base->data.size : baseFill.size());
     upload(3, height ? height->data.data : heightFill.data(),
            height ? height->data.size : heightFill.size());
+    if (colour != nullptr) {
+        upload(4, colour->data.data, colour->data.size);
+    } else {
+        vertices->setBufferObjectAt(*engine_, 4, shared);
+    }
 
     const auto indexCount = static_cast<std::uint32_t>(add.indexes.size / sizeof(std::uint16_t));
     auto* indices = filament::IndexBuffer::Builder()
@@ -1604,11 +1735,17 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
                         .bufferType(filament::IndexBuffer::IndexType::USHORT)
                         .build(*engine_);
     if (indices == nullptr) {
+        for (auto* object : owned) {
+            engine_->destroy(object);
+        }
         engine_->destroy(vertices);
         return false;
     }
     auto* ownedIndexes = static_cast<std::uint8_t*>(std::malloc(add.indexes.size));
     if (ownedIndexes == nullptr) {
+        for (auto* object : owned) {
+            engine_->destroy(object);
+        }
         engine_->destroy(indices);
         engine_->destroy(vertices);
         return false;
@@ -1626,6 +1763,8 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
                            add.tileID ? *add.tileID : TileID{}};
     meshes_[add.id].clipped = add.enableStencil;
     meshes_[add.id].colour = add.enableColor;
+    meshes_[add.id].paintMask = colour != nullptr ? 1u : 0u;
+    meshes_[add.id].ownedBuffers = std::move(owned);
     return true;
 }
 
