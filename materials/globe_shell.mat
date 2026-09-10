@@ -58,7 +58,7 @@ vertex {
         // Just beneath the surface. Far enough in that the shell never pokes through the tile
         // geometry it exists to let past -- which would occlude the very content it is for -- and
         // near enough that nothing on the surface falls behind it.
-        const float kBeneath = 0.999;
+        const float kBeneath = 0.99;
         material.worldPosition =
             materialParams.globeMatrix * vec4(getPosition().xyz * kBeneath, 1.0);
     }

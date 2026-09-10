@@ -810,9 +810,17 @@ void FilamentRenderer::writeMasks() {
         // The expansion, if this tile's geometry is drawn through it. A mask on the other curve
         // is a sliver cut off every tile edge -- survivable for a fill, fatal for a three-pixel
         // road, which is what left a clean gap across Seattle's street grid along a tile row.
+        //
+        // Bounded by the crossover exactly as the drawables are, and for the same reason: the
+        // expansion is about a tile's centre and a tile below it subtends too much sphere for a
+        // quadratic. A mask on an invalid expansion cuts the fill it exists to admit -- at z1 it
+        // took fourteen thousand pixels of ocean out of the planet in straight-edged wedges, which
+        // reads as land. The drawables were bounded and this was not, so the two disagreed at
+        // exactly the zooms where the mask is the only one of them that is wrong.
         const auto bendFor = tileBends_.find(tile);
-        const bool anchoredMask =
-            bent && maskAnchoredMaterial_ != nullptr && bendFor != tileBends_.end();
+        const bool anchoredMask = bent && maskAnchoredMaterial_ != nullptr
+                                  && bendFor != tileBends_.end()
+                                  && tile.z >= kAnchoredFromZoom;
         auto* instance = (anchoredMask ? maskAnchoredMaterial_
                                        : (bent ? maskGlobeMaterial_ : maskMaterial_))
                              ->createInstance();
