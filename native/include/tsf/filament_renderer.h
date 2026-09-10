@@ -27,6 +27,10 @@
 
 namespace tsf {
 
+/// One allocation behind a vertex buffer. Defined in the implementation.
+struct Slab;
+class Slabs;
+
 /// Turns batched drawables into Filament renderables.
 ///
 /// # What it maps onto what
@@ -242,6 +246,14 @@ private:
     /// specializes the family's package, which is why the loader keeps the bytes.
     filament::Material* materialFor(std::int32_t family, std::uint32_t surface,
                                     std::uint32_t mask);
+
+    /// Fills a vertex buffer's slabs, and records the ones it made.
+    ///
+    /// A slab with no bytes is the shared zero buffer, which is not among the `owned` and is not
+    /// destroyed with the mesh. Answers false when an allocation failed, which leaves the caller
+    /// to tear down what it had built.
+    bool uploadSlabs(const Slabs& slabs, std::uint32_t vertices,
+                     filament::VertexBuffer& into, std::vector<filament::BufferObject*>& owned);
 
     /// The shared zero buffer, grown to cover `vertices` at the widest paint attribute.
     ///

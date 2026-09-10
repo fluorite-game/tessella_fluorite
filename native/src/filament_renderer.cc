@@ -232,6 +232,44 @@ constexpr PaintSlot kCircleSlots[] = {
      filament::VertexBuffer::AttributeType::FLOAT2},
 };
 
+/// The symbol family's *paint* slots, which is only part of its table.
+///
+/// A symbol's four fixed channels are not here: `buildSymbol` packs the projected position and the
+/// fade into one `FLOAT4` of its own making, so there is no attribute to name for it. What these
+/// describe is the tail, custom3 upwards, which is the same shape every other family's paint has.
+///
+/// The icon half has one: mbgl's icon shader declares `opacity` and nothing else of the five.
+constexpr PaintSlot kSymbolSdfPaint[] = {
+    {TSL_UBO_ID_SYMBOL_COLOR_VERTEX_ATTRIBUTE, 3, 0, sizeof(float) * 4,
+     filament::VertexBuffer::AttributeType::FLOAT4},
+    {TSL_UBO_ID_SYMBOL_HALO_COLOR_VERTEX_ATTRIBUTE, 4, 1, sizeof(float) * 4,
+     filament::VertexBuffer::AttributeType::FLOAT4},
+    {TSL_UBO_ID_SYMBOL_OPACITY_VERTEX_ATTRIBUTE, 5, 2, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_SYMBOL_HALO_WIDTH_VERTEX_ATTRIBUTE, 6, 3, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_SYMBOL_HALO_BLUR_VERTEX_ATTRIBUTE, 7, 4, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+};
+constexpr PaintSlot kSymbolIconPaint[] = {
+    {TSL_UBO_ID_SYMBOL_OPACITY_VERTEX_ATTRIBUTE, 3, 0, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+};
+
+/// Whether to print what arrived beside what was taken. See the slotted path's use of it.
+const bool tracingPaint = std::getenv("TSF_PAINT_TRACE") != nullptr;
+
+std::pair<const PaintSlot*, std::size_t> symbolPaintSlots(std::int32_t shader) {
+    switch (shader) {
+        case TSL_BUILTIN_SYMBOL_SDFSHADER:
+            return {kSymbolSdfPaint, std::size(kSymbolSdfPaint)};
+        case TSL_BUILTIN_SYMBOL_ICON_SHADER:
+            return {kSymbolIconPaint, std::size(kSymbolIconPaint)};
+        default:
+            return {nullptr, 0};
+    }
+}
+
 /// The slots a family declares, or an empty span for one still on the wire-order path.
 ///
 /// A family joins the permutation mechanism by gaining a table here and constants in its
@@ -261,6 +299,10 @@ constexpr const char* kLineConstants[] = {"colorFromAttribute", "blurFromAttribu
 /// the builder synthesises a constant fill where the style did not drive them -- so the colour is
 /// the only property with a permutation, and the mask is one bit wide.
 constexpr const char* kFillExtrusionConstants[] = {"colorFromAttribute"};
+constexpr const char* kSymbolSdfConstants[] = {"colorFromAttribute", "haloColorFromAttribute",
+                                               "opacityFromAttribute", "haloWidthFromAttribute",
+                                               "haloBlurFromAttribute"};
+constexpr const char* kSymbolIconConstants[] = {"opacityFromAttribute"};
 constexpr const char* kCircleConstants[] = {
     "colorFromAttribute",       "radiusFromAttribute",      "blurFromAttribute",
     "opacityFromAttribute",     "strokeColorFromAttribute", "strokeWidthFromAttribute",
@@ -278,6 +320,10 @@ std::pair<const char* const*, std::size_t> paintConstants(std::int32_t shader) {
         case TSL_BUILTIN_FILL_EXTRUSION_SHADER:
         case TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER:
             return {kFillExtrusionConstants, std::size(kFillExtrusionConstants)};
+        case TSL_BUILTIN_SYMBOL_SDFSHADER:
+            return {kSymbolSdfConstants, std::size(kSymbolSdfConstants)};
+        case TSL_BUILTIN_SYMBOL_ICON_SHADER:
+            return {kSymbolIconConstants, std::size(kSymbolIconConstants)};
         default:
             return {nullptr, 0};
     }
@@ -297,6 +343,14 @@ constexpr MixFactor kFillFactors[] = {{"colorT", 64}, {"opacityT", 68}};
 constexpr MixFactor kLineFactors[] = {{"colorT", 68},    {"blurT", 72},   {"opacityT", 76},
                                       {"gapWidthT", 80}, {"offsetT", 84}, {"widthT", 88}};
 constexpr MixFactor kFillExtrusionFactors[] = {{"colorT", 96}};
+// Behind the matrices, the two texture sizes and the size pair; `SymbolDrawableUBO` is 260 bytes
+// and these are its last five.
+constexpr MixFactor kSymbolSdfFactors[] = {{"colorT", 240},
+                                           {"haloColorT", 244},
+                                           {"opacityT", 248},
+                                           {"haloWidthT", 252},
+                                           {"haloBlurT", 256}};
+constexpr MixFactor kSymbolIconFactors[] = {{"opacityT", 248}};
 constexpr MixFactor kCircleFactors[] = {
     {"colorT", 72},       {"radiusT", 76},      {"blurT", 80},         {"opacityT", 84},
     {"strokeColorT", 88}, {"strokeWidthT", 92}, {"strokeOpacityT", 96}};
@@ -313,6 +367,10 @@ std::pair<const MixFactor*, std::size_t> mixFactors(std::int32_t shader) {
         case TSL_BUILTIN_FILL_EXTRUSION_SHADER:
         case TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER:
             return {kFillExtrusionFactors, std::size(kFillExtrusionFactors)};
+        case TSL_BUILTIN_SYMBOL_SDFSHADER:
+            return {kSymbolSdfFactors, std::size(kSymbolSdfFactors)};
+        case TSL_BUILTIN_SYMBOL_ICON_SHADER:
+            return {kSymbolIconFactors, std::size(kSymbolIconFactors)};
         default:
             return {nullptr, 0};
     }
@@ -473,6 +531,62 @@ std::size_t attributeBytes(filament::VertexBuffer::AttributeType type) {
 }
 
 } // namespace
+
+/// Buffer indexes for a vertex buffer, one per distinct slab rather than one per attribute.
+///
+/// The producer interleaves a layer's data-driven paint into a single allocation: six of a line's
+/// attributes share one pointer and one stride and differ only in offset. An index apiece copies
+/// those bytes six times, and -- because `VertexBuffer::Builder` admits eight buffers, not the
+/// sixteen `MAX_VERTEX_BUFFER_COUNT` suggests -- a symbol's nine attributes do not fit at all.
+///
+/// `padded` is what makes a slab wider than the producer sent it. A property that varies per
+/// feature but not with zoom supplies the narrow form at the narrow stride while the shader reads
+/// the wide one, so the last vertex's read runs off the end; the tail is zeroed rather than
+/// absent. Two attributes on one slab take the widest padding either of them asks for.
+struct Slab {
+    /// The producer's bytes, or null for the shared zero buffer.
+    const std::uint8_t* data;
+    /// How many to copy, padded to what the widest attribute on it reads.
+    std::size_t bytes;
+};
+
+class Slabs {
+public:
+    /// The index for a slab, allocated on first sight.
+    std::uint8_t of(const std::uint8_t* data, std::size_t bytes, std::uint32_t vertices,
+                    std::uint32_t stride, std::size_t declaredBytes) {
+        const std::size_t span =
+            vertices == 0 ? bytes
+                          : static_cast<std::size_t>(vertices - 1) * stride
+                                + std::max<std::size_t>(stride, declaredBytes);
+        for (std::size_t i = 0; i < entries_.size(); i++) {
+            if (entries_[i].data == data) {
+                entries_[i].bytes = std::max(entries_[i].bytes, std::max(bytes, span));
+                return static_cast<std::uint8_t>(i);
+            }
+        }
+        entries_.push_back({data, std::max(bytes, span)});
+        return static_cast<std::uint8_t>(entries_.size() - 1);
+    }
+
+    /// The index for the shared zero buffer, which carries no bytes of its own.
+    std::uint8_t zero() {
+        if (!zero_) {
+            entries_.push_back({nullptr, 0});
+            zero_ = true;
+            zeroAt_ = static_cast<std::uint8_t>(entries_.size() - 1);
+        }
+        return zeroAt_;
+    }
+
+    [[nodiscard]] std::size_t count() const { return entries_.size(); }
+    [[nodiscard]] const std::vector<Slab>& entries() const { return entries_; }
+
+private:
+    std::vector<Slab> entries_;
+    bool zero_ = false;
+    std::uint8_t zeroAt_ = 0;
+};
 
 FilamentRenderer::FilamentRenderer(filament::Engine* engine,
                                    filament::Scene* scene,
@@ -1873,39 +1987,97 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
         }
     }
 
-    auto* vertices = filament::VertexBuffer::Builder()
-                         .vertexCount(count)
-                         .bufferCount(4)
-                         .attribute(filament::VertexAttribute::POSITION, 0,
-                                    filament::VertexBuffer::AttributeType::SHORT4,
-                                    posOffset->desc.offset, posOffset->desc.stride)
-                         .attribute(filament::VertexAttribute::CUSTOM0, 1,
-                                    filament::VertexBuffer::AttributeType::USHORT4,
-                                    data->desc.offset, data->desc.stride)
-                         .attribute(filament::VertexAttribute::CUSTOM1, 2,
-                                    filament::VertexBuffer::AttributeType::SHORT4,
-                                    pixelOffset->desc.offset, pixelOffset->desc.stride)
-                         .attribute(filament::VertexAttribute::CUSTOM2, 3,
-                                    filament::VertexBuffer::AttributeType::FLOAT4, 0, 16)
-                         .build(*engine_);
+    // The paint tail, which is the same permutation every other family has. The four fixed
+    // channels above are this family's own and have no bit.
+    const auto [paintSlots, paintCount] = symbolPaintSlots(add.builtinShader);
+    const auto findPaint = [&](std::uint32_t attrId) -> const Attribute* {
+        for (const Attribute& a : add.attrs) {
+            if (a.desc.attr_id == attrId && a.desc.binding >= 0 && !a.data.empty()) {
+                return &a;
+            }
+        }
+        return nullptr;
+    };
+    std::vector<const Attribute*> supplied(paintCount, nullptr);
+    std::uint32_t paintMask = 0;
+    auto* shared = zeroPaint(count);
+    if (shared == nullptr) {
+        return false;
+    }
+
+    // One index per slab: the three fixed channels share the symbol vertex struct, the packed
+    // position-and-fade is its own, and every paint attribute shares the binder's one buffer.
+    // Nine attributes over four indexes, where Filament admits eight.
+    Slabs slabs;
+    const auto fixed = slabs.of(posOffset->data.data, posOffset->data.size, count,
+                                posOffset->desc.stride, 0);
+    const auto placedAt =
+        slabs.of(reinterpret_cast<const std::uint8_t*>(placed.data()),
+                 placed.size() * sizeof(float), count, sizeof(float) * 4, sizeof(float) * 4);
+    std::vector<std::uint8_t> at(paintCount, 0);
+    for (std::size_t i = 0; i < paintCount; i++) {
+        const PaintSlot& slot = paintSlots[i];
+        const Attribute* attribute = findPaint(slot.attrId);
+        filament::VertexBuffer::AttributeType type{};
+        const bool present = attribute != nullptr && attributeType(attribute->desc.data_type, type);
+        supplied[i] = present ? attribute : nullptr;
+        if (present) {
+            at[i] = slabs.of(attribute->data.data, attribute->data.size, count,
+                             attribute->desc.stride, slot.declaredBytes);
+            paintMask |= 1u << slot.bit;
+        } else {
+            at[i] = slabs.zero();
+        }
+    }
+
+    filament::VertexBuffer::Builder builder;
+    builder.vertexCount(count)
+        .bufferCount(static_cast<std::uint8_t>(slabs.count()))
+        .enableBufferObjects()
+        .attribute(filament::VertexAttribute::POSITION, fixed,
+                   filament::VertexBuffer::AttributeType::SHORT4, posOffset->desc.offset,
+                   posOffset->desc.stride)
+        .attribute(filament::VertexAttribute::CUSTOM0,
+                   slabs.of(data->data.data, data->data.size, count, data->desc.stride, 0),
+                   filament::VertexBuffer::AttributeType::USHORT4, data->desc.offset,
+                   data->desc.stride)
+        .attribute(filament::VertexAttribute::CUSTOM1,
+                   slabs.of(pixelOffset->data.data, pixelOffset->data.size, count,
+                            pixelOffset->desc.stride, 0),
+                   filament::VertexBuffer::AttributeType::SHORT4, pixelOffset->desc.offset,
+                   pixelOffset->desc.stride)
+        .attribute(filament::VertexAttribute::CUSTOM2, placedAt,
+                   filament::VertexBuffer::AttributeType::FLOAT4, 0, 16);
+    for (std::size_t i = 0; i < paintCount; i++) {
+        const PaintSlot& slot = paintSlots[i];
+        const auto target = static_cast<filament::VertexAttribute>(
+            filament::VertexAttribute::CUSTOM0 + slot.slot);
+        if (supplied[i] != nullptr) {
+            filament::VertexBuffer::AttributeType type{};
+            attributeType(supplied[i]->desc.data_type, type);
+            builder.attribute(target, at[i], type, supplied[i]->desc.offset,
+                              supplied[i]->desc.stride);
+        } else {
+            builder.attribute(target, at[i], slot.declared, 0,
+                              static_cast<std::uint8_t>(slot.declaredBytes));
+        }
+    }
+    auto* vertices = builder.build(*engine_);
     if (vertices == nullptr) {
         return false;
     }
-    const auto upload = [&](std::uint8_t slot, const void* from, std::size_t bytes) {
-        auto* owned = static_cast<std::uint8_t*>(std::malloc(bytes));
-        if (owned == nullptr) {
-            return;
+    std::vector<filament::BufferObject*> owned;
+    if (!uploadSlabs(slabs, count, *vertices, owned)) {
+        for (auto* object : owned) {
+            engine_->destroy(object);
         }
-        std::memcpy(owned, from, bytes);
-        vertices->setBufferAt(*engine_, slot,
-                              filament::VertexBuffer::BufferDescriptor(
-                                  owned, bytes,
-                                  [](void* buffer, std::size_t, void*) { std::free(buffer); }));
-    };
-    upload(0, posOffset->data.data, posOffset->data.size);
-    upload(1, data->data.data, data->data.size);
-    upload(2, pixelOffset->data.data, pixelOffset->data.size);
-    upload(3, placed.data(), placed.size() * sizeof(float));
+        engine_->destroy(vertices);
+        return false;
+    }
+    if (tracingPaint) {
+        std::fprintf(stderr, "paint symbol shader=%d verts=%u mask=%u\n", add.builtinShader,
+                     count, paintMask);
+    }
 
     const auto indexCount = static_cast<std::uint32_t>(add.indexes.size / sizeof(std::uint16_t));
     auto* indices = filament::IndexBuffer::Builder()
@@ -1913,11 +2085,17 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
                         .bufferType(filament::IndexBuffer::IndexType::USHORT)
                         .build(*engine_);
     if (indices == nullptr) {
+        for (auto* object : owned) {
+            engine_->destroy(object);
+        }
         engine_->destroy(vertices);
         return false;
     }
     auto* ownedIndexes = static_cast<std::uint8_t*>(std::malloc(add.indexes.size));
     if (ownedIndexes == nullptr) {
+        for (auto* object : owned) {
+            engine_->destroy(object);
+        }
         engine_->destroy(indices);
         engine_->destroy(vertices);
         return false;
@@ -1937,6 +2115,8 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
     meshes_[add.id].filter = filterFor(add);
     meshes_[add.id].clipped = add.enableStencil;
     meshes_[add.id].colour = add.enableColor;
+    meshes_[add.id].paintMask = paintMask;
+    meshes_[add.id].ownedBuffers = std::move(owned);
     return true;
 }
 
@@ -1994,6 +2174,47 @@ filament::Material* FilamentRenderer::materialFor(std::int32_t family, std::uint
     // drawable per frame.
     permuted_.emplace(key, built);
     return built != nullptr ? built : (base == table.end() ? nullptr : base->second);
+}
+
+bool FilamentRenderer::uploadSlabs(const Slabs& slabs, std::uint32_t vertices,
+                                   filament::VertexBuffer& into,
+                                   std::vector<filament::BufferObject*>& owned) {
+    filament::BufferObject* shared = nullptr;
+    for (std::size_t i = 0; i < slabs.entries().size(); i++) {
+        const Slab& slab = slabs.entries()[i];
+        if (slab.data == nullptr) {
+            if (shared == nullptr) {
+                shared = zeroPaint(vertices);
+                if (shared == nullptr) {
+                    return false;
+                }
+            }
+            into.setBufferObjectAt(*engine_, static_cast<std::uint8_t>(i), shared);
+            continue;
+        }
+        auto* object = filament::BufferObject::Builder()
+                           .size(static_cast<std::uint32_t>(slab.bytes))
+                           .bindingType(filament::BufferObject::BindingType::VERTEX)
+                           .build(*engine_);
+        // Zeroed rather than merely allocated: `bytes` may exceed what the producer sent, and the
+        // tail is what a wide read past the last vertex lands in.
+        auto* copy =
+            object == nullptr ? nullptr : static_cast<std::uint8_t*>(std::calloc(slab.bytes, 1));
+        if (copy == nullptr) {
+            if (object != nullptr) {
+                engine_->destroy(object);
+            }
+            return false;
+        }
+        std::memcpy(copy, slab.data, slab.bytes);
+        object->setBuffer(*engine_,
+                          filament::BufferObject::BufferDescriptor(
+                              copy, slab.bytes,
+                              [](void* buffer, std::size_t, void*) { std::free(buffer); }));
+        into.setBufferObjectAt(*engine_, static_cast<std::uint8_t>(i), object);
+        owned.push_back(object);
+    }
+    return true;
 }
 
 filament::BufferObject* FilamentRenderer::zeroPaint(std::size_t vertices) {
@@ -2166,11 +2387,9 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
         }
 
         std::uint32_t paintMask = 0;
-        filament::VertexBuffer::Builder builder;
-        builder.vertexCount(static_cast<std::uint32_t>(add.vertexCount))
-            .bufferCount(static_cast<std::uint8_t>(slotCount))
-            .enableBufferObjects();
+        Slabs slabs;
         std::vector<const Attribute*> supplied(slotCount, nullptr);
+        std::vector<std::uint8_t> at(slotCount, 0);
         for (std::size_t i = 0; i < slotCount; i++) {
             const PaintSlot& slot = slots[i];
             const auto attribute = i == 0 ? position : find(slot.attrId);
@@ -2178,19 +2397,34 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
             const bool present =
                 attribute != nullptr && attributeType(attribute->desc.data_type, type);
             supplied[i] = present ? attribute : nullptr;
-            const auto target = static_cast<filament::VertexAttribute>(
-                slot.slot < 0 ? filament::VertexAttribute::POSITION
-                              : filament::VertexAttribute::CUSTOM0 + slot.slot);
             if (present) {
-                builder.attribute(target, static_cast<std::uint8_t>(i), type,
-                                  attribute->desc.offset, attribute->desc.stride);
+                at[i] = slabs.of(attribute->data.data, attribute->data.size, add.vertexCount,
+                                 attribute->desc.stride, slot.declaredBytes);
                 if (slot.bit >= 0) {
                     paintMask |= 1u << slot.bit;
                 }
             } else {
+                at[i] = slabs.zero();
+            }
+        }
+        filament::VertexBuffer::Builder builder;
+        builder.vertexCount(static_cast<std::uint32_t>(add.vertexCount))
+            .bufferCount(static_cast<std::uint8_t>(slabs.count()))
+            .enableBufferObjects();
+        for (std::size_t i = 0; i < slotCount; i++) {
+            const PaintSlot& slot = slots[i];
+            const auto target = static_cast<filament::VertexAttribute>(
+                slot.slot < 0 ? filament::VertexAttribute::POSITION
+                              : filament::VertexAttribute::CUSTOM0 + slot.slot);
+            if (supplied[i] != nullptr) {
+                filament::VertexBuffer::AttributeType type{};
+                attributeType(supplied[i]->desc.data_type, type);
+                builder.attribute(target, at[i], type, supplied[i]->desc.offset,
+                                  supplied[i]->desc.stride);
+            } else {
                 // Declared so the material's `requires` is satisfied, and read from the shared
                 // zero buffer, which the specialization means the shader never samples.
-                builder.attribute(target, static_cast<std::uint8_t>(i), slot.declared, 0,
+                builder.attribute(target, at[i], slot.declared, 0,
                                   static_cast<std::uint8_t>(slot.declaredBytes));
             }
         }
@@ -2199,7 +2433,6 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
         // found: `attributeType` refusing a type makes the attribute *not present*, which is
         // indistinguishable from a style that never asked for it. Printing the two together is
         // what separates them.
-        static const bool tracingPaint = std::getenv("TSF_PAINT_TRACE") != nullptr;
         if (tracingPaint) {
             std::fprintf(stderr, "paint shader=%d verts=%u mask=%u |", add.builtinShader,
                          static_cast<unsigned>(add.vertexCount), paintMask);
@@ -2216,42 +2449,7 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
         }
 
         std::vector<filament::BufferObject*> owned;
-        auto* shared = zeroPaint(add.vertexCount);
-        bool ok = shared != nullptr;
-        for (std::size_t i = 0; i < slotCount && ok; i++) {
-            if (supplied[i] == nullptr) {
-                vertices->setBufferObjectAt(*engine_, static_cast<std::uint8_t>(i), shared);
-                continue;
-            }
-            // Padded to the width the shader declares. The producer supplies the narrow form at
-            // the narrow stride for a property that does not vary with zoom, so the last vertex's
-            // wide read runs off the end of the slab -- the tail is zero rather than absent.
-            const std::size_t span =
-                add.vertexCount == 0
-                    ? 0
-                    : (static_cast<std::size_t>(add.vertexCount - 1) * supplied[i]->desc.stride
-                       + std::max<std::size_t>(supplied[i]->desc.stride, slots[i].declaredBytes));
-            const std::size_t bytes = std::max(supplied[i]->data.size, span);
-            auto* object = filament::BufferObject::Builder()
-                               .size(static_cast<std::uint32_t>(bytes))
-                               .bindingType(filament::BufferObject::BindingType::VERTEX)
-                               .build(*engine_);
-            auto* copy = object == nullptr ? nullptr : static_cast<std::uint8_t*>(std::calloc(bytes, 1));
-            if (copy == nullptr) {
-                if (object != nullptr) {
-                    engine_->destroy(object);
-                }
-                ok = false;
-                break;
-            }
-            std::memcpy(copy, supplied[i]->data.data, supplied[i]->data.size);
-            object->setBuffer(*engine_, filament::BufferObject::BufferDescriptor(
-                                            copy, bytes, [](void* buffer, std::size_t, void*) {
-                                                std::free(buffer);
-                                            }));
-            vertices->setBufferObjectAt(*engine_, static_cast<std::uint8_t>(i), object);
-            owned.push_back(object);
-        }
+        const bool ok = uploadSlabs(slabs, add.vertexCount, *vertices, owned);
         auto* indices = ok ? uploadIndices(add) : nullptr;
         if (indices == nullptr) {
             for (auto* object : owned) {

@@ -16,6 +16,10 @@ material {
     shadingModel : unlit,
     blending : transparent,
     culling : none,
+    constants : [
+        // The icon shader declares one of the five: mbgl's does the same.
+        { name : opacityFromAttribute, type : bool, default : false }
+    ],
     parameters : [
         // `globe_ubo::GlobeBendUbo`, and the tile centre it expands about. This replaces the
         // tile-to-clip matrix: only the *anchor* is bent, because the glyph quad is built in
@@ -54,15 +58,18 @@ material {
         // The layer's evaluated paint, already chosen between text and icon by the consumer.
         { type : float4,    name : fillColor },
         { type : float,     name : opacity },
+        { type : float,     name : opacityT },
         // Per tile: which pass this is, and how much the tile is scaled on screen.
         { type : float,     name : pixelRatio },
         { type : sampler2d, name : atlas }
     ],
-    requires : [ position, custom0, custom1, custom2 ],
-    variables : [ glyph, glyphGamma ]
+    requires : [ position, custom0, custom1, custom2, custom3 ],
+    variables : [ glyph, glyphGamma, symbolScalars ]
 }
 
 vertex {
+#include "symbol_paint.glsl"
+
     void materialVertex(inout MaterialVertexInputs material) {
         vec4 posOffset = getPosition();
         vec2 a_pos = posOffset.xy;
@@ -171,6 +178,9 @@ vertex {
                               clamp(rawFade.x + fade_change, 0.0, 1.0),
                               fontScale);
         material.glyphGamma = vec4(clip.w, 0.0, 0.0, 0.0);
+        // The layer's opacity, or this feature's. A sprite carries its own colour, so this is the
+        // only one of the five the icon shader has.
+        material.symbolScalars = vec4(resolveSymbolOpacity(getCustom3()), 0.0, 0.0, 0.0);
         material.worldPosition = clip;
     }
 }
@@ -181,6 +191,6 @@ fragment {
 
         // The sheet is premultiplied, so opacity scales it directly.
         vec4 sprite = texture(materialParams_atlas, variable_glyph.xy);
-        material.baseColor = sprite * (materialParams.opacity * variable_glyph.z);
+        material.baseColor = sprite * (variable_symbolScalars.x * variable_glyph.z);
     }
 }

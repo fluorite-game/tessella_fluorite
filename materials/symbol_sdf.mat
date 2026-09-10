@@ -21,6 +21,15 @@ material {
     shadingModel : unlit,
     blending : transparent,
     culling : none,
+    constants : [
+        // The permutation, as mbgl's `HAS_UNIFORM_u_*` defines but resolved when the material is
+        // built. False is the uniform form.
+        { name : colorFromAttribute,     type : bool, default : false },
+        { name : haloColorFromAttribute, type : bool, default : false },
+        { name : opacityFromAttribute,   type : bool, default : false },
+        { name : haloWidthFromAttribute, type : bool, default : false },
+        { name : haloBlurFromAttribute,  type : bool, default : false }
+    ],
     parameters : [
         { type : mat4,      name : matrix },
         { type : mat4,      name : labelPlaneMatrix },
@@ -46,16 +55,26 @@ material {
         { type : float,     name : haloWidth },
         { type : float,     name : haloBlur },
         // Per tile: which pass this is, and how much the tile is scaled on screen.
+        { type : float,     name : colorT },
+        { type : float,     name : haloColorT },
+        { type : float,     name : opacityT },
+        { type : float,     name : haloWidthT },
+        { type : float,     name : haloBlurT },
         { type : float,     name : isHalo },
         { type : float,     name : tileGammaScale },
         { type : float,     name : pixelRatio },
         { type : sampler2d, name : atlas }
     ],
-    requires : [ position, custom0, custom1, custom2 ],
-    variables : [ glyph, glyphGamma ]
+    requires : [ position, custom0, custom1, custom2, custom3, custom4,
+                 custom5, custom6, custom7 ],
+    // Four, Filament's limit: the two the geometry needs, the resolved colour for this pass,
+    // and the three scalars the fragment reads.
+    variables : [ glyph, glyphGamma, symbolPaint, symbolScalars ]
 }
 
 vertex {
+#include "symbol_sdf_paint.glsl"
+
     void materialVertex(inout MaterialVertexInputs material) {
         vec4 posOffset = getPosition();
         vec2 a_pos = posOffset.xy;
@@ -132,6 +151,12 @@ vertex {
                               clamp(rawFade.x + fade_change, 0.0, 1.0),
                               fontScale);
         material.glyphGamma = vec4(clip.w, 0.0, 0.0, 0.0);
+        // The layer's paint, or this feature's. `isHalo` is a per-drawable uniform, so which of
+        // the two colours this pass wants is settled here rather than per fragment.
+        material.symbolPaint = materialParams.isHalo >= 0.5 ? resolveSymbolHaloColor()
+                                                            : resolveSymbolFillColor();
+        material.symbolScalars = vec4(resolveSymbolOpacity(getCustom5()),
+                                      resolveSymbolHaloWidth(), resolveSymbolHaloBlur(), 0.0);
         material.worldPosition = clip;
     }
 }
@@ -151,12 +176,13 @@ fragment {
         float EDGE_GAMMA = 0.105 / max(materialParams.pixelRatio, 1e-6);
         float fontGamma = fontScale * materialParams.tileGammaScale;
         float fillGamma = EDGE_GAMMA / fontGamma;
-        float haloGamma = (materialParams.haloBlur * 1.19 / SDF_PX + EDGE_GAMMA) / fontGamma;
+        float haloBlur = variable_symbolScalars.z;
+        float haloGamma = (haloBlur * 1.19 / SDF_PX + EDGE_GAMMA) / fontGamma;
 
         bool isHalo = materialParams.isHalo >= 0.5;
         float gamma = isHalo ? haloGamma : fillGamma;
         float gammaScaled = gamma * fragGamma;
-        vec4 color = isHalo ? materialParams.haloColor : materialParams.fillColor;
+        vec4 color = variable_symbolPaint;
 
         // Where the letter's edge sits in the distance field, and where a halo's does.
         float fillInnerEdge = (256.0 - 64.0) / 256.0;
@@ -170,11 +196,11 @@ fragment {
         if (isHalo) {
             // A translucent fill wants a translucent halo inside it, so the fill is subtracted
             // rather than drawn over.
-            float haloEdge = (6.0 - materialParams.haloWidth / fontScale) / SDF_PX;
+            float haloEdge = (6.0 - variable_symbolScalars.y / fontScale) / SDF_PX;
             alpha = min(smoothstep(haloEdge - gammaScaled, haloEdge + gammaScaled, dist),
                         1.0 - alpha);
         }
 
-        material.baseColor = color * (alpha * materialParams.opacity * fadeOpacity);
+        material.baseColor = color * (alpha * variable_symbolScalars.x * fadeOpacity);
     }
 }
