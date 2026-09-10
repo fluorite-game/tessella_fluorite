@@ -346,6 +346,20 @@ FilamentRenderer::FilamentRenderer(filament::Engine* engine,
         }
     }
 
+    // And the same mask on the expansion, for tiles whose geometry is drawn that way. A mask has
+    // to trace the same curve as what it admits; see `mask_globe_anchored.mat`.
+    const auto anchoredMaskPath = std::filesystem::path(materialDir) / "mask_globe_anchored.filamat";
+    if (std::filesystem::exists(anchoredMaskPath, ec)) {
+        std::ifstream file(anchoredMaskPath, std::ios::binary);
+        const std::vector<std::uint8_t> package((std::istreambuf_iterator<char>(file)),
+                                                std::istreambuf_iterator<char>());
+        if (!package.empty()) {
+            maskAnchoredMaterial_ = filament::Material::Builder()
+                                        .package(package.data(), package.size())
+                                        .build(*engine_);
+        }
+    }
+
     // The mask material is not a family: it draws the clip quads and writes only the stencil.
     const auto maskPath = std::filesystem::path(materialDir) / "mask.filamat";
     if (std::filesystem::exists(maskPath, ec)) {
@@ -793,7 +807,15 @@ void FilamentRenderer::writeMasks() {
         const auto band = static_cast<std::uint8_t>(
             std::min<int>(3, static_cast<int>(tile.overscaled_z) - coarsest));
 
-        auto* instance = (bent ? maskGlobeMaterial_ : maskMaterial_)->createInstance();
+        // The expansion, if this tile's geometry is drawn through it. A mask on the other curve
+        // is a sliver cut off every tile edge -- survivable for a fill, fatal for a three-pixel
+        // road, which is what left a clean gap across Seattle's street grid along a tile row.
+        const auto bendFor = tileBends_.find(tile);
+        const bool anchoredMask =
+            bent && maskAnchoredMaterial_ != nullptr && bendFor != tileBends_.end();
+        auto* instance = (anchoredMask ? maskAnchoredMaterial_
+                                       : (bent ? maskGlobeMaterial_ : maskMaterial_))
+                             ->createInstance();
         maskInstances_.push_back(instance);
         instance->setColorWrite(std::getenv("TSF_SHOW_MASKS") != nullptr);
         // Each mask painted by its own reference, so the stencil's layout can be looked at.
@@ -815,9 +837,19 @@ void FilamentRenderer::writeMasks() {
         instance->setStencilCompareFunction(filament::MaterialInstance::StencilCompareFunc::A);
         instance->setStencilOpDepthStencilPass(filament::MaterialInstance::StencilOperation::REPLACE);
 
-        // The bend, from the same two matrices the geometry it clips is drawn through.
+        // The bend, from the same data the geometry it clips is drawn through.
         const MaskGrid grid = bent ? maskGrid(kGlobeMaskCells) : MaskGrid{};
-        if (bent) {
+        if (anchoredMask) {
+            const auto& rows = bendFor->second;
+            instance->setParameter("bendCenter",
+                                   filament::math::float2{kHalfExtent, kHalfExtent});
+            instance->setParameter("bendAnchor", rows[0]);
+            instance->setParameter("bendU", rows[1]);
+            instance->setParameter("bendV", rows[2]);
+            instance->setParameter("bendUU", rows[3]);
+            instance->setParameter("bendVV", rows[4]);
+            instance->setParameter("bendUV", rows[5]);
+        } else if (bent) {
             instance->setParameter("matrix", matrix);
             instance->setParameter("globeMatrix", globeMatrix_);
         }
@@ -878,6 +910,10 @@ FilamentRenderer::~FilamentRenderer() {
         engine_->destroy(material);
     }
     globeMaterials_.clear();
+    if (maskAnchoredMaterial_ != nullptr) {
+        engine_->destroy(maskAnchoredMaterial_);
+        maskAnchoredMaterial_ = nullptr;
+    }
     if (maskGlobeMaterial_ != nullptr) {
         engine_->destroy(maskGlobeMaterial_);
         maskGlobeMaterial_ = nullptr;
@@ -1792,6 +1828,40 @@ void FilamentRenderer::onBatch(const Batch& batch) {
 }
 
 void FilamentRenderer::endFrame(std::uint64_t) {
+    // Which tiles are drawn through the expansion, and with what.
+    //
+    // The mask has to trace the same curve as the geometry it admits, and its own record carries
+    // only a placement matrix. It does not need a new one: every batch of this frame is already
+    // queued in `pending_`, so the coefficients are here -- they were simply being read after the
+    // masks rather than before. Walked once, keyed by tile, and handed to `writeMasks` below.
+    tileBends_.clear();
+    for (const Batch& batch : pending_) {
+        const auto layer = uniforms_.find(static_cast<std::int32_t>(batch.layerIndex));
+        if (layer == uniforms_.end()) {
+            continue;
+        }
+        const auto bend = layer->second.find(kGlobeBendSlot);
+        if (bend == layer->second.end()) {
+            continue;
+        }
+        for (std::size_t i = 0; i < batch.geometries.size() && i < batch.uboIndexes.size(); i++) {
+            const auto mesh = meshes_.find(batch.geometries[i]);
+            if (mesh == meshes_.end()) {
+                continue;
+            }
+            const std::size_t at =
+                static_cast<std::size_t>(batch.uboIndexes[i]) * kGlobeBendStride;
+            if (at + kGlobeBendStride > bend->second.size()) {
+                continue;
+            }
+            const auto* rows =
+                reinterpret_cast<const filament::math::float4*>(bend->second.data() + at);
+            std::array<filament::math::float4, 6> copy{};
+            std::copy(rows, rows + 6, copy.begin());
+            tileBends_[mesh->second.tile] = copy;
+        }
+    }
+
     // The clip masks first, so every drawable issued below has a reference to test against.
     writeShell();
     writeMasks();
@@ -1957,10 +2027,16 @@ void FilamentRenderer::issue(const Batch& batch) {
         const filament::math::float4* bendRows = nullptr;
         auto anchoredMaterial = anchoredMaterials_.end();
         static const bool noAnchored = std::getenv("TSF_NO_ANCHORED") != nullptr;
-        // A family with only an anchored package has no choice to make and takes it at every
-        // zoom: below the threshold the alternative is not drawing at all.
-        if (bent && !noAnchored
-            && (anchoredOnly || mesh->second.tile.z >= kAnchoredFromZoom)) {
+        // The threshold binds even for a family that has no direct package. A quadratic about a
+        // tile's centre is only as good as the arc that tile subtends, and a z0 tile subtends the
+        // whole sphere -- so the expansion there is not a worse approximation, it is a wrong one,
+        // and geometry drawn through it lands anywhere. Removing `fill_outline_globe.filamat` to
+        // see what its anchored twin did alone showed it: coastlines smeared across the entire
+        // viewport, far outside the planet.
+        //
+        // So below the crossover an anchored-only family draws nothing. A road missing at z4 is a
+        // road missing; a road drawn through an invalid expansion is a stripe across the map.
+        if (bent && !noAnchored && mesh->second.tile.z >= kAnchoredFromZoom) {
             anchoredMaterial = anchoredMaterials_.find(batch.builtinShader);
             if (anchoredMaterial != anchoredMaterials_.end()) {
                 if (const auto bend = layer->second.find(kGlobeBendSlot);
@@ -2289,8 +2365,26 @@ void FilamentRenderer::issue(const Batch& batch) {
                     std::memcpy(&out, from, sizeof from);
                     return out;
                 };
-                instance->setParameter("matrix", asMatrix(block.matrix));
-                instance->setParameter("labelPlaneMatrix", asMatrix(block.label_plane_matrix));
+                if (useAnchored) {
+                    // Clip space to screen pixels, which is `camera::label_plane_matrix` with an
+                    // identity placement: `(x + 1) * w / 2` across and `(1 - y) * h / 2` down. A
+                    // plane folds its projection into `labelPlaneMatrix` and reaches the label
+                    // plane with one multiply; a globe cannot, because the bend is not a matrix,
+                    // so the material projects through the expansion and converts with this.
+                    const float halfWidth = static_cast<float>(width_) * 0.5f;
+                    const float halfHeight = static_cast<float>(height_) * 0.5f;
+                    instance->setParameter(
+                        "screenFromClip",
+                        filament::math::mat4f{
+                            filament::math::float4{halfWidth, 0.0f, 0.0f, 0.0f},
+                            filament::math::float4{0.0f, -halfHeight, 0.0f, 0.0f},
+                            filament::math::float4{0.0f, 0.0f, 1.0f, 0.0f},
+                            filament::math::float4{halfWidth, halfHeight, 0.0f, 1.0f}});
+                } else {
+                    instance->setParameter("matrix", asMatrix(block.matrix));
+                    instance->setParameter("labelPlaneMatrix",
+                                           asMatrix(block.label_plane_matrix));
+                }
                 instance->setParameter("coordMatrix", asMatrix(block.coord_matrix));
                 // The sheet this half samples, not the other's. The block carries both because
                 // one shader can sample both atlases; a drawable that samples one still has to be

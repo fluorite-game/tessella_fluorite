@@ -15,6 +15,7 @@
 #include <filament/Texture.h>
 #include <utils/Entity.h>
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <map>
@@ -314,6 +315,11 @@ private:
     /// producer split that tile's *fills* against, or the mask cuts a sliver off every tile edge
     /// or leaves one. Keyed by cell count, which is a small set: one to forty-one.
     filament::Material* maskGlobeMaterial_ = nullptr;
+    /// The same mask on the anchored expansion, for tiles drawn that way.
+    filament::Material* maskAnchoredMaterial_ = nullptr;
+    /// This frame's bend coefficients, by tile, harvested from the queued batches before the
+    /// masks are written. A mask's own record carries only a placement matrix.
+    std::map<TileID, std::array<filament::math::float4, 6>> tileBends_;
     struct MaskGrid {
         filament::VertexBuffer* vertices = nullptr;
         filament::IndexBuffer* indices = nullptr;

@@ -1,0 +1,66 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The clip mask, bent onto a sphere.
+//
+// Same job as `mask.mat` -- write the stencil and nothing else -- and it exists because a globe
+// needs the clip more than a plane does, not less. MVT geometry runs past its tile's edge by
+// design, into the buffer that hides seams, and something has to stop that overhang painting into
+// the neighbour. On a plane a bounding-box scissor does most of it and the stencil refines it;
+// under a globe the box is meaningless (the tile is a curved patch and the matrix reaches
+// normalized Mercator), so the stencil is the only device left.
+//
+// Drawn without one, a globe shows the overhang as wedges of water lying across its neighbours --
+// which is not a bend artifact: switching the stencil and scissor off on a *flat* map produces the
+// same wedges at the same camera.
+//
+// # The bend is the fill's, verbatim
+//
+// A mask that traced a slightly different curve from the geometry it clips would cut a sliver off
+// every tile edge, or leave one. So this is a copy of `fill_globe.mat`'s vertex stage rather than
+// a second derivation of it -- and the quad it runs on is subdivided by the consumer to the same
+// grid the producer split that tile's fills against.
+material {
+    name : tessella_mask_globe_anchored,
+    shadingModel : unlit,
+    blending : opaque,
+    culling : none,
+    parameters : [
+        { type : float4,   name : color },
+        { type : float,    name : opacity },
+        // `globe_ubo::GlobeBendUbo`, and the tile centre it expands about.
+        { type : float2,   name : bendCenter },
+        { type : float4,   name : bendAnchor },
+        { type : float4,   name : bendU },
+        { type : float4,   name : bendV },
+        { type : float4,   name : bendUU },
+        { type : float4,   name : bendVV },
+        { type : float4,   name : bendUV }
+    ],
+    requires : [ position ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        // The same expansion the fills and lines this clips are drawn with.
+        //
+        // A mask has to trace the *same* curve as the geometry it admits. Left on the trig bend
+        // while the fills went anchored, the two differed by the direct form's own `f32` error --
+        // a pixel or two by z14 -- and that is a sliver cut off every tile edge. A fill loses a
+        // hairline there and survives it; a three-pixel road does not, and Seattle at z14 had a
+        // clean gap in the street grid along a tile row where the mask admitted nothing.
+        vec2 d = getPosition().xy - materialParams.bendCenter;
+        material.worldPosition = materialParams.bendAnchor
+                               + materialParams.bendU * d.x
+                               + materialParams.bendV * d.y
+                               + 0.5 * (materialParams.bendUU * (d.x * d.x)
+                                      + materialParams.bendVV * (d.y * d.y))
+                               + materialParams.bendUV * (d.x * d.y);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = vec4(0.0);
+    }
+}
