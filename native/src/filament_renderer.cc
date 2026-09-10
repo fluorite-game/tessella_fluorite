@@ -189,6 +189,49 @@ constexpr PaintSlot kFillOutlineSlots[] = {
      filament::VertexBuffer::AttributeType::FLOAT2},
 };
 
+/// The line family's slots. `data` is not paint -- it is the extrusion normal and the segment's
+/// geometry -- so it takes a custom slot with no permutation bit.
+constexpr PaintSlot kLineSlots[] = {
+    {TSL_UBO_ID_LINE_POS_NORMAL_VERTEX_ATTRIBUTE, -1, -1, 0,
+     filament::VertexBuffer::AttributeType::SHORT2},
+    {TSL_UBO_ID_LINE_DATA_VERTEX_ATTRIBUTE, 0, -1, sizeof(std::uint8_t) * 4,
+     filament::VertexBuffer::AttributeType::UBYTE4},
+    {TSL_UBO_ID_LINE_COLOR_VERTEX_ATTRIBUTE, 1, 0, sizeof(float) * 4,
+     filament::VertexBuffer::AttributeType::FLOAT4},
+    {TSL_UBO_ID_LINE_BLUR_VERTEX_ATTRIBUTE, 2, 1, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_LINE_OPACITY_VERTEX_ATTRIBUTE, 3, 2, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_LINE_GAP_WIDTH_VERTEX_ATTRIBUTE, 4, 3, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_LINE_OFFSET_VERTEX_ATTRIBUTE, 5, 4, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_LINE_WIDTH_VERTEX_ATTRIBUTE, 6, 5, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+};
+
+/// The circle family's. Every attribute but the position is paint, which is what makes a circle
+/// the widest permutation space in the style spec -- seven properties, and mbgl compiles a shader
+/// for each of the hundred and twenty-eight combinations it meets.
+constexpr PaintSlot kCircleSlots[] = {
+    {TSL_UBO_ID_CIRCLE_POS_VERTEX_ATTRIBUTE, -1, -1, 0,
+     filament::VertexBuffer::AttributeType::SHORT2},
+    {TSL_UBO_ID_CIRCLE_COLOR_VERTEX_ATTRIBUTE, 0, 0, sizeof(float) * 4,
+     filament::VertexBuffer::AttributeType::FLOAT4},
+    {TSL_UBO_ID_CIRCLE_RADIUS_VERTEX_ATTRIBUTE, 1, 1, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_CIRCLE_BLUR_VERTEX_ATTRIBUTE, 2, 2, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_CIRCLE_OPACITY_VERTEX_ATTRIBUTE, 3, 3, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_CIRCLE_STROKE_COLOR_VERTEX_ATTRIBUTE, 4, 4, sizeof(float) * 4,
+     filament::VertexBuffer::AttributeType::FLOAT4},
+    {TSL_UBO_ID_CIRCLE_STROKE_WIDTH_VERTEX_ATTRIBUTE, 5, 5, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_CIRCLE_STROKE_OPACITY_VERTEX_ATTRIBUTE, 6, 6, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+};
+
 /// The slots a family declares, or an empty span for one still on the wire-order path.
 ///
 /// A family joins the permutation mechanism by gaining a table here and constants in its
@@ -200,6 +243,10 @@ std::pair<const PaintSlot*, std::size_t> paintSlots(std::int32_t shader) {
             return {kFillSlots, std::size(kFillSlots)};
         case TSL_BUILTIN_FILL_OUTLINE_SHADER:
             return {kFillOutlineSlots, std::size(kFillOutlineSlots)};
+        case TSL_BUILTIN_LINE_SHADER:
+            return {kLineSlots, std::size(kLineSlots)};
+        case TSL_BUILTIN_CIRCLE_SHADER:
+            return {kCircleSlots, std::size(kCircleSlots)};
         default:
             return {nullptr, 0};
     }
@@ -207,12 +254,54 @@ std::pair<const PaintSlot*, std::size_t> paintSlots(std::int32_t shader) {
 
 /// The material constants a family's paint mask specializes, in bit order.
 constexpr const char* kFillConstants[] = {"colorFromAttribute", "opacityFromAttribute"};
+constexpr const char* kLineConstants[] = {"colorFromAttribute", "blurFromAttribute",
+                                          "opacityFromAttribute", "gapWidthFromAttribute",
+                                          "offsetFromAttribute", "widthFromAttribute"};
+constexpr const char* kCircleConstants[] = {
+    "colorFromAttribute",       "radiusFromAttribute",      "blurFromAttribute",
+    "opacityFromAttribute",     "strokeColorFromAttribute", "strokeWidthFromAttribute",
+    "strokeOpacityFromAttribute"};
 
 std::pair<const char* const*, std::size_t> paintConstants(std::int32_t shader) {
     switch (shader) {
         case TSL_BUILTIN_FILL_SHADER:
         case TSL_BUILTIN_FILL_OUTLINE_SHADER:
             return {kFillConstants, std::size(kFillConstants)};
+        case TSL_BUILTIN_LINE_SHADER:
+            return {kLineConstants, std::size(kLineConstants)};
+        case TSL_BUILTIN_CIRCLE_SHADER:
+            return {kCircleConstants, std::size(kCircleConstants)};
+        default:
+            return {nullptr, 0};
+    }
+}
+
+/// One zoom-mix factor: the material parameter it feeds, and where the drawable block holds it.
+///
+/// Named per family rather than derived from the slot order, because a block's layout is mbgl's
+/// and does not follow the attribute ids: a circle's `extrude_scale` sits between the matrix and
+/// the factors, so its first factor is at 72 where a line's is at 68.
+struct MixFactor {
+    const char* name;
+    std::size_t offset;
+};
+
+constexpr MixFactor kFillFactors[] = {{"colorT", 64}, {"opacityT", 68}};
+constexpr MixFactor kLineFactors[] = {{"colorT", 68},    {"blurT", 72},   {"opacityT", 76},
+                                      {"gapWidthT", 80}, {"offsetT", 84}, {"widthT", 88}};
+constexpr MixFactor kCircleFactors[] = {
+    {"colorT", 72},       {"radiusT", 76},      {"blurT", 80},         {"opacityT", 84},
+    {"strokeColorT", 88}, {"strokeWidthT", 92}, {"strokeOpacityT", 96}};
+
+std::pair<const MixFactor*, std::size_t> mixFactors(std::int32_t shader) {
+    switch (shader) {
+        case TSL_BUILTIN_FILL_SHADER:
+        case TSL_BUILTIN_FILL_OUTLINE_SHADER:
+            return {kFillFactors, std::size(kFillFactors)};
+        case TSL_BUILTIN_LINE_SHADER:
+            return {kLineFactors, std::size(kLineFactors)};
+        case TSL_BUILTIN_CIRCLE_SHADER:
+            return {kCircleFactors, std::size(kCircleFactors)};
         default:
             return {nullptr, 0};
     }
@@ -343,6 +432,12 @@ bool attributeType(std::uint8_t wire, filament::VertexBuffer::AttributeType& out
         case TSL_ATTRIBUTE_DATA_TYPE_USHORT4: out = AT::USHORT4; return true;
         case TSL_ATTRIBUTE_DATA_TYPE_UBYTE4: out = AT::UBYTE4; return true;
         case TSL_ATTRIBUTE_DATA_TYPE_BYTE4: out = AT::BYTE4; return true;
+        // One float, which is what a data-driven scalar supplies when it does not also vary with
+        // zoom -- `line-width`, `circle-radius`, `fill-opacity`. Its absence here was silent and
+        // total: `attributeType` answering false made the attribute *not present*, so the mask
+        // bit was never set, the material was specialized to read the layer's uniform, and every
+        // such property fell back to its spec default. Data-driven line widths drew at one pixel.
+        case TSL_ATTRIBUTE_DATA_TYPE_FLOAT: out = AT::FLOAT; return true;
         case TSL_ATTRIBUTE_DATA_TYPE_FLOAT2: out = AT::FLOAT2; return true;
         case TSL_ATTRIBUTE_DATA_TYPE_FLOAT3: out = AT::FLOAT3; return true;
         case TSL_ATTRIBUTE_DATA_TYPE_FLOAT4: out = AT::FLOAT4; return true;
@@ -1960,6 +2055,22 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
                                   static_cast<std::uint8_t>(slot.declaredBytes));
             }
         }
+        // What arrived against what was taken. The mask is the whole of the permutation, and a
+        // property that is data-driven in the style but absent from the mask is the failure this
+        // found: `attributeType` refusing a type makes the attribute *not present*, which is
+        // indistinguishable from a style that never asked for it. Printing the two together is
+        // what separates them.
+        static const bool tracingPaint = std::getenv("TSF_PAINT_TRACE") != nullptr;
+        if (tracingPaint) {
+            std::fprintf(stderr, "paint shader=%d verts=%u mask=%u |", add.builtinShader,
+                         static_cast<unsigned>(add.vertexCount), paintMask);
+            for (const Attribute& a : add.attrs) {
+                std::fprintf(stderr, " id=%u bind=%d off=%u stride=%u bytes=%zu",
+                             a.desc.attr_id, a.desc.binding, a.desc.offset, a.desc.stride,
+                             a.data.size);
+            }
+            std::fprintf(stderr, "\n");
+        }
         auto* vertices = builder.build(*engine_);
         if (vertices == nullptr) {
             return;
@@ -2400,14 +2511,16 @@ void FilamentRenderer::issue(const Batch& batch) {
         // may not read, and a stale factor on a reused instance would then apply to the drawable
         // that does. Zero is the right answer for a property that varies per feature but not with
         // zoom, and is what the producer sends for it.
-        if (paintConstants(batch.builtinShader).first != nullptr) {
-            constexpr std::size_t kFactorsAt = sizeof(float) * 16;
-            float factors[2] = {0.0f, 0.0f};
-            if (at + kFactorsAt + sizeof factors <= drawables->second.size()) {
-                std::memcpy(factors, drawables->second.data() + at + kFactorsAt, sizeof factors);
+        if (const auto [factors, factorCount] = mixFactors(batch.builtinShader);
+            factors != nullptr) {
+            for (std::size_t f = 0; f < factorCount; f++) {
+                float value = 0.0f;
+                if (at + factors[f].offset + sizeof value <= drawables->second.size()) {
+                    std::memcpy(&value, drawables->second.data() + at + factors[f].offset,
+                                sizeof value);
+                }
+                instance->setParameter(factors[f].name, value);
             }
-            instance->setParameter("colorT", factors[0]);
-            instance->setParameter("opacityT", factors[1]);
         }
 
         // A bent drawable takes both halves of the bend. `transform` is the tile-local to

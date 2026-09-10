@@ -34,6 +34,15 @@ material {
     shadingModel : unlit,
     blending : transparent,
     culling : none,
+    constants : [
+        // The permutation, as `line.mat` declares it and for the same reason.
+        { name : colorFromAttribute,    type : bool, default : false },
+        { name : blurFromAttribute,     type : bool, default : false },
+        { name : opacityFromAttribute,  type : bool, default : false },
+        { name : gapWidthFromAttribute, type : bool, default : false },
+        { name : offsetFromAttribute,   type : bool, default : false },
+        { name : widthFromAttribute,    type : bool, default : false }
+    ],
     parameters : [
         // `globe_ubo::GlobeBendUbo`, in declaration order, and the tile centre it expands about.
         { type : float2, name : bendCenter },
@@ -56,13 +65,23 @@ material {
         // Clip-space to pixels, `{width/2, -height/2}`. Only used to measure how much perspective
         // stretched the extrusion, so the feather stays one pixel wide on a pitched map where the
         // far edge of a road is compressed.
-        { type : float2, name : unitsToPixels }
+        { type : float2, name : unitsToPixels },
+        // The frame's zoom-mix factors, from `LineDrawableUBO`.
+        { type : float,  name : colorT },
+        { type : float,  name : blurT },
+        { type : float,  name : opacityT },
+        { type : float,  name : gapWidthT },
+        { type : float,  name : offsetT },
+        { type : float,  name : widthT }
     ],
-    requires : [ position, custom0 ],
-    variables : [ lineEdge, lineGamma ]
+    requires : [ position, custom0, custom1, custom2, custom3, custom4, custom5,
+                 custom6 ],
+    variables : [ lineEdge, lineGamma, linePaint ]
 }
 
 vertex {
+#include "line_paint.glsl"
+
     void materialVertex(inout MaterialVertexInputs material) {
         // EXTRUDE_SCALE is mbgl's: the byte pair encodes a unit vector over 63.
         const float EXTRUDE_SCALE = 63.0;
@@ -82,9 +101,9 @@ vertex {
         vec2 extrude = data.xy - 128.0;
         float direction = mod(data.z, 4.0) - 1.0;
 
-        float gapwidth = materialParams.gapwidth * 0.5;
-        float halfwidth = materialParams.width * 0.5;
-        float lineOffset = -1.0 * materialParams.offset;
+        float gapwidth = resolveLineGapWidth() * 0.5;
+        float halfwidth = resolveLineWidth() * 0.5;
+        float lineOffset = -1.0 * resolveLineOffset();
 
         // The quad reaches `outset` from the centre and the fill starts at `inset`. With no gap
         // the inset is zero and the line is solid; with one the two edges are drawn and the middle
@@ -141,7 +160,8 @@ vertex {
         float gammaScale = unprojected / max(projected, 1e-6);
 
         material.lineEdge = vec4(normal, outset, inset);
-        material.lineGamma = vec4(gammaScale, 0.0, 0.0, 0.0);
+        material.lineGamma = vec4(gammaScale, resolveLineBlur(), 0.0, 0.0);
+        material.linePaint = resolveLineColor() * resolveLineOpacity();
         material.worldPosition = clip;
     }
 }
@@ -159,12 +179,12 @@ fragment {
         float dist = length(normal) * outset;
 
         // The fade: in across the inner edge for a line with a gap, out across the outer one.
-        float blur2 = (materialParams.blur + 1.0 / max(materialParams.pixelRatio, 1e-6))
+        float blur2 = (variable_lineGamma.y + 1.0 / max(materialParams.pixelRatio, 1e-6))
                     * gammaScale;
         float alpha = clamp(min(dist - (inset - blur2), outset - dist) / blur2, 0.0, 1.0);
 
         // Premultiplied, matching the blending Filament is configured for: the colour is scaled by
         // the coverage as well as the opacity, so a half-covered edge contributes half of both.
-        material.baseColor = materialParams.color * (alpha * materialParams.opacity);
+        material.baseColor = variable_linePaint * alpha;
     }
 }
