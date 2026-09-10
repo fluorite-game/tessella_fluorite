@@ -107,6 +107,24 @@ std::size_t drawableStride(std::int32_t family) {
 /// And which carries the layer's evaluated paint.
 constexpr std::uint32_t kPropsSlot = 5;
 
+/// Where the anchored bend's coefficients arrive -- `globe_ubo::ID_GLOBE_BEND_UBO`.
+///
+/// Eleven, past everything mbgl binds. Not five: that is `kPropsSlot`, the layer's evaluated paint,
+/// and every family keeps it there.
+constexpr std::uint32_t kGlobeBendSlot = 11;
+
+/// Six `vec4` -- `globe_ubo::GlobeBendUbo::STRIDE`.
+constexpr std::size_t kGlobeBendStride = 96;
+
+/// The zoom at or above which a bent tile takes the anchored path.
+///
+/// The two forms overlap between z9 and z11 -- checked against the exact chain, the expansion is
+/// 0.005 px out at z9 and 0.0003 at z11, and the direct bend does not reach a hundredth of a pixel
+/// until z11 -- so anywhere in there is a seamless place to switch. Ten is the middle of it. Below,
+/// a tile subtends too much sphere for a quadratic; above, the direct bend's `f32` trig is worth
+/// more than a pixel.
+constexpr std::uint8_t kAnchoredFromZoom = 10;
+
 /// A symbol's per-drawable pass flags, which are their own block rather than part of the paint.
 constexpr std::uint32_t kSymbolTilePropsSlot = 3;
 
@@ -257,11 +275,20 @@ FilamentRenderer::FilamentRenderer(filament::Engine* engine,
         // `<stem>_globe` is the same family bent onto a sphere. Stripped before the lookup so
         // one table names the families, and filed separately so the two never shadow each other.
         std::string stem = entry.path().stem().string();
-        const std::string suffix = "_globe";
-        const bool bent = stem.size() > suffix.size()
-                          && stem.compare(stem.size() - suffix.size(), suffix.size(), suffix) == 0;
-        if (bent) {
-            stem.erase(stem.size() - suffix.size());
+        const auto endsWith = [](const std::string& text, const std::string& tail) {
+            return text.size() > tail.size()
+                   && text.compare(text.size() - tail.size(), tail.size(), tail) == 0;
+        };
+        // Longest first: `_globe_anchored` also ends in `_anchored`, and testing `_globe` first
+        // would leave `fill_globe_anchored` filed as a family called `fill_globe_anchored`.
+        const std::string anchoredSuffix = "_globe_anchored";
+        const std::string globeSuffix = "_globe";
+        const bool anchored = endsWith(stem, anchoredSuffix);
+        const bool bent = anchored || endsWith(stem, globeSuffix);
+        if (anchored) {
+            stem.erase(stem.size() - anchoredSuffix.size());
+        } else if (bent) {
+            stem.erase(stem.size() - globeSuffix.size());
         }
         const std::int32_t family = familyOf(stem);
         if (family == TSL_BUILTIN_NONE) {
@@ -276,7 +303,11 @@ FilamentRenderer::FilamentRenderer(filament::Engine* engine,
         auto* material =
             filament::Material::Builder().package(package.data(), package.size()).build(*engine_);
         if (material != nullptr) {
-            (bent ? globeMaterials_ : materials_)[family] = material;
+            if (anchored) {
+                anchoredMaterials_[family] = material;
+            } else {
+                (bent ? globeMaterials_ : materials_)[family] = material;
+            }
         } else {
             // Filament has already said why on stderr. Counted so a caller can
             // tell "this directory has no materials" from "these materials were
@@ -601,6 +632,10 @@ FilamentRenderer::MaskGrid FilamentRenderer::maskGrid(const std::uint32_t cells)
 /// radius *inside* the surface, and a coarser one would poke through and occlude the very content
 /// it exists to let past.
 void FilamentRenderer::writeShell() {
+    static const bool noShell = std::getenv("TSF_NO_SHELL") != nullptr;
+    if (noShell) {
+        return;
+    }
     if (projection_ != TSL_PROJECTION_MODE_GLOBE || shellMaterial_ == nullptr) {
         return;
     }
@@ -672,7 +707,16 @@ void FilamentRenderer::writeShell() {
         return;
     }
     shellInstance_->setParameter("globeMatrix", globeMatrix_);
-    shellInstance_->setParameter("color", shellColor_);
+    // Diagnostic: a shell nobody can mistake for the background. With TSF_SHELL_COLOR set, any
+    // pixel of this colour inside the disc is sphere with no surface tile over it.
+    static const char* const shellOverride = std::getenv("TSF_SHELL_COLOR");
+    if (shellOverride != nullptr) {
+        float r = 0.0f, g = 0.0f, b = 0.0f;
+        std::sscanf(shellOverride, "%f,%f,%f", &r, &g, &b);
+        shellInstance_->setParameter("color", filament::math::float4{r, g, b, 1.0f});
+    } else {
+        shellInstance_->setParameter("color", shellColor_);
+    }
 
     filament::RenderableManager::Builder builder(1);
     builder.boundingBox({{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}})
@@ -755,6 +799,14 @@ void FilamentRenderer::writeMasks() {
             static_cast<float>(tile.overscaled_z % 4) / 4.0f, 0.5f, 1.0f});
         instance->setParameter("opacity", 1.0f);
         instance->setDepthWrite(false);
+        // Tested against the shell on a globe, for the reason the colour pass is: both hemispheres
+        // project onto the same disc, so a far-side tile's mask lands on the same pixels as a
+        // near-side one. Untested, REPLACE let whichever was drawn last own the pixel -- and in the
+        // middle of the disc that was the far side, so every near-side fill failed its own
+        // reference and the water vanished from the centre outward, leaving a ring of ocean at the
+        // limb and background everywhere else. Never writes depth either way; the shell is the only
+        // writer, and a mask that wrote would hide the fill it exists to admit.
+        instance->setDepthCulling(bent);
         instance->setStencilWrite(true);
         instance->setStencilReferenceValue(reference);
         instance->setStencilCompareFunction(filament::MaterialInstance::StencilCompareFunc::A);
@@ -771,7 +823,11 @@ void FilamentRenderer::writeMasks() {
         builder.boundingBox({{0, 0, 0}, {8192, 8192, 8192}})
             .layerMask(0xFF, layer_)
             .culling(false)
-            .priority(band)
+            // One past the shell's, so the shell has written depth before any mask tests against
+            // it. Both sat in band zero, and Filament orders within a band as it likes -- so on a
+            // globe a mask could be written before there was any depth to reject it, which is the
+            // whole of the depth test above.
+            .priority(static_cast<std::uint8_t>(band + 1))
             .material(0, instance)
             .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
                       bent ? grid.vertices : maskVertices_, bent ? grid.indices : maskIndices_, 0,
@@ -811,6 +867,10 @@ FilamentRenderer::~FilamentRenderer() {
     }
     // The globe's tables, which the flat path never touches and which were leaking a material per
     // family and a buffer pair per grid for the life of the process.
+    for (auto& [family, material] : anchoredMaterials_) {
+        engine_->destroy(material);
+    }
+    anchoredMaterials_.clear();
     for (auto& [family, material] : globeMaterials_) {
         engine_->destroy(material);
     }
@@ -1580,6 +1640,27 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
         return;
     }
 
+    static const bool traceGeometry = std::getenv("TSF_GEOM_TRACE") != nullptr;
+    if (traceGeometry) {
+        std::uint32_t maxIndex = 0;
+        const auto n = static_cast<std::uint32_t>(add.indexes.size / sizeof(std::uint16_t));
+        const auto* raw = reinterpret_cast<const std::uint16_t*>(add.indexes.data);
+        for (std::uint32_t i = 0; i < n; ++i) {
+            maxIndex = std::max(maxIndex, static_cast<std::uint32_t>(raw[i]));
+        }
+        const TileID tile = add.tileID.value_or(TileID{});
+        std::fprintf(stderr, "geom id=%llu shader=%d layer=%d tile=%u/%u/%u vertices=%u indexes=%u "
+                             "segments=%zu maxIndex=%u\n",
+                     static_cast<unsigned long long>(add.id), add.builtinShader, add.layerIndex,
+                     static_cast<unsigned>(tile.z), static_cast<unsigned>(tile.x),
+                     static_cast<unsigned>(tile.y), static_cast<unsigned>(add.vertexCount), n,
+                     add.segments.size(), maxIndex);
+        for (const tsl_segment& seg : add.segments) {
+            std::fprintf(stderr, "  seg v=%u+%u i=%u+%u\n", seg.vertex_offset, seg.vertex_length,
+                         seg.index_offset, seg.index_length);
+        }
+    }
+
     // The walls arrive as instances over the roof's outline rather than as their own vertices.
     if (add.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER) {
         expandWalls(add);
@@ -1808,8 +1889,10 @@ void FilamentRenderer::issue(const Batch& batch) {
     // thirty-two layers in one band and left Filament to sort them as it saw fit. Two things
     // came of that: roads painted over the labels naming them, and the background's opaque-pass
     // drawable, which the producer emits after the rest, landed wherever it landed.
+    // Five and six rather than four and five: band zero is the globe's depth shell and one
+    // through four are the masks, which have to be written before anything tests against them.
     const auto band = static_cast<std::uint8_t>(
-        batch.pass == static_cast<std::uint8_t>(TSL_RENDER_PASS_OPAQUE) ? 4 : 5);
+        batch.pass == static_cast<std::uint8_t>(TSL_RENDER_PASS_OPAQUE) ? 5 : 6);
 
     for (std::size_t i = 0; i < batch.geometries.size(); i++) {
         const auto mesh = meshes_.find(batch.geometries[i]);
@@ -1856,11 +1939,40 @@ void FilamentRenderer::issue(const Batch& batch) {
         // One instance per (layer, shader, tile slot). Keyed by the tile because the scissor is a
         // property of the instance and the clip is a property of the tile; still bounded by the
         // cover rather than one per primitive per frame.
-        const auto key =
-            std::make_tuple(batch.layerIndex, batch.builtinShader, batch.uboIndexes[i]);
+        // The anchored bend, where the tile is small enough for a quadratic and the direct bend's
+        // `f32` trig has started to cost more than a pixel. See `kAnchoredFromZoom`.
+        //
+        // Chosen per drawable rather than per batch, because a batch can hold tiles of more than
+        // one zoom -- an ancestor drawn under its children is the ordinary case -- and the choice
+        // is a property of how much sphere the tile covers.
+        const filament::math::float4* bendRows = nullptr;
+        auto anchoredMaterial = anchoredMaterials_.end();
+        static const bool noAnchored = std::getenv("TSF_NO_ANCHORED") != nullptr;
+        if (bent && !noAnchored && mesh->second.tile.z >= kAnchoredFromZoom) {
+            anchoredMaterial = anchoredMaterials_.find(batch.builtinShader);
+            if (anchoredMaterial != anchoredMaterials_.end()) {
+                if (const auto bend = layer->second.find(kGlobeBendSlot);
+                    bend != layer->second.end()) {
+                    const std::size_t bendAt =
+                        static_cast<std::size_t>(batch.uboIndexes[i]) * kGlobeBendStride;
+                    if (bendAt + kGlobeBendStride <= bend->second.size()) {
+                        bendRows = reinterpret_cast<const filament::math::float4*>(
+                            bend->second.data() + bendAt);
+                    }
+                }
+            }
+        }
+        const bool useAnchored = bendRows != nullptr;
+
+        // The material is part of the key: a tile crossing the threshold mid-zoom would otherwise
+        // keep the instance it was cached with and be drawn by the other form's shader, which
+        // declares different parameters and would read whatever was last left in them.
+        const auto key = std::make_tuple(batch.layerIndex, batch.builtinShader, batch.uboIndexes[i],
+                                         useAnchored);
         auto found = instances_.find(key);
         if (found == instances_.end()) {
-            found = instances_.emplace(key, material->second->createInstance()).first;
+            auto* chosen = useAnchored ? anchoredMaterial->second : material->second;
+            found = instances_.emplace(key, chosen->createInstance()).first;
             made_++;
         }
         auto* instance = found->second;
@@ -1870,7 +1982,21 @@ void FilamentRenderer::issue(const Batch& batch) {
         // drawable would have used as its tile-to-clip matrix -- and `globeMatrix` is the frame's
         // sphere-to-clip. Every material in `globeMaterials_` declares both, which is why this is
         // unconditional here rather than per family.
-        if (bent) {
+        if (useAnchored) {
+            // Half the tile's extent, which is where the producer expanded about. The same 8192
+              // the scissor's own sampling walks, and the extent `camera::EXTENT` scales every
+              // tile to on the way out.
+            constexpr float kHalfExtent = 8192.0f / 2.0f;
+            instance->setParameter("bendCenter",
+                                   filament::math::float2{kHalfExtent, kHalfExtent});
+            instance->setParameter("bendAnchor", bendRows[0]);
+            instance->setParameter("bendU", bendRows[1]);
+            instance->setParameter("bendV", bendRows[2]);
+            instance->setParameter("bendUU", bendRows[3]);
+            instance->setParameter("bendVV", bendRows[4]);
+            instance->setParameter("bendUV", bendRows[5]);
+            anchoredDrawn_++;
+        } else if (bent) {
             instance->setParameter("matrix", transform);
             instance->setParameter("globeMatrix", globeMatrix_);
         }
@@ -2466,6 +2592,15 @@ void FilamentRenderer::issue(const Batch& batch) {
             constexpr int kSamples = 4;
             float minX = 1e30f, minY = 1e30f, maxX = -1e30f, maxY = -1e30f;
             bool boundable = true;
+            // The patch's own extent on the sphere, as a 3D box over the samples. A grid samples
+            // the patch's *interior*; the extreme screen x of a bent patch is at the silhouette,
+            // which no grid line passes through. For a small patch the gap is under the margin
+            // below. For a large one it is not: at z0 one tile is the whole sphere, its silhouette
+            // is a quarter turn from every grid line, and the box came out narrower than the disc
+            // -- so the fill was scissored away at the limb while the background, which carries no
+            // box, drew there. That is the strip of land colour down each side of the planet.
+            filament::math::float3 lo{1e30f, 1e30f, 1e30f};
+            filament::math::float3 hi{-1e30f, -1e30f, -1e30f};
             for (int row = 0; row <= kSamples && boundable; ++row) {
                 for (int column = 0; column <= kSamples; ++column) {
                     const filament::math::float4 merc =
@@ -2482,15 +2617,21 @@ void FilamentRenderer::issue(const Batch& batch) {
                         90.0f;
                     const float latR = lat * kPi / 180.0f;
                     const float lonR = lon * kPi / 180.0f;
+                    const filament::math::float3 sphere{std::cos(latR) * std::sin(lonR),
+                                                       -std::sin(latR),
+                                                       std::cos(latR) * std::cos(lonR)};
                     const filament::math::float4 clip =
-                        globeMatrix_ * filament::math::float4{std::cos(latR) * std::sin(lonR),
-                                                              -std::sin(latR),
-                                                              std::cos(latR) * std::cos(lonR),
-                                                              1.0f};
+                        globeMatrix_ * filament::math::float4{sphere, 1.0f};
                     if (clip.w <= 0.0f) {
                         boundable = false;
                         break;
                     }
+                    lo.x = std::min(lo.x, sphere.x);
+                    lo.y = std::min(lo.y, sphere.y);
+                    lo.z = std::min(lo.z, sphere.z);
+                    hi.x = std::max(hi.x, sphere.x);
+                    hi.y = std::max(hi.y, sphere.y);
+                    hi.z = std::max(hi.z, sphere.z);
                     minX = std::min(minX, clip.x / clip.w);
                     maxX = std::max(maxX, clip.x / clip.w);
                     // The same Y sign the flat box is carried across with, and for the same
@@ -2499,6 +2640,17 @@ void FilamentRenderer::issue(const Batch& batch) {
                     minY = std::min(minY, screenY);
                     maxY = std::max(maxY, screenY);
                 }
+            }
+            // A chord of 0.26 is a patch about fifteen degrees across, which is a tile up to
+            // about z3. Past that the silhouette cannot cross the patch far enough from a grid
+            // line to matter, and the margin below covers it. Under it the box is not a bound at
+            // all, and a box that is not a bound must not be used: too large clips nothing, too
+            // small cuts the tile's own fill off, and only one of those is recoverable.
+            constexpr float kUnboundableChord = 0.26f;
+            if (boundable) {
+                const filament::math::float3 span = hi - lo;
+                boundable = std::sqrt(span.x * span.x + span.y * span.y + span.z * span.z)
+                            <= kUnboundableChord;
             }
             const auto toPixels = [](float ndc, std::uint32_t extent) {
                 return (ndc * 0.5f + 0.5f) * static_cast<float>(extent);

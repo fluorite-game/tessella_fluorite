@@ -190,6 +190,9 @@ public:
     /// How many clip masks were written this frame.
     [[nodiscard]] std::uint64_t masked() const noexcept { return masked_; }
 
+    /// Drawables that took the anchored bend rather than the direct one.
+    [[nodiscard]] std::uint64_t anchoredDrawn() const noexcept { return anchoredDrawn_; }
+
     /// Buckets whose indices had to be widened to `u32` because the producer split them.
     ///
     /// Nonzero means some layer passed 65,535 vertices in one tile, which is the regime the
@@ -225,6 +228,10 @@ public:
 
     /// How many materials were loaded.
     [[nodiscard]] std::size_t materials() const noexcept { return materials_.size(); }
+    /// How many bent families have an anchored package beside the direct one.
+    [[nodiscard]] std::size_t anchoredMaterials() const noexcept {
+        return anchoredMaterials_.size();
+    }
 
 private:
     /// A geometry's GPU buffers, kept until it retires.
@@ -343,6 +350,11 @@ private:
     filament::Scene* scene_ = nullptr;
 
     std::unordered_map<std::int32_t, filament::Material*> materials_;
+    /// The bent families again, expanded about the tile rather than bent by trig. Selected per
+    /// drawable above `kAnchoredFromZoom`; see `fill_globe_anchored.mat`.
+    std::unordered_map<std::int32_t, filament::Material*> anchoredMaterials_;
+    /// How many drawables took the anchored path this frame, for the counters.
+    std::uint64_t anchoredDrawn_ = 0;
     /// The same families bent onto a sphere, loaded from `<stem>_globe.filamat`.
     ///
     /// A second map rather than a variant inside the first: the two differ in what a vertex *is*
@@ -380,7 +392,11 @@ private:
     /// Keyed by the tile as well as the layer because the scissor is a property of the instance
     /// and the clip is a property of the tile. Still bounded by the cover -- a handful of tiles
     /// times the layers that draw -- rather than one per primitive per frame.
-    std::map<std::tuple<std::uint32_t, std::int32_t, std::uint32_t>, filament::MaterialInstance*>
+    /// The bool is whether this drawable took the anchored bend: the two forms are different
+    /// materials declaring different parameters, so an instance cached under one must never be
+    /// handed to the other when a tile crosses the threshold mid-zoom.
+    std::map<std::tuple<std::uint32_t, std::int32_t, std::uint32_t, bool>,
+             filament::MaterialInstance*>
         instances_;
 
     /// The layer every renderable goes on. See the constructor.
