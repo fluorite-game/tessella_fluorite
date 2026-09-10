@@ -116,6 +116,9 @@ constexpr std::uint32_t kGlobeBendSlot = 11;
 /// Six `vec4` -- `globe_ubo::GlobeBendUbo::STRIDE`.
 constexpr std::size_t kGlobeBendStride = 96;
 
+/// Half a tile's extent, which is the offset the producer expanded the bend about.
+constexpr float kHalfExtent = 8192.0f / 2.0f;
+
 /// The zoom at or above which a bent tile takes the anchored path.
 ///
 /// The two forms overlap between z9 and z11 -- checked against the exact chain, the expansion is
@@ -1986,7 +1989,6 @@ void FilamentRenderer::issue(const Batch& batch) {
             // Half the tile's extent, which is where the producer expanded about. The same 8192
               // the scissor's own sampling walks, and the extent `camera::EXTENT` scales every
               // tile to on the way out.
-            constexpr float kHalfExtent = 8192.0f / 2.0f;
             instance->setParameter("bendCenter",
                                    filament::math::float2{kHalfExtent, kHalfExtent});
             instance->setParameter("bendAnchor", bendRows[0]);
@@ -2620,8 +2622,28 @@ void FilamentRenderer::issue(const Batch& batch) {
                     const filament::math::float3 sphere{std::cos(latR) * std::sin(lonR),
                                                        -std::sin(latR),
                                                        std::cos(latR) * std::cos(lonR)};
-                    const filament::math::float4 clip =
-                        globeMatrix_ * filament::math::float4{sphere, 1.0f};
+                    // Measured on the curve the geometry is actually drawn on, which for an
+                    // anchored drawable is the expansion rather than the trig.
+                    //
+                    // This is worth no pixels today and is still right. The two curves differ by
+                    // the direct form's own `f32` error, a pixel or two by z15, and the box
+                    // already carries a pixel of margin -- so nothing moved when it was measured.
+                    // What makes it worth keeping is that the *mask* has the same mismatch and is
+                    // not yet fixed: with the mask still on the direct bend, Monterey z15 is
+                    // 0.358% against the oracle and 0.003% with the stencil off. Once the mask
+                    // follows the expansion too, a box left on the trig would be the next thing
+                    // in the way.
+                    filament::math::float4 clip;
+                    if (bendRows != nullptr) {
+                        const float du =
+                            8192.0f * static_cast<float>(column) / kSamples - kHalfExtent;
+                        const float dv = 8192.0f * static_cast<float>(row) / kSamples - kHalfExtent;
+                        clip = bendRows[0] + bendRows[1] * du + bendRows[2] * dv
+                               + 0.5f * (bendRows[3] * (du * du) + bendRows[4] * (dv * dv))
+                               + bendRows[5] * (du * dv);
+                    } else {
+                        clip = globeMatrix_ * filament::math::float4{sphere, 1.0f};
+                    }
                     if (clip.w <= 0.0f) {
                         boundable = false;
                         break;

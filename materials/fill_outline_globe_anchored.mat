@@ -1,0 +1,88 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The fill outline on a sphere, bent by an expansion about the tile rather than by trig --
+// plan.md §18 item 6, the same expansion `fill_globe_anchored.mat` evaluates.
+//
+// The outline has to be on whichever form the fill is on. It traces the fill's own ring, so any
+// disagreement between the two curves is a fringe of outline colour lying beside the edge it is
+// meant to sit on -- and `fill-outline-color` defaults to `fill-color`, so that fringe reads as
+// more fill rather than as a line out of place. Measured with the outline left on the direct bend
+// while the fill was anchored: Monterey z13 against the oracle went 0.489% to 1.047%, so the
+// mismatch cost more than everything else remaining put together.
+//
+// # What is wrong with the direct bend
+//
+// `fill_globe.mat` computes a unit-sphere position and lets `globeMatrix` amplify it. That matrix
+// scales the sphere to 1,663,008 screen pixels at z14, so one `f32` ulp of the position is a fifth
+// of a pixel -- and `exp`, `atan`, `sin` and `cos` each cost a few ulp of their own. Measured
+// against the oracle at Monterey: 1.98% of the frame at z14 in paired bands a pixel or two wide
+// along every water edge, where z11 measures 0.13%.
+//
+// # What this does instead
+//
+// The producer evaluates the same bend and its first two derivatives at the tile's center in `f64`,
+// multiplies them through the clip matrix there, and sends the six coefficients. The shader then
+// only ever adds small numbers to a small number:
+//
+//     clip(du, dv) = anchor + d_u du + d_v dv + (d_uu du^2 + d_vv dv^2) / 2 + d_uv du dv
+//
+// `anchor` is a difference of large numbers -- which is exactly the cancellation this moves off the
+// GPU -- and every other term is small. No trig at all, so four transcendentals a vertex go with
+// the error.
+//
+// # Where it holds, and where it does not
+//
+// A quadratic is only as good as the arc its tile subtends. Checked against the exact chain, worst
+// screen error over a tile: 0.325 px at z6, 0.005 at z9, 0.0003 at z11, 0.0001 from z13 up. So this
+// is selected per tile above the crossover and `fill_globe.mat` keeps everything below it, where a
+// tile spans too much sphere for a quadratic and the direct bend is still comfortable.
+material {
+    name : tessella_fill_outline_globe_anchored,
+    shadingModel : unlit,
+    blending : transparent,
+    // As `fill_globe.mat`: tile winding is not guaranteed and the far side is removed by the
+    // horizon test rather than by a winding rule.
+    culling : none,
+    parameters : [
+        { type : float4, name : color },
+        { type : float,  name : opacity },
+        // The tile's center in tile units, so the shader can form `du`, `dv` without knowing the
+        // extent. Sent rather than assumed: a tile's extent is the layer's, not a constant.
+        { type : float2, name : bendCenter },
+        // `globe_ubo::GlobeBendUbo`, in declaration order.
+        { type : float4, name : bendAnchor },
+        { type : float4, name : bendU },
+        { type : float4, name : bendV },
+        { type : float4, name : bendUU },
+        { type : float4, name : bendVV },
+        { type : float4, name : bendUV }
+    ],
+    requires : [ position ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        // Tile units from the tile's center. Both are small, and every coefficient but the anchor
+        // is small, so nothing here is a large number waiting to cancel.
+        vec2 d = getPosition().xy - materialParams.bendCenter;
+
+        vec4 clip = materialParams.bendAnchor
+                  + materialParams.bendU * d.x
+                  + materialParams.bendV * d.y
+                  + 0.5 * (materialParams.bendUU * (d.x * d.x)
+                         + materialParams.bendVV * (d.y * d.y))
+                  + materialParams.bendUV * (d.x * d.y);
+
+        // The layer's depth bias is already in `bendAnchor.z`; the producer put it there because
+        // there is no placement matrix here to park it in.
+        material.worldPosition = clip;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        // Straight alpha, as `fill.mat` and `fill_globe.mat` write it.
+        material.baseColor = materialParams.color * materialParams.opacity;
+    }
+}
