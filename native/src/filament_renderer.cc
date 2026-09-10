@@ -1865,7 +1865,13 @@ void FilamentRenderer::issue(const Batch& batch) {
     const bool bent = projection_ == TSL_PROJECTION_MODE_GLOBE;
     auto& table = bent ? globeMaterials_ : materials_;
     const auto material = table.find(batch.builtinShader);
-    if (material == table.end()) {
+    // A family may have only the anchored package and no direct one. `line_globe_anchored.mat` has
+    // no `line_globe.mat` beside it, because a line's quad is extruded sideways in clip space and
+    // the trig form has no linear part to extrude along. Bailing on the direct table alone dropped
+    // every road on the planet before the selection below could run.
+    const bool anchoredOnly =
+        bent && material == table.end() && anchoredMaterials_.count(batch.builtinShader) != 0;
+    if (material == table.end() && !anchoredOnly) {
         missing_++;
         // A family with no globe package is a different fault from one with no material at all,
         // and drawing it flat would be worse than not drawing it: a flat layer sitting across a
@@ -1951,7 +1957,10 @@ void FilamentRenderer::issue(const Batch& batch) {
         const filament::math::float4* bendRows = nullptr;
         auto anchoredMaterial = anchoredMaterials_.end();
         static const bool noAnchored = std::getenv("TSF_NO_ANCHORED") != nullptr;
-        if (bent && !noAnchored && mesh->second.tile.z >= kAnchoredFromZoom) {
+        // A family with only an anchored package has no choice to make and takes it at every
+        // zoom: below the threshold the alternative is not drawing at all.
+        if (bent && !noAnchored
+            && (anchoredOnly || mesh->second.tile.z >= kAnchoredFromZoom)) {
             anchoredMaterial = anchoredMaterials_.find(batch.builtinShader);
             if (anchoredMaterial != anchoredMaterials_.end()) {
                 if (const auto bend = layer->second.find(kGlobeBendSlot);
@@ -1972,6 +1981,11 @@ void FilamentRenderer::issue(const Batch& batch) {
         // declares different parameters and would read whatever was last left in them.
         const auto key = std::make_tuple(batch.layerIndex, batch.builtinShader, batch.uboIndexes[i],
                                          useAnchored);
+        // A family that only has an anchored package and did not take it has nothing to draw
+        // with. Skipped rather than dereferencing the end iterator.
+        if (!useAnchored && material == table.end()) {
+            continue;
+        }
         auto found = instances_.find(key);
         if (found == instances_.end()) {
             auto* chosen = useAnchored ? anchoredMaterial->second : material->second;
@@ -2126,7 +2140,12 @@ void FilamentRenderer::issue(const Batch& batch) {
                 instance->setParameter("unitsToPixels",
                                        filament::math::float2{static_cast<float>(width_) * 0.5f,
                                                               -static_cast<float>(height_) * 0.5f});
-                instance->setParameter("matrix", transform);
+                // An anchored line has no placement matrix: its position and its sideways
+                // extrusion both come out of the expansion's own coefficients, and Filament
+                // panics on a uniform the material does not declare.
+                if (!useAnchored) {
+                    instance->setParameter("matrix", transform);
+                }
             }
 
             // A patterned fill takes its sprite rectangles from the tile props, its world anchor
