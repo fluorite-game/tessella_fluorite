@@ -27,6 +27,10 @@ material {
         { type : float4,    name : bendUU },
         { type : float4,    name : bendVV },
         { type : float4,    name : bendUV },
+        // Whether this drawable's label plane is the identity, which is how the producer says
+        // the label is walked along a line: the walk projects point by point along the *projected*
+        // road, so its output is already in the label plane and must not be projected again.
+        { type : float,     name : alongLine },
         // Clip space to screen pixels: the label plane a viewport-aligned symbol is offset in.
         // A plane's `labelPlaneMatrix` folds the projection into this; a globe's cannot, because
         // the bend is not a matrix, so the projection happens above and this is the rest of it.
@@ -133,20 +137,25 @@ vertex {
         // rather than in tile units -- which is what keeps type the same size across a tile.
         // The anchor in screen pixels. A plane reaches this with one matrix because its
         // projection is one; a globe projects through the expansion first and converts after.
-        vec4 anchorClip = materialParams.bendAnchor
-                        + materialParams.bendU * (projPos.x - materialParams.bendCenter.x)
-                        + materialParams.bendV * (projPos.y - materialParams.bendCenter.y)
-                        + 0.5 * (materialParams.bendUU
-                                     * ((projPos.x - materialParams.bendCenter.x)
-                                        * (projPos.x - materialParams.bendCenter.x))
-                               + materialParams.bendVV
-                                     * ((projPos.y - materialParams.bendCenter.y)
-                                        * (projPos.y - materialParams.bendCenter.y)))
-                        + materialParams.bendUV
-                              * ((projPos.x - materialParams.bendCenter.x)
-                                 * (projPos.y - materialParams.bendCenter.y));
-        vec4 projected_pos = materialParams.screenFromClip
-                           * vec4(anchorClip.xyz / anchorClip.w, 1.0);
+        //
+        // Except along a line, where the producer sends the identity and `projPos` is already in
+        // the label plane -- the walk stepped along the road *after* projecting it, so projecting
+        // again sends every street name off the screen. 1199 glyph quads drawn and not one dark
+        // pixel in the frame, which is what that looks like from outside.
+        vec4 projected_pos;
+        if (materialParams.alongLine >= 0.5) {
+            projected_pos = vec4(projPos.xy, 0.0, 1.0);
+        } else {
+            vec2 anchorOffset = projPos.xy - materialParams.bendCenter;
+            vec4 anchorClip = materialParams.bendAnchor
+                            + materialParams.bendU * anchorOffset.x
+                            + materialParams.bendV * anchorOffset.y
+                            + 0.5 * (materialParams.bendUU * (anchorOffset.x * anchorOffset.x)
+                                   + materialParams.bendVV * (anchorOffset.y * anchorOffset.y))
+                            + materialParams.bendUV * (anchorOffset.x * anchorOffset.y);
+            projected_pos = materialParams.screenFromClip
+                          * vec4(anchorClip.xyz / anchorClip.w, 1.0);
+        }
         vec2 pos_rot = a_offset / 32.0 * fontScale + a_pxoffset;
         vec2 pos0 = projected_pos.xy / projected_pos.w + rotation_matrix * pos_rot;
         vec4 clip = materialParams.coordMatrix * vec4(pos0, 0.0, 1.0);

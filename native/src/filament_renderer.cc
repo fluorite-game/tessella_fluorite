@@ -2366,6 +2366,22 @@ void FilamentRenderer::issue(const Batch& batch) {
                     return out;
                 };
                 if (useAnchored) {
+                    // The producer sends the identity as the label plane when a label is walked
+                    // along a line, because the walk projects the road point by point and its
+                    // output is already in that plane. Read back rather than flagged: the block
+                    // carries the matrix and nothing else, and identity is what it means.
+                    const auto& plane = block.label_plane_matrix;
+                    bool isIdentity = true;
+                    for (std::size_t row = 0; row < 4 && isIdentity; row++) {
+                        for (std::size_t col = 0; col < 4; col++) {
+                            const float want = row == col ? 1.0f : 0.0f;
+                            if (std::abs(plane[row * 4 + col] - want) > 1e-6f) {
+                                isIdentity = false;
+                                break;
+                            }
+                        }
+                    }
+                    instance->setParameter("alongLine", isIdentity ? 1.0f : 0.0f);
                     // Clip space to screen pixels, which is `camera::label_plane_matrix` with an
                     // identity placement: `(x + 1) * w / 2` across and `(1 - y) * h / 2` down. A
                     // plane folds its projection into `labelPlaneMatrix` and reaches the label
