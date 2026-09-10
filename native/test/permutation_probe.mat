@@ -1,0 +1,50 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The two Filament behaviors a data-driven paint permutation rests on, and nothing else.
+//
+// mbgl compiles a shader per permutation, branching on `HAS_UNIFORM_u_color`. Filament cannot
+// compile at runtime, and enumerating the permutations offline is not viable -- line alone is six
+// data-driven properties, so sixty-four packages, times the three surface variants each family
+// already ships. This asks whether a specialization constant does the same job from one package.
+//
+// The second question is the harder one. `requires` is baked into the package, and Filament's
+// `RenderableManager::Builder::build` refuses a primitive whose vertex buffer does not declare
+// every required attribute -- "missing required attributes". So a material that *can* read
+// `custom0` requires it even from a drawable whose paint is constant and which therefore has no
+// such attribute to give. The probe's answer is a zero-filled `BufferObject` shared by every such
+// drawable: declared, so the precondition holds; never read, because the constant compiles the
+// branch out; and costing nothing per drawable, because it is one buffer.
+
+material {
+    name : tessella_permutation_probe,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        { type : float4, name : color }
+    ],
+    constants : [
+        // False is the constant-paint permutation, which is what an unspecialized build gives.
+        { name : colorFromAttribute, type : bool, default : false }
+    ],
+    requires : [ position, custom0 ],
+    variables : [ paint ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        material.worldPosition = vec4(getPosition().xy, 0.0, 1.0);
+        if (materialConstants_colorFromAttribute) {
+            material.paint = getCustom0();
+        } else {
+            material.paint = materialParams.color;
+        }
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = variable_paint;
+    }
+}
