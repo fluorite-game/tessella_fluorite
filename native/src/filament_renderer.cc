@@ -141,6 +141,95 @@ constexpr std::uint32_t kSymbolTilePropsSlot = 3;
 /// mbgl's own.
 constexpr std::uint32_t kFillPatternTilePropsSlot = 4;
 
+/// Which vertex slot a family's attribute lands in, keyed by its id.
+///
+/// # Wire order is not slot order
+///
+/// The generic path assigns `CUSTOM0`, `CUSTOM1`, ... in the order the wire lists attributes.
+/// That is fine while every drawable of a family carries the same ones, and wrong the moment paint
+/// becomes data-driven: a fill whose colour is the layer's but whose opacity is the feature's
+/// sends one paint attribute, and in wire order it would land in `CUSTOM0` -- the slot the
+/// material reads as *colour*. `getCustom0()` has to mean one property for the life of the
+/// package, so the slot comes from the attribute's id.
+///
+/// `slot` is -1 for the position, which takes Filament's own `POSITION`.
+struct PaintSlot {
+    std::uint32_t attrId;
+    int slot;
+    /// Bit in the mesh's paint mask, and the index of the material constant it specializes.
+    /// -1 for the position, which is not paint and has no permutation.
+    int bit;
+    /// Width the *shader* declares, in bytes, which is not always what the buffer supplies.
+    ///
+    /// A property that varies with zoom carries both endpoints and a colour is four floats; one
+    /// that varies only per feature carries one endpoint and two. The shader reads the wide form
+    /// either way and mixes by a factor of zero, which is mbgl's arrangement -- so the last
+    /// vertex reads past what the producer sent unless the slab is padded to this.
+    std::size_t declaredBytes;
+    /// The type to declare when nothing supplies this slot, and the shared zero buffer does.
+    filament::VertexBuffer::AttributeType declared;
+};
+
+/// The fill family's slots. `fill-outline-color` is the outline shader's `CUSTOM0` because the
+/// outline is a different builtin with its own id space position, not a second colour on the fill.
+constexpr PaintSlot kFillSlots[] = {
+    {TSL_UBO_ID_FILL_POS_VERTEX_ATTRIBUTE, -1, -1, 0,
+     filament::VertexBuffer::AttributeType::SHORT2},
+    {TSL_UBO_ID_FILL_COLOR_VERTEX_ATTRIBUTE, 0, 0, sizeof(float) * 4,
+     filament::VertexBuffer::AttributeType::FLOAT4},
+    {TSL_UBO_ID_FILL_OPACITY_VERTEX_ATTRIBUTE, 1, 1, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+};
+constexpr PaintSlot kFillOutlineSlots[] = {
+    {TSL_UBO_ID_FILL_POS_VERTEX_ATTRIBUTE, -1, -1, 0,
+     filament::VertexBuffer::AttributeType::SHORT2},
+    {TSL_UBO_ID_FILL_OUTLINE_COLOR_VERTEX_ATTRIBUTE, 0, 0, sizeof(float) * 4,
+     filament::VertexBuffer::AttributeType::FLOAT4},
+    {TSL_UBO_ID_FILL_OPACITY_VERTEX_ATTRIBUTE, 1, 1, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+};
+
+/// The slots a family declares, or an empty span for one still on the wire-order path.
+///
+/// A family joins the permutation mechanism by gaining a table here and constants in its
+/// material; until it has both, its drawables keep the generic path and its data-driven paint
+/// still reads as the property's spec default.
+std::pair<const PaintSlot*, std::size_t> paintSlots(std::int32_t shader) {
+    switch (shader) {
+        case TSL_BUILTIN_FILL_SHADER:
+            return {kFillSlots, std::size(kFillSlots)};
+        case TSL_BUILTIN_FILL_OUTLINE_SHADER:
+            return {kFillOutlineSlots, std::size(kFillOutlineSlots)};
+        default:
+            return {nullptr, 0};
+    }
+}
+
+/// The material constants a family's paint mask specializes, in bit order.
+constexpr const char* kFillConstants[] = {"colorFromAttribute", "opacityFromAttribute"};
+
+std::pair<const char* const*, std::size_t> paintConstants(std::int32_t shader) {
+    switch (shader) {
+        case TSL_BUILTIN_FILL_SHADER:
+        case TSL_BUILTIN_FILL_OUTLINE_SHADER:
+            return {kFillConstants, std::size(kFillConstants)};
+        default:
+            return {nullptr, 0};
+    }
+}
+
+/// Which of the three surface tables a material came from.
+///
+/// Part of the key rather than three parallel maps: a permutation is a property of the paint and
+/// a surface is a property of the geometry, and the pair is what names a program.
+constexpr std::uint32_t kSurfaceFlat = 0;
+constexpr std::uint32_t kSurfaceGlobe = 1;
+constexpr std::uint32_t kSurfaceAnchored = 2;
+
+std::uint32_t materialKey(std::int32_t family, std::uint32_t surface) {
+    return (static_cast<std::uint32_t>(family) << 2) | surface;
+}
+
 /// Whether a family resolves against the depth buffer.
 ///
 /// The extrusions, and only them. A building is a volume and has to know which of its own faces is
@@ -311,6 +400,13 @@ FilamentRenderer::FilamentRenderer(filament::Engine* engine,
             } else {
                 (bent ? globeMaterials_ : materials_)[family] = material;
             }
+            // Kept whether or not the family has constants: which families have them changes,
+            // and a package held is cheaper than one re-read from a directory that may not still
+            // be there. The default build above is the all-uniform permutation, so a mask of
+            // zero never needs the bytes again.
+            packages_[materialKey(family, anchored ? kSurfaceAnchored
+                                                   : (bent ? kSurfaceGlobe : kSurfaceFlat))] =
+                package;
         } else {
             // Filament has already said why on stderr. Counted so a caller can
             // tell "this directory has no materials" from "these materials were
@@ -904,7 +1000,26 @@ FilamentRenderer::~FilamentRenderer() {
     for (auto& [id, mesh] : meshes_) {
         engine_->destroy(mesh.vertices);
         engine_->destroy(mesh.indices);
+        for (auto* object : mesh.ownedBuffers) {
+            engine_->destroy(object);
+        }
     }
+    // Before the materials the permutations were specialized from -- Filament refuses to destroy
+    // a material an instance still points at, and an instance was made against the permutation.
+    for (auto& [key, material] : permuted_) {
+        if (material != nullptr) {
+            engine_->destroy(material);
+        }
+    }
+    permuted_.clear();
+    if (zeroPaint_ != nullptr) {
+        engine_->destroy(zeroPaint_);
+        zeroPaint_ = nullptr;
+    }
+    for (auto* object : retiredZeroPaint_) {
+        engine_->destroy(object);
+    }
+    retiredZeroPaint_.clear();
     for (auto& [family, material] : materials_) {
         engine_->destroy(material);
     }
@@ -1613,6 +1728,79 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
 /// takes an index range but no base vertex, so a second primitive would need its own vertex
 /// buffer. Widening the indices keeps one buffer, one primitive and one draw. A bucket that needs
 /// no rebasing keeps its `u16` buffer, so nothing that was already correct changes size.
+filament::Material* FilamentRenderer::materialFor(std::int32_t family, std::uint32_t surface,
+                                                  std::uint32_t mask) {
+    auto& table = surface == kSurfaceAnchored ? anchoredMaterials_
+                  : surface == kSurfaceGlobe  ? globeMaterials_
+                                              : materials_;
+    const auto base = table.find(family);
+    if (mask == 0) {
+        return base == table.end() ? nullptr : base->second;
+    }
+    const std::uint64_t key =
+        (static_cast<std::uint64_t>(mask) << 32) | materialKey(family, surface);
+    if (const auto found = permuted_.find(key); found != permuted_.end()) {
+        return found->second;
+    }
+    const auto package = packages_.find(materialKey(family, surface));
+    const auto [names, count] = paintConstants(family);
+    if (package == packages_.end() || names == nullptr) {
+        // A family with no constants has one program, and a drawable that thinks otherwise is a
+        // table and a material that disagree. Drawn with the uniform form rather than not at all:
+        // the wrong colour is a bug worth seeing, and a missing layer looks like a data problem.
+        return base == table.end() ? nullptr : base->second;
+    }
+    filament::Material::Builder builder;
+    builder.package(package->second.data(), package->second.size());
+    for (std::size_t i = 0; i < count; i++) {
+        builder.constant(names[i], (mask & (1u << i)) != 0);
+    }
+    auto* built = builder.build(*engine_);
+    // Cached even when null, so a package that cannot be specialized is not retried once per
+    // drawable per frame.
+    permuted_.emplace(key, built);
+    return built != nullptr ? built : (base == table.end() ? nullptr : base->second);
+}
+
+filament::BufferObject* FilamentRenderer::zeroPaint(std::size_t vertices) {
+    // The widest paint attribute any family declares is a zoom-varying colour, four floats.
+    constexpr std::size_t kWidest = sizeof(float) * 4;
+    if (zeroPaint_ != nullptr && vertices <= zeroPaintVertices_) {
+        return zeroPaint_;
+    }
+    // Grown in steps rather than to the exact count, so a frame of slowly larger tiles does not
+    // allocate a buffer per drawable.
+    std::size_t want = zeroPaintVertices_ == 0 ? 4096 : zeroPaintVertices_;
+    while (want < vertices) {
+        want *= 2;
+    }
+    auto* grown = filament::BufferObject::Builder()
+                      .size(static_cast<std::uint32_t>(want * kWidest))
+                      .bindingType(filament::BufferObject::BindingType::VERTEX)
+                      .build(*engine_);
+    if (grown == nullptr) {
+        return zeroPaint_;
+    }
+    auto* zeros = static_cast<std::uint8_t*>(std::calloc(want, kWidest));
+    if (zeros == nullptr) {
+        engine_->destroy(grown);
+        return zeroPaint_;
+    }
+    grown->setBuffer(*engine_,
+                     filament::BufferObject::BufferDescriptor(
+                         zeros, want * kWidest,
+                         [](void* buffer, std::size_t, void*) { std::free(buffer); }));
+    // The old one is kept rather than destroyed: meshes built before this growth still point at
+    // it, and Filament does not reference-count a buffer object against them. `retiredZeroPaint_`
+    // is what frees it, at teardown, when nothing can be drawing from it.
+    if (zeroPaint_ != nullptr) {
+        retiredZeroPaint_.push_back(zeroPaint_);
+    }
+    zeroPaint_ = grown;
+    zeroPaintVertices_ = want;
+    return zeroPaint_;
+}
+
 filament::IndexBuffer* FilamentRenderer::uploadIndices(const DrawableAdd& add) {
     const auto count = static_cast<std::uint32_t>(add.indexes.size / sizeof(std::uint16_t));
     const auto* source = reinterpret_cast<const std::uint16_t*>(add.indexes.data);
@@ -1725,6 +1913,120 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
         return;
     }
 
+    // A family that has declared its slots takes the permutation path: fixed slots, a mask, and
+    // the shared zero buffer under whatever this drawable did not send.
+    if (const auto [slots, slotCount] = paintSlots(add.builtinShader); slots != nullptr) {
+        const auto find = [&](std::uint32_t attrId) -> const Attribute* {
+            for (const Attribute& attribute : add.attrs) {
+                if (attribute.desc.attr_id == attrId && attribute.desc.binding >= 0
+                    && !attribute.data.empty()) {
+                    return &attribute;
+                }
+            }
+            return nullptr;
+        };
+        const Attribute* position = find(slots[0].attrId);
+        filament::VertexBuffer::AttributeType positionType{};
+        if (position == nullptr || !attributeType(position->desc.data_type, positionType)) {
+            return;
+        }
+
+        std::uint32_t paintMask = 0;
+        filament::VertexBuffer::Builder builder;
+        builder.vertexCount(static_cast<std::uint32_t>(add.vertexCount))
+            .bufferCount(static_cast<std::uint8_t>(slotCount))
+            .enableBufferObjects();
+        std::vector<const Attribute*> supplied(slotCount, nullptr);
+        for (std::size_t i = 0; i < slotCount; i++) {
+            const PaintSlot& slot = slots[i];
+            const auto attribute = i == 0 ? position : find(slot.attrId);
+            filament::VertexBuffer::AttributeType type{};
+            const bool present =
+                attribute != nullptr && attributeType(attribute->desc.data_type, type);
+            supplied[i] = present ? attribute : nullptr;
+            const auto target = static_cast<filament::VertexAttribute>(
+                slot.slot < 0 ? filament::VertexAttribute::POSITION
+                              : filament::VertexAttribute::CUSTOM0 + slot.slot);
+            if (present) {
+                builder.attribute(target, static_cast<std::uint8_t>(i), type,
+                                  attribute->desc.offset, attribute->desc.stride);
+                if (slot.bit >= 0) {
+                    paintMask |= 1u << slot.bit;
+                }
+            } else {
+                // Declared so the material's `requires` is satisfied, and read from the shared
+                // zero buffer, which the specialization means the shader never samples.
+                builder.attribute(target, static_cast<std::uint8_t>(i), slot.declared, 0,
+                                  static_cast<std::uint8_t>(slot.declaredBytes));
+            }
+        }
+        auto* vertices = builder.build(*engine_);
+        if (vertices == nullptr) {
+            return;
+        }
+
+        std::vector<filament::BufferObject*> owned;
+        auto* shared = zeroPaint(add.vertexCount);
+        bool ok = shared != nullptr;
+        for (std::size_t i = 0; i < slotCount && ok; i++) {
+            if (supplied[i] == nullptr) {
+                vertices->setBufferObjectAt(*engine_, static_cast<std::uint8_t>(i), shared);
+                continue;
+            }
+            // Padded to the width the shader declares. The producer supplies the narrow form at
+            // the narrow stride for a property that does not vary with zoom, so the last vertex's
+            // wide read runs off the end of the slab -- the tail is zero rather than absent.
+            const std::size_t span =
+                add.vertexCount == 0
+                    ? 0
+                    : (static_cast<std::size_t>(add.vertexCount - 1) * supplied[i]->desc.stride
+                       + std::max<std::size_t>(supplied[i]->desc.stride, slots[i].declaredBytes));
+            const std::size_t bytes = std::max(supplied[i]->data.size, span);
+            auto* object = filament::BufferObject::Builder()
+                               .size(static_cast<std::uint32_t>(bytes))
+                               .bindingType(filament::BufferObject::BindingType::VERTEX)
+                               .build(*engine_);
+            auto* copy = object == nullptr ? nullptr : static_cast<std::uint8_t*>(std::calloc(bytes, 1));
+            if (copy == nullptr) {
+                if (object != nullptr) {
+                    engine_->destroy(object);
+                }
+                ok = false;
+                break;
+            }
+            std::memcpy(copy, supplied[i]->data.data, supplied[i]->data.size);
+            object->setBuffer(*engine_, filament::BufferObject::BufferDescriptor(
+                                            copy, bytes, [](void* buffer, std::size_t, void*) {
+                                                std::free(buffer);
+                                            }));
+            vertices->setBufferObjectAt(*engine_, static_cast<std::uint8_t>(i), object);
+            owned.push_back(object);
+        }
+        auto* indices = ok ? uploadIndices(add) : nullptr;
+        if (indices == nullptr) {
+            for (auto* object : owned) {
+                engine_->destroy(object);
+            }
+            engine_->destroy(vertices);
+            return;
+        }
+        onRetire(add.id);
+        Mesh mesh{};
+        mesh.vertices = vertices;
+        mesh.indices = indices;
+        mesh.indexCount = static_cast<std::uint32_t>(add.indexes.size / sizeof(std::uint16_t));
+        mesh.layerIndex = add.layerIndex;
+        mesh.zoom = add.tileID ? add.tileID->z : std::uint8_t{0};
+        mesh.overscaledZoom = add.tileID ? add.tileID->overscaled_z : std::uint8_t{0};
+        mesh.tile = add.tileID ? *add.tileID : TileID{};
+        mesh.colour = add.enableColor;
+        mesh.clipped = add.enableStencil;
+        mesh.paintMask = paintMask;
+        mesh.ownedBuffers = std::move(owned);
+        meshes_[add.id] = std::move(mesh);
+        return;
+    }
+
     // One buffer per attribute, which is what the wire describes: each names its own slab and
     // stride, and nothing promises they are interleaved in one allocation.
     std::vector<const Attribute*> usable;
@@ -1803,6 +2105,11 @@ void FilamentRenderer::onRetire(std::uint64_t id) {
     }
     engine_->destroy(found->second.vertices);
     engine_->destroy(found->second.indices);
+    // After the vertex buffer, which holds a reference to each of them. The shared zero buffer is
+    // not in this list and outlives the mesh.
+    for (auto* object : found->second.ownedBuffers) {
+        engine_->destroy(object);
+    }
     meshes_.erase(found);
 }
 
@@ -2063,8 +2370,13 @@ void FilamentRenderer::issue(const Batch& batch) {
         // The material is part of the key: a tile crossing the threshold mid-zoom would otherwise
         // keep the instance it was cached with and be drawn by the other form's shader, which
         // declares different parameters and would read whatever was last left in them.
+        // The permutation is part of the key for the same reason the material is: two drawables
+        // of one layer can differ in whether their paint came per feature, and the two programs
+        // declare different attributes. The mask is the mesh's rather than the batch's because
+        // the mesh is what declared the slots.
+        const std::uint32_t paintMask = mesh->second.paintMask;
         const auto key = std::make_tuple(batch.layerIndex, batch.builtinShader, batch.uboIndexes[i],
-                                         useAnchored);
+                                         useAnchored, paintMask);
         // A family that only has an anchored package and did not take it has nothing to draw
         // with. Skipped rather than dereferencing the end iterator.
         if (!useAnchored && material == table.end()) {
@@ -2072,11 +2384,31 @@ void FilamentRenderer::issue(const Batch& batch) {
         }
         auto found = instances_.find(key);
         if (found == instances_.end()) {
-            auto* chosen = useAnchored ? anchoredMaterial->second : material->second;
+            const std::uint32_t surface =
+                useAnchored ? kSurfaceAnchored : (bent ? kSurfaceGlobe : kSurfaceFlat);
+            auto* chosen = materialFor(batch.builtinShader, surface, paintMask);
+            if (chosen == nullptr) {
+                continue;
+            }
             found = instances_.emplace(key, chosen->createInstance()).first;
             made_++;
         }
         auto* instance = found->second;
+
+        // The frame's zoom-mix factors, which sit behind the matrix in every drawable block that
+        // has them. Set whichever permutation this is: the shader multiplies them into a value it
+        // may not read, and a stale factor on a reused instance would then apply to the drawable
+        // that does. Zero is the right answer for a property that varies per feature but not with
+        // zoom, and is what the producer sends for it.
+        if (paintConstants(batch.builtinShader).first != nullptr) {
+            constexpr std::size_t kFactorsAt = sizeof(float) * 16;
+            float factors[2] = {0.0f, 0.0f};
+            if (at + kFactorsAt + sizeof factors <= drawables->second.size()) {
+                std::memcpy(factors, drawables->second.data() + at + kFactorsAt, sizeof factors);
+            }
+            instance->setParameter("colorT", factors[0]);
+            instance->setParameter("opacityT", factors[1]);
+        }
 
         // A bent drawable takes both halves of the bend. `transform` is the tile-local to
         // normalized Mercator placement the producer sent -- the same sixteen floats a Mercator

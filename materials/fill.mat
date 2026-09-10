@@ -12,21 +12,42 @@ material {
     shadingModel : unlit,
     blending : transparent,
     culling : none,
+    constants : [
+        // The permutation, as mbgl's `HAS_UNIFORM_u_*` defines but resolved when the material is
+        // built rather than when it is compiled. False is the uniform form, so a package built
+        // without specializing is the constant-paint one.
+        { name : colorFromAttribute,   type : bool, default : false },
+        { name : opacityFromAttribute, type : bool, default : false }
+    ],
     parameters : [
         { type : float4, name : color },
-        { type : float,  name : opacity }
+        { type : float,  name : opacity },
+        // The frame's zoom-mix factors for the two data-driven properties, from `FillDrawableUBO`.
+        { type : float,  name : colorT },
+        { type : float,  name : opacityT }
     ],
-    requires : [ position ]
+    requires : [ position, custom0, custom1 ],
+    variables : [ paint ]
 }
 
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        // Straight alpha. Filament's transparent mode composites the source already multiplied,
-        // so multiplying here as well darkens the result once per composite -- invisible where a
-        // single layer covers a pixel and compounding wherever layers stack, which is what the
-        // banding across liberty was: 133,033 pixels of a grey the oracle never produces, gone the
-        // moment this stopped double-multiplying.
-        material.baseColor = materialParams.color * materialParams.opacity;
+        material.baseColor = variable_paint;
+    }
+}
+
+vertex {
+#include "fill_paint.glsl"
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        // Paint only, and the placement stays on the renderable's transform: writing
+        // `worldPosition` here would move the geometry, which is the note at the top of this file.
+        //
+        // The layer's paint, or this feature's. `requires` names both attributes whichever it
+        // is, because the list is baked into the package and Filament refuses a primitive whose
+        // vertex buffer does not declare what its material requires; the consumer points the
+        // slots a constant-paint drawable does not fill at one shared zero buffer.
+        material.paint = resolveFillPaint();
     }
 }

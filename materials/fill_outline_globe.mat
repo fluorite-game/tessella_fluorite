@@ -47,18 +47,31 @@ material {
     // the planet is removed by the horizon test, not by a winding rule, and a fill's rings arrive
     // in whatever order `fixup_polygons` left them.
     culling : none,
+    constants : [
+        // The permutation, as mbgl's `HAS_UNIFORM_u_*` defines but resolved when the material is
+        // built rather than when it is compiled. False is the uniform form, so a package built
+        // without specializing is the constant-paint one.
+        { name : colorFromAttribute,   type : bool, default : false },
+        { name : opacityFromAttribute, type : bool, default : false }
+    ],
     parameters : [
         { type : float4,   name : color },
         { type : float,    name : opacity },
+        // The frame's zoom-mix factors for the two data-driven properties, from `FillDrawableUBO`.
+        { type : float,    name : colorT },
+        { type : float,    name : opacityT },
         // Tile-local to normalized Mercator, with the depth bias in [3][2].
         { type : float4x4, name : matrix },
         // Unit sphere to clip.
         { type : float4x4, name : globeMatrix }
     ],
-    requires : [ position ]
+    requires : [ position, custom0, custom1 ],
+    variables : [ paint ]
 }
 
 vertex {
+#include "fill_paint.glsl"
+
     void materialVertex(inout MaterialVertexInputs material) {
         // `PI` is Filament's own, from its shader prelude. Declaring one here shadows nothing
         // and expands to `const float 3.14159...`, which is a syntax error rather than a warning.
@@ -85,15 +98,18 @@ vertex {
         // The bias, in clip space before the divide, which is where the Mercator path applies it.
         clip.z += merc.z;
         material.worldPosition = clip;
+
+        // The layer's paint, or this feature's. `requires` names both attributes whichever it
+        // is, because the list is baked into the package and Filament refuses a primitive whose
+        // vertex buffer does not declare what its material requires; the consumer points the
+        // slots a constant-paint drawable does not fill at one shared zero buffer.
+        material.paint = resolveFillPaint();
     }
 }
 
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        // Straight alpha, as `fill.mat` writes it and for the same reason: Filament's transparent
-        // mode composites the source already multiplied, so multiplying here as well darkens the
-        // result once per composite.
-        material.baseColor = materialParams.color * materialParams.opacity;
+        material.baseColor = variable_paint;
     }
 }

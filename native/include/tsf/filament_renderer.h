@@ -8,6 +8,7 @@
 #include <tsf/host.h>
 
 #include <filament/Engine.h>
+#include <filament/BufferObject.h>
 #include <filament/Camera.h>
 #include <filament/Material.h>
 #include <filament/MaterialInstance.h>
@@ -235,6 +236,19 @@ public:
     }
 
 private:
+    /// The material for a family, surface and paint permutation, built on first use.
+    ///
+    /// A mask of zero is the material the loader already built, returned as it is. Anything else
+    /// specializes the family's package, which is why the loader keeps the bytes.
+    filament::Material* materialFor(std::int32_t family, std::uint32_t surface,
+                                    std::uint32_t mask);
+
+    /// The shared zero buffer, grown to cover `vertices` at the widest paint attribute.
+    ///
+    /// Growing replaces it and retires the old one to `retiredZeroPaint_`, because meshes built
+    /// before the growth still point at it.
+    filament::BufferObject* zeroPaint(std::size_t vertices);
+
     /// A geometry's GPU buffers, kept until it retires.
     struct Mesh {
         filament::VertexBuffer* vertices = nullptr;
@@ -267,6 +281,19 @@ private:
         /// symbol and a circle do not, and clipping one of those to its tile cuts a label in
         /// half at the tile edge it crosses.
         bool clipped = false;
+        /// Which of this drawable's paint properties came per feature rather than per layer.
+        ///
+        /// One bit per data-driven-capable property of the family, in the order
+        /// `paintSlots` lists them, which is the order the material's constants are specialized
+        /// in. mbgl's permutation, derived here from the attributes that actually arrived rather
+        /// than read off the wire: the mesh is what declares the slots, so the mesh is what has
+        /// to agree with the material about which of them the shader may read.
+        std::uint32_t paintMask = 0;
+        /// Buffer objects this mesh made, which it also destroys.
+        ///
+        /// The shared zero buffer is deliberately not among them -- it outlives every mesh that
+        /// points at it.
+        std::vector<filament::BufferObject*> ownedBuffers = {};
     };
 
     /// One layer's uniform blocks, by slot.
@@ -356,6 +383,33 @@ private:
     filament::Scene* scene_ = nullptr;
 
     std::unordered_map<std::int32_t, filament::Material*> materials_;
+    /// The package bytes behind every material above, kept so a permutation can be built later.
+    ///
+    /// Keyed by family and surface, because `Material::Builder::constant` needs the package and
+    /// resolves at build: one package is every permutation of a family, but each permutation is
+    /// its own `Material`. Enumerating them offline is what does not scale -- the line family has
+    /// six data-driven properties, so sixty-four packages, times three surfaces -- and
+    /// `native/test/permutation_probe.cc` is where that was settled.
+    std::unordered_map<std::uint32_t, std::vector<std::uint8_t>> packages_;
+    /// Permutations built on demand, keyed by family, surface and paint mask.
+    std::unordered_map<std::uint64_t, filament::Material*> permuted_;
+    /// The unread paint slot of every constant-paint drawable in the frame.
+    ///
+    /// Filament bakes `requires` into the package and refuses a primitive whose vertex buffer
+    /// does not declare what its material requires, so a drawable whose colour is the layer's
+    /// still has to declare the attribute it will never read. One buffer serves all of them:
+    /// declared, never sampled because the specialization compiled the branch out, and grown to
+    /// the largest vertex count seen rather than allocated per drawable.
+    filament::BufferObject* zeroPaint_ = nullptr;
+    /// How many vertices `zeroPaint_` covers at the widest declared paint attribute.
+    std::size_t zeroPaintVertices_ = 0;
+    /// Zero buffers a growth replaced, destroyed when the renderer is.
+    ///
+    /// Not destroyed at the growth: meshes built before it still point at the old buffer, and
+    /// Filament does not reference-count a `BufferObject` against the vertex buffers holding it
+    /// -- destroying one in use is undefined. Bounded by the doubling, so a handful over a
+    /// process rather than one per frame.
+    std::vector<filament::BufferObject*> retiredZeroPaint_;
     /// The bent families again, expanded about the tile rather than bent by trig. Selected per
     /// drawable above `kAnchoredFromZoom`; see `fill_globe_anchored.mat`.
     std::unordered_map<std::int32_t, filament::Material*> anchoredMaterials_;
@@ -401,7 +455,11 @@ private:
     /// The bool is whether this drawable took the anchored bend: the two forms are different
     /// materials declaring different parameters, so an instance cached under one must never be
     /// handed to the other when a tile crosses the threshold mid-zoom.
-    std::map<std::tuple<std::uint32_t, std::int32_t, std::uint32_t, bool>,
+    ///
+    /// The last field is the paint permutation, for the same reason: a data-driven fill and a
+    /// constant one are different programs, and an instance made against one declares parameters
+    /// the other does not have.
+    std::map<std::tuple<std::uint32_t, std::int32_t, std::uint32_t, bool, std::uint32_t>,
              filament::MaterialInstance*>
         instances_;
 

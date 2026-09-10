@@ -43,9 +43,19 @@ material {
     // As `fill_globe.mat`: tile winding is not guaranteed and the far side is removed by the
     // horizon test rather than by a winding rule.
     culling : none,
+    constants : [
+        // The permutation, as mbgl's `HAS_UNIFORM_u_*` defines but resolved when the material is
+        // built rather than when it is compiled. False is the uniform form, so a package built
+        // without specializing is the constant-paint one.
+        { name : colorFromAttribute,   type : bool, default : false },
+        { name : opacityFromAttribute, type : bool, default : false }
+    ],
     parameters : [
         { type : float4, name : color },
         { type : float,  name : opacity },
+        // The frame's zoom-mix factors for the two data-driven properties, from `FillDrawableUBO`.
+        { type : float,  name : colorT },
+        { type : float,  name : opacityT },
         // The tile's center in tile units, so the shader can form `du`, `dv` without knowing the
         // extent. Sent rather than assumed: a tile's extent is the layer's, not a constant.
         { type : float2, name : bendCenter },
@@ -57,10 +67,13 @@ material {
         { type : float4, name : bendVV },
         { type : float4, name : bendUV }
     ],
-    requires : [ position ]
+    requires : [ position, custom0, custom1 ],
+    variables : [ paint ]
 }
 
 vertex {
+#include "fill_paint.glsl"
+
     void materialVertex(inout MaterialVertexInputs material) {
         // Tile units from the tile's center. Both are small, and every coefficient but the anchor
         // is small, so nothing here is a large number waiting to cancel.
@@ -76,13 +89,18 @@ vertex {
         // The layer's depth bias is already in `bendAnchor.z`; the producer put it there because
         // there is no placement matrix here to park it in.
         material.worldPosition = clip;
+
+        // The layer's paint, or this feature's. `requires` names both attributes whichever it
+        // is, because the list is baked into the package and Filament refuses a primitive whose
+        // vertex buffer does not declare what its material requires; the consumer points the
+        // slots a constant-paint drawable does not fill at one shared zero buffer.
+        material.paint = resolveFillPaint();
     }
 }
 
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        // Straight alpha, as `fill.mat` and `fill_globe.mat` write it.
-        material.baseColor = materialParams.color * materialParams.opacity;
+        material.baseColor = variable_paint;
     }
 }
