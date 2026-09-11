@@ -2701,37 +2701,37 @@ void FilamentRenderer::endFrame(std::uint64_t) {
     // The clip masks first, so every drawable issued below has a reference to test against.
     writeShell();
     writeMasks();
-    // Reversed: see `pending_`. The producer's order is front-to-back and this pass blends.
-    // Reversed in place: `pending_` is cleared below either way, and a `Batch` owns two vectors,
-    // so copying the frame's batches into a second sequence to reverse them would allocate once
-    // per drawable for nothing.
+    // Reversed by *layer*, not by drawable.
+    //
+    // The producer's order is painter order as mbgl resolves it: front-to-back, topmost layer
+    // first, because mbgl draws against a depth buffer and a lower layer is rejected where a
+    // higher one already covered. This pass has no depth buffer and blends, so the layers have
+    // to arrive bottom-up -- hence a reversal.
+    //
+    // What must *not* be reversed is the inside of a layer. There the producer's order is
+    // already the order mbgl paints in: a fill's triangles then its outline, a symbol's sprites
+    // then its halo then its letters, an extrusion's roof then the walls raised on it. Reversing
+    // that drew every one of them in the wrong order, and it was invisible for as long as it was
+    // because the usual outline colour is the fill's own. With a contrasting `fill-outline-color`
+    // it is plain: the oracle's outline straddles the polygon edge, half of it blended over the
+    // fill, and this side had the fill painted over that half -- red outside the edge and none
+    // inside.
+    //
+    // So: reverse the whole sequence, then reverse each run of one layer back. Two passes and no
+    // allocation, where building a sequence of runs would allocate once per layer per frame.
+    // A layer drawn in two passes has two runs and they are not adjacent, so the pass is part of
+    // what identifies a run.
+    //
+    // The extrusions used to be the carve-out here, un-reversed on their own because they have a
+    // depth buffer and the roof has to precede its walls. That is this rule, arrived at from one
+    // family rather than from the general case -- the same bug, and this is where it was found:
+    // the depth prepass was arriving *after* the colour pass, so nothing ever read what it wrote.
     std::reverse(pending_.begin(), pending_.end());
-
-    // ... except inside a layer that resolves in depth, where the reversal is wrong.
-    //
-    // The reversal exists because a translucent pass with no depth buffer has to blend
-    // bottom-up. An extrusion is not that layer: it *has* a depth buffer, and the producer
-    // already orders its drawables the way mbgl does -- the roof before the walls it belongs
-    // to. Reversing that draws the walls first, and where the two meet at exactly equal depth
-    // the comparison cannot separate them, so painter order decides and the roof edge is drawn
-    // by whichever came last.
-    //
-    // This is also how the depth pass was caught. It was arriving *after* the colour pass, so
-    // nothing ever read what it wrote -- which is why dropping it rendered pixel-identically,
-    // and why a read-only colour pass with the prepass and one with no depth buffer at all lost
-    // the *same* 6,857 wall pixels. The prepass is skipped outright now, in `issue`.
-    //
-    // Reversed at layer granularity, so the extrusion layer as a whole still sits where painter
-    // order puts it and only its interior is restored.
     for (auto run = pending_.begin(); run != pending_.end();) {
-        if (!resolvesInDepth(run->builtinShader)) {
-            ++run;
-            continue;
-        }
         const auto layer = run->layerIndex;
+        const auto pass = run->pass;
         auto end = run;
-        while (end != pending_.end() && resolvesInDepth(end->builtinShader)
-               && end->layerIndex == layer) {
+        while (end != pending_.end() && end->layerIndex == layer && end->pass == pass) {
             ++end;
         }
         std::reverse(run, end);
