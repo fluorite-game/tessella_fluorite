@@ -37,6 +37,7 @@ std::int32_t familyOf(const std::string& stem) {
     if (stem == "fill_outline") return TSL_BUILTIN_FILL_OUTLINE_SHADER;
     if (stem == "fill_pattern") return TSL_BUILTIN_FILL_PATTERN_SHADER;
     if (stem == "fill_outline_pattern") return TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER;
+    if (stem == "fill_outline_triangulated") return TSL_BUILTIN_FILL_OUTLINE_TRIANGULATED_SHADER;
     if (stem == "fill_extrusion") return TSL_BUILTIN_FILL_EXTRUSION_SHADER;
     if (stem == "fill_extrusion_instanced") return TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER;
     if (stem == "line") return TSL_BUILTIN_LINE_SHADER;
@@ -196,6 +197,17 @@ constexpr PaintSlot kFillOutlineSlots[] = {
      filament::VertexBuffer::AttributeType::FLOAT2},
 };
 
+/// The triangulated outline's, which are the line family's first two and nothing else: the
+/// shader declares no paint, so there is no permutation and no mask bit. A table all the same,
+/// because it is what puts both attributes in one `Slabs` entry -- they name the same
+/// interleaved allocation at two offsets, and the generic path would upload it twice.
+constexpr PaintSlot kFillOutlineTriangulatedSlots[] = {
+    {TSL_UBO_ID_LINE_POS_NORMAL_VERTEX_ATTRIBUTE, -1, -1, 0,
+     filament::VertexBuffer::AttributeType::SHORT2},
+    {TSL_UBO_ID_LINE_DATA_VERTEX_ATTRIBUTE, 0, -1, sizeof(std::uint8_t) * 4,
+     filament::VertexBuffer::AttributeType::UBYTE4},
+};
+
 /// The line family's slots. `data` is not paint -- it is the extrusion normal and the segment's
 /// geometry -- so it takes a custom slot with no permutation bit.
 constexpr PaintSlot kLineSlots[] = {
@@ -314,6 +326,8 @@ std::pair<const PaintSlot*, std::size_t> paintSlots(std::int32_t shader) {
             return {kFillSlots, std::size(kFillSlots)};
         case TSL_BUILTIN_FILL_OUTLINE_SHADER:
             return {kFillOutlineSlots, std::size(kFillOutlineSlots)};
+        case TSL_BUILTIN_FILL_OUTLINE_TRIANGULATED_SHADER:
+            return {kFillOutlineTriangulatedSlots, std::size(kFillOutlineTriangulatedSlots)};
         case TSL_BUILTIN_LINE_SHADER:
             return {kLineSlots, std::size(kLineSlots)};
         case TSL_BUILTIN_LINE_SDFSHADER:
@@ -470,11 +484,14 @@ bool patternPlaces(std::int32_t family) {
 /// the same vertices as its fill with its own indices over them, and those indices are pairs --
 /// mbgl draws them with `gfx::DrawMode::Lines`. Drawing them as triangles produces geometry that
 /// is wrong in a way that still fills pixels, which is the kind of wrong worth naming.
+///
+/// The triangulated outline is the exception that proves it: its indices are a polyline's, over
+/// its own extruded vertices rather than the fill's, and it is triangles. Listed here as LINES it
+/// drew every ring as a scatter of hairlines.
 filament::RenderableManager::PrimitiveType primitiveFor(std::int32_t family) {
     switch (family) {
         case TSL_BUILTIN_FILL_OUTLINE_SHADER:
         case TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER:
-        case TSL_BUILTIN_FILL_OUTLINE_TRIANGULATED_SHADER:
             return filament::RenderableManager::PrimitiveType::LINES;
         default:
             return filament::RenderableManager::PrimitiveType::TRIANGLES;
@@ -489,6 +506,7 @@ std::size_t colourOffset(std::int32_t family) {
     switch (family) {
         case TSL_BUILTIN_FILL_OUTLINE_SHADER:
         case TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER:
+        case TSL_BUILTIN_FILL_OUTLINE_TRIANGULATED_SHADER:
             return offsetof(tsl_fill_evaluated_props_ubo, outline_color);
         default:
             return 0;
@@ -509,6 +527,7 @@ std::size_t opacityOffset(std::int32_t family, std::size_t bytes) {
         // The pattern variants share the fill block; only their tile props differ.
         case TSL_BUILTIN_FILL_PATTERN_SHADER:
         case TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER:
+        case TSL_BUILTIN_FILL_OUTLINE_TRIANGULATED_SHADER:
             return offsetof(tsl_fill_evaluated_props_ubo, opacity);
         case TSL_BUILTIN_LINE_SHADER:
         case TSL_BUILTIN_LINE_SDFSHADER:
@@ -3164,6 +3183,32 @@ void FilamentRenderer::issue(const Batch& batch) {
                                                         static_cast<float>(height_)});
             }
 
+            // The triangulated outline is a polyline and takes the line family's placement: the
+            // extrusion is in tile units and the ratio is what turns it into a constant width in
+            // pixels. Its block is `FillOutlineTriangulatedDrawableUBO` -- matrix, ratio, and
+            // three words of padding -- at the fill union's stride.
+            if (batch.builtinShader == TSL_BUILTIN_FILL_OUTLINE_TRIANGULATED_SHADER) {
+                tsl_fill_outline_triangulated_drawable_ubo block{};
+                if (at + sizeof block <= drawables->second.size()) {
+                    std::memcpy(&block, drawables->second.data() + at, sizeof block);
+                }
+                // The bent packages form the clip position from the globe matrix or the bend's
+                // own expansion and so declare no `matrix` of their own; Filament panics on a
+                // uniform a material does not have.
+                if (!bent) {
+                    filament::math::mat4f placement;
+                    std::memcpy(&placement, block.matrix, sizeof block.matrix);
+                    instance->setParameter("matrix", placement);
+                }
+                instance->setParameter("ratio", block.ratio);
+                // One device pixel per rendered pixel, as a line's. A host on a HiDPI display
+                // passes its scale and the feather narrows to match.
+                instance->setParameter("pixelRatio", 1.0f);
+                instance->setParameter("unitsToPixels",
+                                       filament::math::float2{static_cast<float>(width_) * 0.5f,
+                                                              -static_cast<float>(height_) * 0.5f});
+            }
+
             // A patterned fill takes its sprite rectangles from the tile props, its world anchor
             // and scale from the drawable block, and the crossfade from the layer's paint.
             if (patterned) {
@@ -3905,6 +3950,10 @@ void FilamentRenderer::issue(const Batch& batch) {
                                   // Filament applies a renderable's transform after the vertex
                                   // hook has run.
                                   batch.builtinShader == TSL_BUILTIN_FILL_OUTLINE_SHADER ||
+                                  // And the triangulated one extrudes sideways in tile units,
+                                  // which has to happen before the tile-to-clip step.
+                                  batch.builtinShader ==
+                                      TSL_BUILTIN_FILL_OUTLINE_TRIANGULATED_SHADER ||
                                   batch.builtinShader ==
                                       TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER ||
                                   batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER;

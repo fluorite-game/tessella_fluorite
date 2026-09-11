@@ -1,0 +1,97 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The triangulated fill outline, bent onto a sphere by the anchored expansion.
+//
+// `fill_outline_triangulated.mat` says why a fill's outline is a polyline here at all. What this
+// file adds is plan.md §18 item 6's trick, the same one `line_globe_anchored.mat` uses: the flat
+// material places a vertex with one matrix and extrudes it sideways with the *same* matrix
+// applied to a direction, and the direct globe bend has no linear part to extrude along. The
+// expansion does -- its first derivatives are the Jacobian of the bend at the tile's centre, in
+// clip space, which is what `matrix * vec4(direction, 0, 0)` produces on a plane.
+material {
+    name : tessella_fill_outline_triangulated_globe_anchored,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        // `globe_ubo::GlobeBendUbo`, in declaration order, and the tile centre it expands about.
+        { type : float2, name : bendCenter },
+        { type : float4, name : bendAnchor },
+        { type : float4, name : bendU },
+        { type : float4, name : bendV },
+        { type : float4, name : bendUU },
+        { type : float4, name : bendVV },
+        { type : float4, name : bendUV },
+        { type : float4, name : color },
+        { type : float,  name : opacity },
+        { type : float,  name : ratio },
+        { type : float,  name : pixelRatio },
+        { type : float2, name : unitsToPixels }
+    ],
+    requires : [ position, custom0 ],
+    variables : [ outlineEdge ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        const float EXTRUDE_SCALE = 63.0;
+
+        float antialiasing = 1.0 / max(materialParams.pixelRatio, 1e-6) / 2.0;
+
+        vec2 posNormal = getPosition().xy;
+        vec2 centre = floor(posNormal * 0.5);
+        vec2 normal = posNormal - 2.0 * centre;
+        normal.y = normal.y * 2.0 - 1.0;
+
+        vec2 extrude = getCustom0().xy - 128.0;
+
+        const float halfwidth = 0.5;
+        float outset = halfwidth + antialiasing;
+
+        vec2 dist = outset * extrude / EXTRUDE_SCALE;
+        float ratio = max(materialParams.ratio, 1e-6);
+
+        // This vertex's ring point, as an offset from the tile centre the bend expands about.
+        vec2 d = centre - materialParams.bendCenter;
+        vec4 placed = materialParams.bendAnchor
+                    + materialParams.bendU * d.x
+                    + materialParams.bendV * d.y
+                    + 0.5 * (materialParams.bendUU * (d.x * d.x)
+                           + materialParams.bendVV * (d.y * d.y))
+                    + materialParams.bendUV * (d.x * d.y);
+
+        // The Jacobian *here*, not at the anchor: at low zoom a tile is wide enough that the bend
+        // turns measurably across it.
+        vec4 jacobianU = materialParams.bendU + materialParams.bendUU * d.x
+                       + materialParams.bendUV * d.y;
+        vec4 jacobianV = materialParams.bendV + materialParams.bendVV * d.y
+                       + materialParams.bendUV * d.x;
+
+        vec2 e = dist / ratio;
+        vec4 projectedExtrude = jacobianU * e.x + jacobianV * e.y;
+        vec4 clip = placed + projectedExtrude;
+
+        float unprojected = length(dist);
+        float projected = length(projectedExtrude.xy / clip.w * materialParams.unitsToPixels);
+        float gammaScale = unprojected / max(projected, 1e-6);
+
+        material.outlineEdge = vec4(normal, outset, gammaScale);
+        material.worldPosition = clip;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 normal = variable_outlineEdge.xy;
+        float width2 = variable_outlineEdge.z;
+        float gammaScale = variable_outlineEdge.w;
+
+        float dist = length(normal) * width2;
+        float blur2 = (1.0 / max(materialParams.pixelRatio, 1e-6)) * gammaScale;
+        float alpha = clamp(min(dist + blur2, width2 - dist) / blur2, 0.0, 1.0);
+
+        material.baseColor = materialParams.color * (alpha * materialParams.opacity);
+    }
+}

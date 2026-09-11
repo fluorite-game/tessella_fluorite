@@ -1,0 +1,104 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The fill-outline family, as a polyline rather than as lines.
+//
+// A fill's antialiasing is its outline and nothing else: the triangles rasterise hard and mbgl
+// runs no MSAA, so the only thing softening a polygon's boundary is the fade in this fragment.
+// mbgl gives that fade room by drawing the outline **two pixels wide** -- `constexpr auto
+// lineWidth = 2.0f` in `render_fill_layer.cpp` -- and a one-pixel line generates no fragment
+// further than half a pixel from its centre, so half the fade has nowhere to land.
+//
+// Filament exposes no line width, in any public header. mbgl met the same wall on Metal and
+// WebGPU and answered it with `MLN_TRIANGULATE_FILL_OUTLINES`: generate the ring as the extruded
+// quads a line layer is made of and draw it through `FillOutlineTriangulatedShader`. This is
+// that shader -- `shaders/mtl/fill.hpp`, transcribed -- so the widening happens in the vertex
+// stage where the backend cannot do it, and the fade is the line family's own.
+//
+// Two attributes and no paint: the colour is the layer's `outline_color` and the opacity its
+// `opacity`, which is why mbgl only takes this path when both are constant. A colour that varies
+// per feature has nowhere to travel here and keeps the line-primitive path.
+material {
+    name : tessella_fill_outline_triangulated,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        // Tile-local to clip. Applied here rather than by the renderable's transform, because
+        // the extrusion happens in tile units *before* the tile-to-clip step.
+        { type : mat4,   name : matrix },
+        // The layer's `outline_color` and `opacity`, both constant on this path.
+        { type : float4, name : color },
+        { type : float,  name : opacity },
+        // Screen pixels per tile unit, inverted -- `FillOutlineTriangulatedDrawableUBO::ratio`.
+        { type : float,  name : ratio },
+        // The view's device pixel ratio. Sets how wide the feather is in device pixels: a denser
+        // display needs a narrower one, which is why mbgl divides by it rather than fixing 1px.
+        { type : float,  name : pixelRatio },
+        // Clip-space to pixels, `{width/2, -height/2}`. Only used to measure how much perspective
+        // stretched the extrusion, so the feather stays one pixel wide on a pitched map.
+        { type : float2, name : unitsToPixels }
+    ],
+    requires : [ position, custom0 ],
+    // normal.xy, the half-width the quad reaches in pixels, and the perspective correction.
+    variables : [ outlineEdge ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        // mbgl's `LINE_NORMAL_SCALE`: the byte pair encodes a unit vector over 63.
+        const float EXTRUDE_SCALE = 63.0;
+
+        // The distance the edge fades out over. Half a device pixel each side.
+        float antialiasing = 1.0 / max(materialParams.pixelRatio, 1e-6) / 2.0;
+
+        vec2 posNormal = getPosition().xy;
+        vec2 centre = floor(posNormal * 0.5);
+        vec2 normal = posNormal - 2.0 * centre;
+        normal.y = normal.y * 2.0 - 1.0;
+
+        // a_data arrives as four unsigned bytes; the first two are the extrusion, biased by 128.
+        // Raw bytes, not normalised: the vertex buffer declares UBYTE4 without a normalize flag.
+        vec2 extrude = getCustom0().xy - 128.0;
+
+        // One pixel wide, which is mbgl's `const float width = 1.0` here -- the outline has no
+        // width property of its own. The feather is added outside it, so the quad is two pixels
+        // across and the fade has the room the line-primitive path lacked.
+        const float halfwidth = 0.5;
+        float outset = halfwidth + antialiasing;
+
+        vec2 dist = outset * extrude / EXTRUDE_SCALE;
+        float ratio = max(materialParams.ratio, 1e-6);
+
+        // Split into a point and a direction (`w` of 0, so only the linear part applies) because
+        // the projected direction is what says how much perspective squashed this edge.
+        vec4 projectedExtrude = materialParams.matrix * vec4(dist / ratio, 0.0, 0.0);
+        vec4 clip = materialParams.matrix * vec4(centre, 0.0, 1.0) + projectedExtrude;
+
+        float unprojected = length(dist);
+        float projected = length(projectedExtrude.xy / clip.w * materialParams.unitsToPixels);
+        // Guarded: a zero-length extrusion would make this 0/0 and NaN the whole ring away.
+        float gammaScale = unprojected / max(projected, 1e-6);
+
+        material.outlineEdge = vec4(normal, outset, gammaScale);
+        material.worldPosition = clip;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 normal = variable_outlineEdge.xy;
+        float width2 = variable_outlineEdge.z;
+        float gammaScale = variable_outlineEdge.w;
+
+        // How far this pixel is from the centre of the ring, in pixels, and the fade across the
+        // outer edge. `dist + blur2` is the inner edge of a line with no gap, which never bites.
+        float dist = length(normal) * width2;
+        float blur2 = (1.0 / max(materialParams.pixelRatio, 1e-6)) * gammaScale;
+        float alpha = clamp(min(dist + blur2, width2 - dist) / blur2, 0.0, 1.0);
+
+        // Premultiplied, matching the blending Filament is configured for.
+        material.baseColor = materialParams.color * (alpha * materialParams.opacity);
+    }
+}
