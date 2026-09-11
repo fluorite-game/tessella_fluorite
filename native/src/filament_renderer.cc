@@ -40,6 +40,7 @@ std::int32_t familyOf(const std::string& stem) {
     if (stem == "fill_extrusion") return TSL_BUILTIN_FILL_EXTRUSION_SHADER;
     if (stem == "fill_extrusion_instanced") return TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER;
     if (stem == "line") return TSL_BUILTIN_LINE_SHADER;
+    if (stem == "line_sdf") return TSL_BUILTIN_LINE_SDFSHADER;
     if (stem == "circle") return TSL_BUILTIN_CIRCLE_SHADER;
     if (stem == "symbol_sdf") return TSL_BUILTIN_SYMBOL_SDFSHADER;
     if (stem == "symbol_icon") return TSL_BUILTIN_SYMBOL_ICON_SHADER;
@@ -141,6 +142,12 @@ constexpr std::uint32_t kSymbolTilePropsSlot = 3;
 /// mbgl's own.
 constexpr std::uint32_t kFillPatternTilePropsSlot = 4;
 
+/// And a dashed line's, which carries the distance field's gamma and the crossfade.
+///
+/// Three, not four: a line's slot numbering is its own family's, and `idLineTilePropsUBO` is 3
+/// where `idFillTilePropsUBO` is 4.
+constexpr std::uint32_t kLineTilePropsSlot = 3;
+
 /// Which vertex slot a family's attribute lands in, keyed by its id.
 ///
 /// # Wire order is not slot order
@@ -207,6 +214,32 @@ constexpr PaintSlot kLineSlots[] = {
     {TSL_UBO_ID_LINE_OFFSET_VERTEX_ATTRIBUTE, 5, 4, sizeof(float) * 2,
      filament::VertexBuffer::AttributeType::FLOAT2},
     {TSL_UBO_ID_LINE_WIDTH_VERTEX_ATTRIBUTE, 6, 5, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+};
+
+/// The dashed line family's, which is the plain line's with `floorwidth` on the end.
+///
+/// mbgl declares it only on the SDF shader, because it is only the SDF shader that divides by it.
+/// Nine attributes over eight slots is why this family needs `Slabs`: a line's paint arrives in
+/// one interleaved allocation, so the nine names cost four buffer indexes.
+constexpr PaintSlot kLineSdfSlots[] = {
+    {TSL_UBO_ID_LINE_POS_NORMAL_VERTEX_ATTRIBUTE, -1, -1, 0,
+     filament::VertexBuffer::AttributeType::SHORT2},
+    {TSL_UBO_ID_LINE_DATA_VERTEX_ATTRIBUTE, 0, -1, sizeof(std::uint8_t) * 4,
+     filament::VertexBuffer::AttributeType::UBYTE4},
+    {TSL_UBO_ID_LINE_COLOR_VERTEX_ATTRIBUTE, 1, 0, sizeof(float) * 4,
+     filament::VertexBuffer::AttributeType::FLOAT4},
+    {TSL_UBO_ID_LINE_BLUR_VERTEX_ATTRIBUTE, 2, 1, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_LINE_OPACITY_VERTEX_ATTRIBUTE, 3, 2, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_LINE_GAP_WIDTH_VERTEX_ATTRIBUTE, 4, 3, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_LINE_OFFSET_VERTEX_ATTRIBUTE, 5, 4, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_LINE_WIDTH_VERTEX_ATTRIBUTE, 6, 5, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_LINE_FLOOR_WIDTH_VERTEX_ATTRIBUTE, 7, 6, sizeof(float) * 2,
      filament::VertexBuffer::AttributeType::FLOAT2},
 };
 
@@ -283,6 +316,8 @@ std::pair<const PaintSlot*, std::size_t> paintSlots(std::int32_t shader) {
             return {kFillOutlineSlots, std::size(kFillOutlineSlots)};
         case TSL_BUILTIN_LINE_SHADER:
             return {kLineSlots, std::size(kLineSlots)};
+        case TSL_BUILTIN_LINE_SDFSHADER:
+            return {kLineSdfSlots, std::size(kLineSdfSlots)};
         case TSL_BUILTIN_CIRCLE_SHADER:
             return {kCircleSlots, std::size(kCircleSlots)};
         default:
@@ -295,6 +330,10 @@ constexpr const char* kFillConstants[] = {"colorFromAttribute", "opacityFromAttr
 constexpr const char* kLineConstants[] = {"colorFromAttribute", "blurFromAttribute",
                                           "opacityFromAttribute", "gapWidthFromAttribute",
                                           "offsetFromAttribute", "widthFromAttribute"};
+constexpr const char* kLineSdfConstants[] = {
+    "colorFromAttribute",  "blurFromAttribute",   "opacityFromAttribute",
+    "gapWidthFromAttribute", "offsetFromAttribute", "widthFromAttribute",
+    "floorWidthFromAttribute"};
 /// The extrusion family binds `base` and `height` unconditionally -- they shape the geometry and
 /// the builder synthesises a constant fill where the style did not drive them -- so the colour is
 /// the only property with a permutation, and the mask is one bit wide.
@@ -315,6 +354,8 @@ std::pair<const char* const*, std::size_t> paintConstants(std::int32_t shader) {
             return {kFillConstants, std::size(kFillConstants)};
         case TSL_BUILTIN_LINE_SHADER:
             return {kLineConstants, std::size(kLineConstants)};
+        case TSL_BUILTIN_LINE_SDFSHADER:
+            return {kLineSdfConstants, std::size(kLineSdfConstants)};
         case TSL_BUILTIN_CIRCLE_SHADER:
             return {kCircleConstants, std::size(kCircleConstants)};
         case TSL_BUILTIN_FILL_EXTRUSION_SHADER:
@@ -342,6 +383,11 @@ struct MixFactor {
 constexpr MixFactor kFillFactors[] = {{"colorT", 64}, {"opacityT", 68}};
 constexpr MixFactor kLineFactors[] = {{"colorT", 68},    {"blurT", 72},   {"opacityT", 76},
                                       {"gapWidthT", 80}, {"offsetT", 84}, {"widthT", 88}};
+// `LineSDFDrawableUBO` puts the dash placement between the matrix and the ratio, so its factors
+// sit twenty-four bytes further along than a plain line's -- and it has a seventh.
+constexpr MixFactor kLineSdfFactors[] = {{"colorT", 92},    {"blurT", 96},      {"opacityT", 100},
+                                         {"gapWidthT", 104}, {"offsetT", 108},  {"widthT", 112},
+                                         {"floorWidthT", 116}};
 constexpr MixFactor kFillExtrusionFactors[] = {{"colorT", 96}};
 // Behind the matrices, the two texture sizes and the size pair; `SymbolDrawableUBO` is 260 bytes
 // and these are its last five.
@@ -362,6 +408,8 @@ std::pair<const MixFactor*, std::size_t> mixFactors(std::int32_t shader) {
             return {kFillFactors, std::size(kFillFactors)};
         case TSL_BUILTIN_LINE_SHADER:
             return {kLineFactors, std::size(kLineFactors)};
+        case TSL_BUILTIN_LINE_SDFSHADER:
+            return {kLineSdfFactors, std::size(kLineSdfFactors)};
         case TSL_BUILTIN_CIRCLE_SHADER:
             return {kCircleFactors, std::size(kCircleFactors)};
         case TSL_BUILTIN_FILL_EXTRUSION_SHADER:
@@ -463,6 +511,7 @@ std::size_t opacityOffset(std::int32_t family, std::size_t bytes) {
         case TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER:
             return offsetof(tsl_fill_evaluated_props_ubo, opacity);
         case TSL_BUILTIN_LINE_SHADER:
+        case TSL_BUILTIN_LINE_SDFSHADER:
             return offsetof(tsl_line_evaluated_props_ubo, opacity);
         case TSL_BUILTIN_CIRCLE_SHADER:
             return offsetof(tsl_circle_evaluated_props_ubo, opacity);
@@ -2463,6 +2512,11 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
         mesh.vertices = vertices;
         mesh.indices = indices;
         mesh.indexCount = static_cast<std::uint32_t>(add.indexes.size / sizeof(std::uint16_t));
+        // The atlas this drawable samples, which until the dashed line family joined this path
+        // was always none: a fill, a line and a circle sample nothing, so the field was left at
+        // zero and nothing noticed. A dashed line reads its distance field through it, and a
+        // zero here is `missing_atlas` on every drawable of the layer.
+        mesh.texture = textureFor(add);
         mesh.layerIndex = add.layerIndex;
         mesh.zoom = add.tileID ? add.tileID->z : std::uint8_t{0};
         mesh.overscaledZoom = add.tileID ? add.tileID->overscaled_z : std::uint8_t{0};
@@ -2977,7 +3031,8 @@ void FilamentRenderer::issue(const Batch& batch) {
 
             // A line needs the widths from the layer's paint and the drawable's own ratio, which
             // is what keeps a road at a constant pixel width as the tile scales.
-            if (batch.builtinShader == TSL_BUILTIN_LINE_SHADER) {
+            if (batch.builtinShader == TSL_BUILTIN_LINE_SHADER
+                || batch.builtinShader == TSL_BUILTIN_LINE_SDFSHADER) {
                 // The whole block rather than one field: width, gap width, offset and blur all
                 // feed the same edge arithmetic, and a shader given some of them from this frame
                 // and the rest from a default draws a line of a width nothing asked for.
@@ -2990,9 +3045,25 @@ void FilamentRenderer::issue(const Batch& batch) {
                 instance->setParameter("gapwidth", paint.gapwidth);
                 instance->setParameter("offset", paint.offset);
                 instance->setParameter("blur", paint.blur);
+                if (batch.builtinShader == TSL_BUILTIN_LINE_SDFSHADER) {
+                    // Guarded because the fragment divides by it. The producer sends
+                    // `line-width` at the integer zoom and the spec default is one, so a zero
+                    // here means a block that did not arrive rather than a style that asked for
+                    // an infinitely long dash.
+                    instance->setParameter(
+                        "floorwidth", paint.floorwidth > 0.0f ? paint.floorwidth : 1.0f);
+                }
 
                 float ratio = 1.0f;
-                const std::size_t ratioAt = at + offsetof(tsl_line_drawable_ubo, ratio);
+                // The SDF block puts the dash placement between the matrix and the ratio, so the
+                // field is twenty-four bytes further along. Reading it at the plain block's
+                // offset picked up `patternscale_a.x` instead -- which at a tile's own zoom is
+                // half the ratio, so every dashed line drew twice as thick with the dash pattern
+                // itself in exactly the right place.
+                const std::size_t ratioAt =
+                    at + (batch.builtinShader == TSL_BUILTIN_LINE_SDFSHADER
+                              ? offsetof(tsl_line_sdfdrawable_ubo, ratio)
+                              : offsetof(tsl_line_drawable_ubo, ratio));
                 if (ratioAt + sizeof(float) <= drawables->second.size()) {
                     std::memcpy(&ratio, drawables->second.data() + ratioAt, sizeof ratio);
                 }
@@ -3012,6 +3083,54 @@ void FilamentRenderer::issue(const Batch& batch) {
                 if (!useAnchored) {
                     instance->setParameter("matrix", transform);
                 }
+            }
+
+            // A dashed line adds the atlas, where in it each of the two patterns sits, and how
+            // far between them the frame is. The placement rides in the drawable block and the
+            // gamma in the layer's tile props, which is mbgl's split: the first is per tile
+            // because it scales with the tile's own level, the second is not.
+            if (batch.builtinShader == TSL_BUILTIN_LINE_SDFSHADER) {
+                tsl_line_sdfdrawable_ubo block{};
+                if (at + sizeof block <= drawables->second.size()) {
+                    std::memcpy(&block, drawables->second.data() + at, sizeof block);
+                }
+                instance->setParameter(
+                    "patternscaleA",
+                    filament::math::float2{block.patternscale_a[0], block.patternscale_a[1]});
+                instance->setParameter(
+                    "patternscaleB",
+                    filament::math::float2{block.patternscale_b[0], block.patternscale_b[1]});
+                instance->setParameter("texYA", block.tex_y_a);
+                instance->setParameter("texYB", block.tex_y_b);
+
+                tsl_line_sdftile_props_ubo tile{};
+                if (const auto held = layer->second.find(kLineTilePropsSlot);
+                    held != layer->second.end()) {
+                    const std::size_t tileAt =
+                        static_cast<std::size_t>(batch.uboIndexes[i])
+                        * TSL_STRIDE_LINE_TILE_PROPS_UNION_UBO;
+                    if (tileAt + sizeof tile <= held->second.size()) {
+                        std::memcpy(&tile, held->second.data() + tileAt, sizeof tile);
+                    }
+                }
+                instance->setParameter("sdfgamma", tile.sdfgamma);
+                instance->setParameter("dashMix", tile.mix);
+
+                const auto atlas = textures_.find(mesh->second.texture);
+                if (atlas == textures_.end()) {
+                    missingAtlas_++;
+                    continue;
+                }
+                // Repeating across the line and clamped down it. The pattern is one period wide
+                // and the coordinate runs to however many periods the line is long, so a
+                // clamped U would draw one dash and then a smear; a repeating V would wrap the
+                // round cap's top row onto its bottom one.
+                filament::TextureSampler sampler(
+                    filament::TextureSampler::MinFilter::LINEAR,
+                    filament::TextureSampler::MagFilter::LINEAR,
+                    filament::TextureSampler::WrapMode::REPEAT);
+                sampler.setWrapModeT(filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
+                instance->setParameter("image0", atlas->second, sampler);
             }
 
             // A patterned fill takes its sprite rectangles from the tile props, its world anchor
@@ -3725,6 +3844,7 @@ void FilamentRenderer::issue(const Batch& batch) {
                                   batch.builtinShader == TSL_BUILTIN_SYMBOL_ICON_SHADER ||
                                   batch.builtinShader == TSL_BUILTIN_SYMBOL_SDFSHADER ||
                                   batch.builtinShader == TSL_BUILTIN_LINE_SHADER ||
+                                  batch.builtinShader == TSL_BUILTIN_LINE_SDFSHADER ||
                                   batch.builtinShader ==
                                       TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER ||
                                   batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER;
