@@ -1,0 +1,152 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The roof of a fill-extrusion, bent onto a sphere by the anchored expansion.
+//
+// `fill_extrusion.mat` says what this draws and how it is shaded; none of that changes on a sphere. What
+// changes is the last line: a plane places a vertex with one matrix whose `z` column carries the
+// metres-to-pixels factor, and a sphere has no such column. A building does not stand along the
+// plane's `z` there -- it stands along the surface normal, which is the sphere point itself.
+//
+// So the footprint comes from the expansion, as every other anchored material takes it, and the
+// height rides on `bendH`: the clip displacement per metre, which the producer takes at the
+// anchor as `clip_matrix * vec4(sphere_point, 0) / EARTH_RADIUS_M`. The normal turns by the
+// tile's own angular width across it -- 1e-4 radians at z15 -- so a hundred-metre building leans
+// by a centimetre, and taking the direction at the anchor is the same approximation the rest of
+// the expansion already makes.
+//
+// Anchored only, and deliberately. The direct bend serves zooms below ten, and no style draws
+// buildings there: `minzoom` on a 3D layer is fifteen in every basemap this has been read
+// against, which is well inside the anchored range.
+material {
+    name : tessella_fill_extrusion_globe_anchored,
+    shadingModel : unlit,
+    blending : transparent,
+    // Back faces, as mbgl culls them -- `setCullFaceMode(CullFaceMode::backCCW())` on all four
+    // of its fill-extrusion builders. `front` rather than `back` because Filament's front-facing
+    // winding is the opposite of mbgl's here: culling `front` on the roof is a no-op, which is
+    // how the convention was established, and culling `back` removes every roof triangle.
+    //
+    // What it buys is not only the rasterization it skips. A building's far walls were being
+    // drawn, and a translucent extrusion blended them through its near ones. It is only correct
+    // because the wall template winds consistently now -- see `WALL_INDICES` on the producer
+    // side; against the old winding this took one triangle of every quad and left the other.
+    culling : front,
+    constants : [
+        // The permutation. One bit: see `fill_extrusion_paint.glsl`.
+        { name : colorFromAttribute, type : bool, default : false }
+    ],
+    parameters : [
+        // `globe_ubo::GlobeBendUbo`, in declaration order, and the tile center it expands
+        // about. This replaces the tile-to-clip matrix.
+        { type : float2, name : bendCenter },
+        { type : float4, name : bendAnchor },
+        { type : float4, name : bendU },
+        { type : float4, name : bendV },
+        { type : float4, name : bendUU },
+        { type : float4, name : bendVV },
+        { type : float4, name : bendUV },
+        // Clip displacement per metre of height, at the anchor.
+        { type : float4, name : bendH },
+        { type : float4, name : color },
+        { type : float,  name : opacity },
+
+        { type : float3, name : lightColor },
+        // Direction the light arrives from, already in the space the normal is in.
+        { type : float3, name : lightPosition },
+        { type : float,  name : lightIntensity },
+        { type : float,  name : verticalGradient },
+        // The frame's zoom-mix factor, from `FillExtrusionDrawableUBO`.
+        { type : float,  name : colorT }
+    ],
+    requires : [ position, custom0, custom1, custom2, custom3 ],
+    variables : [ shade ]
+}
+
+vertex {
+#include "fill_extrusion_paint.glsl"
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec2 footprint = getPosition().xy;
+        vec4 decimalsEd = getCustom0();
+
+        // Every vertex here is on a roof, so the surface faces straight up.
+        vec3 normal = vec3(0.0, 0.0, 1.0);
+        float t = 1.0;
+
+        // The building's own base and height, per vertex. These are data-driven in every real
+        // style -- liberty reads `render_height` off the feature -- so taking them from the paint
+        // block instead leaves every building zero metres tall and flat on the ground, which is
+        // what it was doing. A property the style left constant is handed over as a pair of equal
+        // values, so this one path serves both.
+        // One component each: the binder interleaves this layer's data-driven properties into a
+        // single buffer, so base and height are neighbours at one stride rather than a pair
+        // apiece. The zoom-mix factors are zero for a property that varies by feature and not by
+        // zoom, which is what `["get", "render_height"]` is, so the mix reduces to this value.
+        float base = max(getCustom1().x, 0.0);
+        float height = max(getCustom2().x, 0.0);
+        float z = t > 0.0 ? height : base;
+
+        // The fraction the position was packed with, seven bits an axis. Integer tile units make
+        // this zero today, but a simplification pass produces fractional positions and the walls
+        // would part company with the roof if it were dropped.
+        float packed = floor(decimalsEd.x / 2.0);
+        float high = floor(packed / 256.0);
+        vec2 decimals = vec2(high, packed - high * 256.0) / 128.0;
+
+        // How bright the surface already is. A pale building takes a narrower range of shading
+        // than a dark one, which is what keeps a light roof from blowing out.
+        vec4 color = resolveExtrusionColor(getCustom3());
+        float luminance = color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722;
+
+        // Slight ambient, so nothing is ever completely black.
+        color += vec4(0.03, 0.03, 0.03, 1.0);
+
+        float directionalFraction = clamp(dot(normal, materialParams.lightPosition), 0.0, 1.0);
+        float minDirectional = 1.0 - materialParams.lightIntensity;
+        float maxDirectional = max(1.0 - luminance + materialParams.lightIntensity, 1.0);
+        float directional = mix(minDirectional, maxDirectional, directionalFraction);
+
+        // The vertical gradient down a wall. Never taken here -- a roof's normal has z of one --
+        // and kept because it is one branch of the term mbgl computes, and dropping it would make
+        // this shader agree with the oracle only by coincidence of what it is handed.
+        if (normal.z == 0.0) {
+            float fMin = mix(0.7, 0.98, 1.0 - materialParams.lightIntensity);
+            float factor = clamp((t + base) * pow(height / 150.0, 0.5), fMin, 1.0);
+            directional *= (1.0 - materialParams.verticalGradient)
+                         + (materialParams.verticalGradient * factor);
+        }
+
+        // Shading is floored at a tint complementary to the light, so a coloured light leaves its
+        // opposite in the shadows rather than driving them to black.
+        vec3 minLight = mix(vec3(0.0), vec3(0.3), 1.0 - materialParams.lightColor);
+        vec3 lit = clamp(color.rgb * directional * materialParams.lightColor, minLight, vec3(1.0));
+
+        // Premultiplied: rgb scaled by the opacity and alpha set to it, which is mbgl's
+        // `vcolor * opacity` over a colour whose alpha was one.
+        material.shade = vec4(lit, 1.0) * materialParams.opacity;
+
+        // `z` straight, not scaled by the height factor. That factor exists only for the pattern
+        // variants, where it turns a wall's altitude into a texture coordinate
+        // (`vec2(edgedistance, z * height_factor)`); mbgl never places geometry with it. It is
+        // negative -- at z14 it is -4 -- so multiplying by it extruded every building four times
+        // too far and downward, which at pitch zero left the walls sprawled over the roads.
+        // The footprint through the expansion, then the height along the normal. `z` is metres,
+        // which is what `bendH` is per unit of -- a plane folds the same factor into its matrix's
+        // `z` column.
+        vec2 d = footprint + decimals - materialParams.bendCenter;
+        vec4 placed = materialParams.bendAnchor
+                    + materialParams.bendU * d.x
+                    + materialParams.bendV * d.y
+                    + 0.5 * (materialParams.bendUU * (d.x * d.x)
+                           + materialParams.bendVV * (d.y * d.y))
+                    + materialParams.bendUV * (d.x * d.y);
+        material.worldPosition = placed + materialParams.bendH * z;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = variable_shade;
+    }
+}

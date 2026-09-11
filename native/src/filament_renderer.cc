@@ -115,8 +115,14 @@ constexpr std::uint32_t kPropsSlot = 5;
 /// and every family keeps it there.
 constexpr std::uint32_t kGlobeBendSlot = 11;
 
-/// Six `vec4` -- `globe_ubo::GlobeBendUbo::STRIDE`.
-constexpr std::size_t kGlobeBendStride = 96;
+/// Seven `vec4` -- `globe_ubo::GlobeBendUbo::STRIDE`.
+///
+/// Seven, not six: the last row is `d_h`, the clip displacement per metre of height, which only
+/// the extrusions read. It is sent for every family all the same, because the block is one shape
+/// and a stride that varied by family would be a second thing for the two sides to agree on --
+/// and this constant is already the thing they have to agree on, since every row after the first
+/// is read at an offset from it.
+constexpr std::size_t kGlobeBendStride = 112;
 
 /// Half a tile's extent, which is the offset the producer expanded the bend about.
 constexpr float kHalfExtent = 8192.0f / 2.0f;
@@ -2950,6 +2956,13 @@ void FilamentRenderer::issue(const Batch& batch) {
             instance->setParameter("bendUU", bendRows[3]);
             instance->setParameter("bendVV", bendRows[4]);
             instance->setParameter("bendUV", bendRows[5]);
+            // The height row, and only where a material declares one. Filament panics on a
+            // uniform it does not have, so this is not unconditional the way the six above are:
+            // an extrusion is the one family whose geometry leaves the surface, and the one that
+            // asks for the direction it leaves along.
+            if (resolvesInDepth(batch.builtinShader)) {
+                instance->setParameter("bendH", bendRows[6]);
+            }
             anchoredDrawn_++;
         } else if (bent) {
             instance->setParameter("matrix", transform);
@@ -3603,7 +3616,14 @@ void FilamentRenderer::issue(const Batch& batch) {
                 }
                 // The height factor is deliberately not passed: it belongs to the pattern
                 // variants, which use it for texture coordinates rather than placement.
-                instance->setParameter("matrix", transform);
+                //
+                // And the matrix only where a matrix is what places the drawable. A bent
+                // extrusion takes the expansion instead -- the footprint from its coefficients
+                // and the height along `bendH` -- so its material declares no `matrix` at all,
+                // and Filament panics on a uniform it does not have.
+                if (!useAnchored) {
+                    instance->setParameter("matrix", transform);
+                }
             }
         }
 

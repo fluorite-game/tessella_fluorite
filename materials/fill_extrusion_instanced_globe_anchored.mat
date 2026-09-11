@@ -1,0 +1,147 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The walls of a fill-extrusion, bent onto a sphere by the anchored expansion.
+//
+// `fill_extrusion_instanced.mat` says what this draws and how it is shaded; none of that changes on a sphere. What
+// changes is the last line: a plane places a vertex with one matrix whose `z` column carries the
+// metres-to-pixels factor, and a sphere has no such column. A building does not stand along the
+// plane's `z` there -- it stands along the surface normal, which is the sphere point itself.
+//
+// So the footprint comes from the expansion, as every other anchored material takes it, and the
+// height rides on `bendH`: the clip displacement per metre, which the producer takes at the
+// anchor as `clip_matrix * vec4(sphere_point, 0) / EARTH_RADIUS_M`. The normal turns by the
+// tile's own angular width across it -- 1e-4 radians at z15 -- so a hundred-metre building leans
+// by a centimetre, and taking the direction at the anchor is the same approximation the rest of
+// the expansion already makes.
+//
+// Anchored only, and deliberately. The direct bend serves zooms below ten, and no style draws
+// buildings there: `minzoom` on a 3D layer is fifteen in every basemap this has been read
+// against, which is well inside the anchored range.
+material {
+    name : tessella_fill_extrusion_instanced_globe_anchored,
+    shadingModel : unlit,
+    blending : transparent,
+    // Back faces, as mbgl culls them -- `setCullFaceMode(CullFaceMode::backCCW())` on all four
+    // of its fill-extrusion builders. `front` rather than `back` because Filament's front-facing
+    // winding is the opposite of mbgl's here: culling `front` on the roof is a no-op, which is
+    // how the convention was established, and culling `back` removes every roof triangle.
+    //
+    // What it buys is not only the rasterization it skips. A building's far walls were being
+    // drawn, and a translucent extrusion blended them through its near ones. It is only correct
+    // because the wall template winds consistently now -- see `WALL_INDICES` on the producer
+    // side; against the old winding this took one triangle of every quad and left the other.
+    culling : front,
+    constants : [
+        // The permutation. One bit, as `fill_extrusion.mat` declares it.
+        { name : colorFromAttribute, type : bool, default : false }
+    ],
+    parameters : [
+        // `globe_ubo::GlobeBendUbo`, in declaration order, and the tile center it expands
+        // about. This replaces the tile-to-clip matrix.
+        { type : float2, name : bendCenter },
+        { type : float4, name : bendAnchor },
+        { type : float4, name : bendU },
+        { type : float4, name : bendV },
+        { type : float4, name : bendUU },
+        { type : float4, name : bendVV },
+        { type : float4, name : bendUV },
+        // Clip displacement per metre of height, at the anchor.
+        { type : float4, name : bendH },
+        { type : float4, name : color },
+        { type : float,  name : opacity },
+        { type : float,  name : base },
+        { type : float,  name : height },
+        { type : float3, name : lightColor },
+        { type : float3, name : lightPosition },
+        { type : float,  name : lightIntensity },
+        { type : float,  name : verticalGradient },
+        // The frame's zoom-mix factor, from `FillExtrusionDrawableUBO`.
+        { type : float,  name : colorT }
+    ],
+    requires : [ position, custom0, custom1, custom2 ],
+    variables : [ shade ]
+}
+
+vertex {
+#include "fill_extrusion_paint.glsl"
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec3 placed = getPosition().xyz;
+        vec2 footprint = placed.xy;
+        // Which ring this vertex belongs to: zero is the base, one the roof.
+        float t = placed.z;
+
+        // The edge's facing, in the ground plane, so the z component is zero.
+        vec3 normal = vec3(getCustom0().xy, 0.0);
+
+        // The building's own base and height, per instance, replicated onto this corner by the
+        // consumer -- Filament has no per-instance attribute, which is the same reason the
+        // instances are expanded at all.
+        //
+        // These are data-driven in every real style, and the walls read the paint block instead
+        // until now: `fill-extrusion-height` of `["get", "height"]` leaves that block holding its
+        // fallback of zero, so every wall was a quad of no height. Built, uploaded, and
+        // rasterising nothing -- the roofs drew, so the buildings looked like flat footprints.
+        //
+        // NaN marks the pair absent, which is the constant-paint case: there is no binder buffer
+        // then, and the paint block is the right source. Tested with `!=` on itself because that
+        // is the one comparison a NaN answers true to.
+        vec2 extent = getCustom1().xy;
+        // Clamped at zero, as mbgl clamps both -- `base = max(0.0, base)` -- and as the roof
+        // shader already did. A wall whose foot went below the ground did not agree with the roof
+        // that shares its top edge.
+        float base = max(extent.x != extent.x ? materialParams.base : extent.x, 0.0);
+        float height = max(extent.y != extent.y ? materialParams.height : extent.y, 0.0);
+
+        float z = t > 0.0 ? height : base;
+
+        vec4 color = resolveExtrusionColor(getCustom2());
+        float luminance = color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722;
+        color += vec4(0.03, 0.03, 0.03, 1.0);
+
+        float directionalFraction = clamp(dot(normal, materialParams.lightPosition), 0.0, 1.0);
+        float minDirectional = 1.0 - materialParams.lightIntensity;
+        float maxDirectional = max(1.0 - luminance + materialParams.lightIntensity, 1.0);
+        float directional = mix(minDirectional, maxDirectional, directionalFraction);
+
+        // The gradient down a wall, which is the branch a roof's normal never reaches. Taller
+        // buildings shade more steeply, and the floor rises as the light dims so a dark scene
+        // does not lose the bottom of every wall to black.
+        if (normal.z == 0.0) {
+            float fMin = mix(0.7, 0.98, 1.0 - materialParams.lightIntensity);
+            // The same base and height the vertex was raised to, not the paint block's: the
+            // gradient down a wall is a function of how tall *this* building is.
+            float factor = clamp((t + base) * pow(height / 150.0, 0.5), fMin, 1.0);
+            directional *= (1.0 - materialParams.verticalGradient)
+                         + (materialParams.verticalGradient * factor);
+        }
+
+        vec3 minLight = mix(vec3(0.0), vec3(0.3), 1.0 - materialParams.lightColor);
+        vec3 lit = clamp(color.rgb * directional * materialParams.lightColor, minLight, vec3(1.0));
+
+        material.shade = vec4(lit, 1.0) * materialParams.opacity;
+        // `z` straight, not scaled by the height factor. That factor exists only for the pattern
+        // variants, where it turns a wall's altitude into a texture coordinate
+        // (`vec2(edgedistance, z * height_factor)`); mbgl never places geometry with it. It is
+        // negative -- at z14 it is -4 -- so multiplying by it extruded every building four times
+        // too far and downward, which at pitch zero left the walls sprawled over the roads.
+        // The footprint through the expansion, then the height along the normal. `z` is metres,
+        // which is what `bendH` is per unit of -- a plane folds the same factor into its matrix's
+        // `z` column.
+        vec2 d = footprint - materialParams.bendCenter;
+        vec4 bent = materialParams.bendAnchor
+                    + materialParams.bendU * d.x
+                    + materialParams.bendV * d.y
+                    + 0.5 * (materialParams.bendUU * (d.x * d.x)
+                           + materialParams.bendVV * (d.y * d.y))
+                    + materialParams.bendUV * (d.x * d.y);
+        material.worldPosition = bent + materialParams.bendH * z;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = variable_shade;
+    }
+}
