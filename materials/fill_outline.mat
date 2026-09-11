@@ -6,6 +6,24 @@
 // triangles -- the ABI carries no topology, so the family implies it, which is what mbgl's own
 // fill-outline does with gfx::DrawMode::Lines. Its colour is the layer's `outline_color`, a
 // separate float4 in the evaluated-paint block, not the fill's own.
+//
+// # This is where a fill gets its antialiasing
+//
+// A fill's triangles rasterise hard: a pixel is inside the polygon or it is not, and mbgl runs
+// no MSAA. What softens the boundary is this pass, and the softening is the whole of it --
+// `fill-antialias` is on by default and the outline is what it turns on. The fragment measures
+// its own distance from the line, in pixels, and fades out across one of them:
+//
+//     dist  = length(frag_position - gl_FragCoord.xy)
+//     alpha = 1 - smoothstep(0, 1, dist)
+//
+// `frag_position` is the vertex's position in screen pixels, interpolated along the line, so the
+// distance is perpendicular. Without it the outline drew a hard line in the fill's own colour,
+// invisible against the fill it traces, and every polygon in every style had a stair-stepped
+// edge -- 175 pixels of one test quad and 3,167 of the Protomaps park layer.
+//
+// Which is why this family places itself where the plain fill does not: the screen position has
+// to be formed here, and Filament applies a renderable's transform after this hook runs.
 material {
     name : tessella_fill_outline,
     shadingModel : unlit,
@@ -23,16 +41,27 @@ material {
         { type : float,  name : opacity },
         // The frame's zoom-mix factors for the two data-driven properties, from `FillDrawableUBO`.
         { type : float,  name : colorT },
-        { type : float,  name : opacityT }
+        { type : float,  name : opacityT },
+        // Tile-local to clip, the same matrix the renderable would otherwise carry.
+        { type : mat4,   name : matrix },
+        // The viewport in pixels, which turns a clip position into the one `gl_FragCoord`
+        // measures in. mbgl's `paintParams.world_size`.
+        { type : float2, name : worldSize }
     ],
     requires : [ position, custom0, custom1 ],
-    variables : [ paint ]
+    variables : [ paint, outlinePos ]
 }
 
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        material.baseColor = variable_paint;
+
+        // How far this pixel's centre is from the line, in pixels. Along a rasterised line the
+        // interpolated position is the exact geometric point, so the difference is the
+        // perpendicular distance and the fade is one pixel wide however the line is angled.
+        float dist = length(variable_outlinePos.xy - gl_FragCoord.xy);
+        float alpha = 1.0 - smoothstep(0.0, 1.0, dist);
+        material.baseColor = variable_paint * alpha;
     }
 }
 
@@ -40,13 +69,16 @@ vertex {
 #include "fill_paint.glsl"
 
     void materialVertex(inout MaterialVertexInputs material) {
-        // Paint only, and the placement stays on the renderable's transform: writing
-        // `worldPosition` here would move the geometry, which is the note at the top of this file.
-        //
         // The layer's paint, or this feature's. `requires` names both attributes whichever it
         // is, because the list is baked into the package and Filament refuses a primitive whose
         // vertex buffer does not declare what its material requires; the consumer points the
         // slots a constant-paint drawable does not fill at one shared zero buffer.
         material.paint = resolveFillPaint();
+
+        vec4 clip = materialParams.matrix * vec4(getPosition().xy, 0.0, 1.0);
+        // Clip to the pixel grid `gl_FragCoord` is in: NDC to 0..1, then to the viewport.
+        material.outlinePos = vec4(
+            (clip.xy / clip.w + 1.0) / 2.0 * materialParams.worldSize, 0.0, 0.0);
+        material.worldPosition = clip;
     }
 }

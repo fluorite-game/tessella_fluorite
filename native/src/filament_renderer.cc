@@ -3146,6 +3146,24 @@ void FilamentRenderer::issue(const Batch& batch) {
                 instance->setParameter("image0", atlas->second, sampler);
             }
 
+            // A fill's outline places itself and measures in pixels: it is the pass that
+            // antialiases every polygon boundary in the frame, and the fade is a distance in
+            // `gl_FragCoord`'s own units.
+            if (batch.builtinShader == TSL_BUILTIN_FILL_OUTLINE_SHADER
+                || batch.builtinShader == TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER) {
+                // The bent packages form the clip position from the globe matrix or the bend's
+                // own expansion and so declare no `matrix` of their own; Filament panics on a
+                // uniform a material does not have.
+                // The pattern variant already takes its matrix below, with the rest of its
+                // placement; the plain one has none of its own until here.
+                if (!bent && batch.builtinShader == TSL_BUILTIN_FILL_OUTLINE_SHADER) {
+                    instance->setParameter("matrix", transform);
+                }
+                instance->setParameter(
+                    "worldSize", filament::math::float2{static_cast<float>(width_),
+                                                        static_cast<float>(height_)});
+            }
+
             // A patterned fill takes its sprite rectangles from the tile props, its world anchor
             // and scale from the drawable block, and the crossfade from the layer's paint.
             if (patterned) {
@@ -3882,6 +3900,11 @@ void FilamentRenderer::issue(const Batch& batch) {
                                   batch.builtinShader == TSL_BUILTIN_SYMBOL_SDFSHADER ||
                                   batch.builtinShader == TSL_BUILTIN_LINE_SHADER ||
                                   batch.builtinShader == TSL_BUILTIN_LINE_SDFSHADER ||
+                                  // A fill outline forms its own screen position, for the
+                                  // one-pixel fade that is a fill's whole antialiasing, and
+                                  // Filament applies a renderable's transform after the vertex
+                                  // hook has run.
+                                  batch.builtinShader == TSL_BUILTIN_FILL_OUTLINE_SHADER ||
                                   batch.builtinShader ==
                                       TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER ||
                                   batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER;

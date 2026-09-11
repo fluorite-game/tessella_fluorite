@@ -51,6 +51,9 @@ material {
         { name : opacityFromAttribute, type : bool, default : false }
     ],
     parameters : [
+        // The viewport in pixels, which turns a clip position into the one `gl_FragCoord`
+        // measures in. mbgl's `paintParams.world_size`.
+        { type : float2, name : worldSize },
         { type : float4, name : color },
         { type : float,  name : opacity },
         // The frame's zoom-mix factors for the two data-driven properties, from `FillDrawableUBO`.
@@ -68,7 +71,7 @@ material {
         { type : float4, name : bendUV }
     ],
     requires : [ position, custom0, custom1 ],
-    variables : [ paint ]
+    variables : [ paint, outlinePos ]
 }
 
 vertex {
@@ -89,6 +92,10 @@ vertex {
         // The layer's depth bias is already in `bendAnchor.z`; the producer put it there because
         // there is no placement matrix here to park it in.
         material.worldPosition = clip;
+        // The one-pixel fade that is a fill's whole antialiasing -- see `fill_outline.mat`, which
+        // says why this pass and not the triangles.
+        material.outlinePos = vec4(
+            (clip.xy / clip.w + 1.0) / 2.0 * materialParams.worldSize, 0.0, 0.0);
 
         // The layer's paint, or this feature's. `requires` names both attributes whichever it
         // is, because the list is baked into the package and Filament refuses a primitive whose
@@ -101,6 +108,7 @@ vertex {
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        material.baseColor = variable_paint;
+        float dist = length(variable_outlinePos.xy - gl_FragCoord.xy);
+        material.baseColor = variable_paint * (1.0 - smoothstep(0.0, 1.0, dist));
     }
 }
