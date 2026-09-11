@@ -3119,6 +3119,19 @@ void FilamentRenderer::issue(const Batch& batch) {
                 const auto atlas = textures_.find(mesh->second.texture);
                 if (atlas == textures_.end()) {
                     missingAtlas_++;
+                    // Which one, and for what. A count says a drawable was skipped and nothing
+                    // else; the id is what separates "the sheet has not arrived" from "the
+                    // producer named a texture that cannot exist". It found the second: an
+                    // icon-only symbol contributed an empty font stack, which took a glyph-atlas
+                    // id nothing could ever upload to, and one tile's labels vanished.
+                    if (std::getenv("TSF_MISSING_LOG")) {
+                        std::fprintf(stderr,
+                                     "missing atlas id=%llu layer=%u shader=%d tile=%u/%u/%u\n",
+                                     (unsigned long long)mesh->second.texture,
+                                     (unsigned)batch.layerIndex, (int)batch.builtinShader,
+                                     (unsigned)mesh->second.tile.z, (unsigned)mesh->second.tile.x,
+                                     (unsigned)mesh->second.tile.y);
+                    }
                     continue;
                 }
                 // Repeating across the line and clamped down it. The pattern is one period wide
@@ -3201,6 +3214,14 @@ void FilamentRenderer::issue(const Batch& batch) {
                 const auto atlas = textures_.find(mesh->second.texture);
                 if (atlas == textures_.end()) {
                     missingAtlas_++;
+                    if (std::getenv("TSF_MISSING_LOG")) {
+                        std::fprintf(stderr,
+                                     "missing atlas id=%llu layer=%u shader=%d tile=%u/%u/%u\n",
+                                     (unsigned long long)mesh->second.texture,
+                                     (unsigned)batch.layerIndex, (int)batch.builtinShader,
+                                     (unsigned)mesh->second.tile.z, (unsigned)mesh->second.tile.x,
+                                     (unsigned)mesh->second.tile.y);
+                    }
                     continue;
                 }
                 instance->setParameter("image0", atlas->second,
@@ -3245,6 +3266,14 @@ void FilamentRenderer::issue(const Batch& batch) {
                 const auto first = textures_.find(mesh->second.texture);
                 if (first == textures_.end()) {
                     missingAtlas_++;
+                    if (std::getenv("TSF_MISSING_LOG")) {
+                        std::fprintf(stderr,
+                                     "missing atlas id=%llu layer=%u shader=%d tile=%u/%u/%u\n",
+                                     (unsigned long long)mesh->second.texture,
+                                     (unsigned)batch.layerIndex, (int)batch.builtinShader,
+                                     (unsigned)mesh->second.tile.z, (unsigned)mesh->second.tile.x,
+                                     (unsigned)mesh->second.tile.y);
+                    }
                     continue;
                 }
                 // The second picture falls back to the first, which is what "no fade in
@@ -3442,6 +3471,14 @@ void FilamentRenderer::issue(const Batch& batch) {
                 const auto atlas = textures_.find(mesh->second.texture);
                 if (atlas == textures_.end()) {
                     missingAtlas_++;
+                    if (std::getenv("TSF_MISSING_LOG")) {
+                        std::fprintf(stderr,
+                                     "missing atlas id=%llu layer=%u shader=%d tile=%u/%u/%u\n",
+                                     (unsigned long long)mesh->second.texture,
+                                     (unsigned)batch.layerIndex, (int)batch.builtinShader,
+                                     (unsigned)mesh->second.tile.z, (unsigned)mesh->second.tile.x,
+                                     (unsigned)mesh->second.tile.y);
+                    }
                     continue;
                 }
                 // The producer chose it: an icon drawn at its own size is sampled nearest so
