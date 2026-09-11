@@ -3366,7 +3366,14 @@ void FilamentRenderer::issue(const Batch& batch) {
                     std::memcpy(&out, from, sizeof from);
                     return out;
                 };
-                if (useAnchored) {
+                // Both bent forms place the anchor themselves and offset the quad in screen
+                // pixels, so both want the label-plane pair below; what differs is only how the
+                // anchor reaches clip space, and the generic bend block above has already given
+                // the direct form its two matrices. What a globe must *not* take is the `else`
+                // arm's `matrix`: that is the symbol's own tile-to-clip placement, which is a
+                // Mercator matrix, where a bent material's `matrix` reaches normalized Mercator
+                // and the sphere comes after.
+                if (bent) {
                     // The producer sends the identity as the label plane when a label is walked
                     // along a line, because the walk projects the road point by point and its
                     // output is already in that plane. Read back rather than flagged: the block

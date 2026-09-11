@@ -1,0 +1,200 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The sprite half of the symbol family, bent onto a sphere directly -- plan.md §13.4's
+// consumer half.
+//
+// `symbol_icon.mat` says what a symbol is and how its quad is built; `symbol_icon_globe_anchored.mat`
+// says what a sphere changes about placing one, and takes the expansion to do it. This is that
+// same placement with the bend evaluated directly, for the zooms below the one the expansion is
+// built for -- where, without it, `materialFor` found no globe entry for the family and a globe
+// drew no label at all. A globe at z3 is mostly country names.
+//
+// Only the *anchor* is bent, as in the anchored form: the quad is built in screen pixels around
+// that point and is the same size wherever its tile sits. Three evaluations of the bend a vertex
+// -- the anchor, one tile unit east of it for the rotation, and the label-plane anchor -- which
+// is what the exact answer costs at the zooms this path serves.
+material {
+    name : tessella_symbol_icon_globe,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    constants : [
+        // The icon shader declares one of the five: mbgl's does the same.
+        { name : opacityFromAttribute, type : bool, default : false }
+    ],
+    parameters : [
+        // Tile-local to normalized Mercator, with the depth bias in [3][2]. This replaces the
+        // tile-to-clip matrix: only the *anchor* is bent, because the quad is built in screen
+        // pixels around that point and is the same size wherever its tile sits.
+        { type : float4x4,  name : matrix },
+        // Unit sphere to clip.
+        { type : float4x4,  name : globeMatrix },
+        // Whether this drawable's label plane is the identity, which is how the producer says
+        // the label is walked along a line: the walk projects point by point along the *projected*
+        // road, so its output is already in the label plane and must not be projected again.
+        { type : float,     name : alongLine },
+        // Clip space to screen pixels: the label plane a viewport-aligned symbol is offset in.
+        // A plane's `labelPlaneMatrix` folds the projection into this; a globe's cannot, because
+        // the bend is not a matrix, so the projection happens above and this is the rest of it.
+        { type : mat4,      name : screenFromClip },
+        { type : mat4,      name : labelPlaneMatrix },
+        { type : mat4,      name : coordMatrix },
+        { type : float2,    name : texsize },
+        // The drawable's own flags, as floats: a material parameter has no bool.
+        { type : float,     name : isTextProp },
+        { type : float,     name : rotateSymbol },
+        { type : float,     name : pitchWithMap },
+        { type : float,     name : isSizeZoomConstant },
+        { type : float,     name : isSizeFeatureConstant },
+        { type : float,     name : isOffset },
+        { type : float,     name : sizeT },
+        { type : float,     name : size },
+        // From the frame's own paint parameters.
+        { type : float,     name : cameraToCenterDistance },
+        { type : float,     name : aspectRatio },
+        { type : float,     name : symbolFadeChange },
+        // The layer's evaluated paint, already chosen between text and icon by the consumer.
+        { type : float4,    name : fillColor },
+        { type : float,     name : opacity },
+        { type : float,     name : opacityT },
+        // Per tile: which pass this is, and how much the tile is scaled on screen.
+        { type : float,     name : pixelRatio },
+        { type : sampler2d, name : atlas }
+    ],
+    requires : [ position, custom0, custom1, custom2, custom3 ],
+    variables : [ glyph, glyphGamma, symbolScalars ]
+}
+
+vertex {
+#include "symbol_paint.glsl"
+
+    // `globe::sphere_point_from_mercator` through `globe::clip_matrix`, transcribed -- the same
+    // chain `fill_outline_globe.mat` walks inline, factored out here because this material walks
+    // it twice.
+    vec4 bend(vec2 tileLocal) {
+        vec4 merc = materialParams.matrix * vec4(tileLocal, 0.0, 1.0);
+
+        float lon = merc.x * 360.0 - 180.0;
+        float fraction = clamp(merc.y, 0.0, 1.0);
+        float lat = atan(exp((180.0 - fraction * 360.0) * PI / 180.0)) * 360.0 / PI - 90.0;
+
+        float latR = lat * PI / 180.0;
+        float lonR = lon * PI / 180.0;
+        vec3 sphere = vec3(cos(latR) * sin(lonR), -sin(latR), cos(latR) * cos(lonR));
+
+        vec4 clip = materialParams.globeMatrix * vec4(sphere, 1.0);
+        // The depth bias, in clip space before the divide, which is where the Mercator path
+        // applies it.
+        clip.z += merc.z;
+        return clip;
+    }
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec4 posOffset = getPosition();
+        vec2 a_pos = posOffset.xy;
+        vec2 a_offset = posOffset.zw;
+
+        vec4 data = getCustom0();
+        vec2 a_tex = data.xy;
+        vec2 a_size = data.zw;
+        float a_size_min = floor(a_size.x * 0.5);
+
+        vec2 a_pxoffset = getCustom1().xy;
+        // Position and fade in one attribute: the consumer packs them together, because a fifth
+        // custom slot did not bind here and a fade of zero multiplies every glyph away.
+        vec4 placed = getCustom2();
+        vec3 projPos = placed.xyz;
+        float segment_angle = -projPos.z;
+        float packedFade = placed.w;
+
+        float size;
+        if (materialParams.isSizeZoomConstant < 0.5
+            && materialParams.isSizeFeatureConstant < 0.5) {
+            size = mix(a_size_min, a_size.y, materialParams.sizeT) / 128.0;
+        } else if (materialParams.isSizeZoomConstant >= 0.5
+                   && materialParams.isSizeFeatureConstant < 0.5) {
+            size = a_size_min / 128.0;
+        } else {
+            size = materialParams.size;
+        }
+
+        // How far the label's anchor is from the camera, which is what makes distant type smaller.
+        vec4 projectedPoint = bend(a_pos);
+        float camera_to_anchor_distance = projectedPoint.w;
+        // Laid out in pitched space, distance shrinks a label and this counteracts part of it;
+        // laid out in viewport space it grows one, and this divides instead.
+        float distance_ratio = materialParams.pitchWithMap >= 0.5
+            ? camera_to_anchor_distance / materialParams.cameraToCenterDistance
+            : materialParams.cameraToCenterDistance / camera_to_anchor_distance;
+        // The zero floor is what stops an overzoomed near-field symbol becoming enormous.
+        float perspective_ratio = clamp(0.5 + 0.5 * distance_ratio, 0.0, 4.0);
+        if (materialParams.isOffset < 0.5) {
+            size *= perspective_ratio;
+        }
+        float fontScale = materialParams.isTextProp >= 0.5 ? size / 24.0 : size;
+
+        float symbol_rotation = 0.0;
+        if (materialParams.rotateSymbol >= 0.5) {
+            // A label horizontal in tile units is not horizontal on screen. Its angle there is
+            // found by projecting a short horizontal line and measuring what became of it.
+            // One tile unit east, bent the same way. The anchored form differentiates its
+            // expansion for this; the direct bend has nothing to differentiate, so it bends the
+            // neighbouring point and takes the difference the caller wants.
+            vec4 offsetPoint = bend(a_pos + vec2(1.0, 0.0));
+            vec2 a = projectedPoint.xy / projectedPoint.w;
+            vec2 b = offsetPoint.xy / offsetPoint.w;
+            symbol_rotation = atan((b.y - a.y) / materialParams.aspectRatio, b.x - a.x);
+        }
+
+        float angle_sin = sin(segment_angle + symbol_rotation);
+        float angle_cos = cos(segment_angle + symbol_rotation);
+        mat2 rotation_matrix = mat2(angle_cos, -1.0 * angle_sin, angle_sin, angle_cos);
+
+        // The anchor is placed in the label plane, and the glyph's corner offset is added there
+        // rather than in tile units -- which is what keeps type the same size across a tile.
+        // The anchor in screen pixels. A plane reaches this with one matrix because its
+        // projection is one; a globe projects through the expansion first and converts after.
+        //
+        // Except along a line, where the producer sends the identity and `projPos` is already in
+        // the label plane -- the walk stepped along the road *after* projecting it, so projecting
+        // again sends every street name off the screen. 1199 glyph quads drawn and not one dark
+        // pixel in the frame, which is what that looks like from outside.
+        vec4 projected_pos;
+        if (materialParams.alongLine >= 0.5) {
+            projected_pos = vec4(projPos.xy, 0.0, 1.0);
+        } else {
+            vec4 anchorClip = bend(projPos.xy);
+            projected_pos = materialParams.screenFromClip
+                          * vec4(anchorClip.xyz / anchorClip.w, 1.0);
+        }
+        vec2 pos_rot = a_offset / 32.0 * fontScale + a_pxoffset;
+        vec2 pos0 = projected_pos.xy / projected_pos.w + rotation_matrix * pos_rot;
+        vec4 clip = materialParams.coordMatrix * vec4(pos0, 0.0, 1.0);
+
+        // Two values in one float: the opacity in the high bits, and the direction it is moving
+        // in the low bit, so a label fading in and one fading out are told apart.
+        float intOpacity = floor(packedFade / 2.0);
+        vec2 rawFade = vec2(intOpacity / 127.0, mod(packedFade, 2.0));
+        float fade_change = rawFade.y > 0.5 ? materialParams.symbolFadeChange
+                                            : -materialParams.symbolFadeChange;
+
+        material.glyph = vec4(a_tex / materialParams.texsize,
+                              clamp(rawFade.x + fade_change, 0.0, 1.0),
+                              fontScale);
+        material.glyphGamma = vec4(clip.w, 0.0, 0.0, 0.0);
+        // The layer's opacity, or this feature's. A sprite carries its own colour, so this is the
+        // only one of the five the icon shader has.
+        material.symbolScalars = vec4(resolveSymbolOpacity(getCustom3()), 0.0, 0.0, 0.0);
+        material.worldPosition = clip;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // The sheet is premultiplied, so opacity scales it directly.
+        vec4 sprite = texture(materialParams_atlas, variable_glyph.xy);
+        material.baseColor = sprite * (variable_symbolScalars.x * variable_glyph.z);
+    }
+}

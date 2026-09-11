@@ -1,0 +1,183 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The dashed-line family, bent onto a sphere directly -- plan.md §13.4's consumer half.
+//
+// `line_sdf.mat` says what a dash is and where its distance field comes from; `line_globe.mat`
+// says why a sphere needs the sideways extrusion handled specially and how the direct bend does
+// it. This is that placement with the dash pattern on top, and it exists for the same reason:
+// without it a globe below z10 drew no dashed line at all, and a country border is a dashed
+// line. `materialFor` found no globe entry for the family and skipped the drawable.
+//
+// The dash itself needs nothing from the bend. `patternscale` and `tex_y` are per drawable and
+// the distance along the line is a vertex attribute, so what the sphere changes is where the
+// quad lands, not what is painted on it.
+material {
+    name : tessella_line_sdf_globe,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    constants : [
+        { name : colorFromAttribute,      type : bool, default : false },
+        { name : blurFromAttribute,       type : bool, default : false },
+        { name : opacityFromAttribute,    type : bool, default : false },
+        { name : gapWidthFromAttribute,   type : bool, default : false },
+        { name : offsetFromAttribute,     type : bool, default : false },
+        { name : widthFromAttribute,      type : bool, default : false },
+        { name : floorWidthFromAttribute, type : bool, default : false }
+    ],
+    parameters : [
+        // Tile-local to normalized Mercator, with the depth bias in [3][2].
+        { type : float4x4, name : matrix },
+        // Unit sphere to clip.
+        { type : float4x4, name : globeMatrix },
+        { type : float4, name : color },
+        { type : float,  name : opacity },
+        { type : float,  name : width },
+        { type : float,  name : gapwidth },
+        { type : float,  name : offset },
+        { type : float,  name : blur },
+        { type : float,  name : floorwidth },
+        { type : float,  name : ratio },
+        { type : float,  name : pixelRatio },
+        { type : float2, name : unitsToPixels },
+        { type : float,  name : colorT },
+        { type : float,  name : blurT },
+        { type : float,  name : opacityT },
+        { type : float,  name : gapWidthT },
+        { type : float,  name : offsetT },
+        { type : float,  name : widthT },
+        { type : float,  name : floorWidthT },
+        // Where each of the two patterns sits in the atlas. `x` takes a distance along the line
+        // to a texture coordinate, `y` is minus half the pattern's height, so a normal of plus or
+        // minus one spans exactly the rows it occupies.
+        { type : float2, name : patternscaleA },
+        { type : float2, name : patternscaleB },
+        { type : float,  name : texYA },
+        { type : float,  name : texYB },
+        // Half a texel of the narrower pattern, which is what the dash boundary is feathered
+        // over, and how far between the two patterns this frame is.
+        { type : float,  name : sdfgamma },
+        { type : float,  name : dashMix },
+        { type : sampler2d, name : image0 }
+    ],
+    requires : [ position, custom0, custom1, custom2, custom3, custom4, custom5,
+                 custom6, custom7 ],
+    variables : [ lineEdge, lineGamma, linePaint, lineDash ]
+}
+
+vertex {
+#include "line_sdf_paint.glsl"
+
+    // `globe::sphere_point_from_mercator` through `globe::clip_matrix`, transcribed -- the same
+    // chain `fill_outline_globe.mat` walks inline, factored out here because this material walks
+    // it twice.
+    vec4 bend(vec2 tileLocal) {
+        vec4 merc = materialParams.matrix * vec4(tileLocal, 0.0, 1.0);
+
+        float lon = merc.x * 360.0 - 180.0;
+        float fraction = clamp(merc.y, 0.0, 1.0);
+        float lat = atan(exp((180.0 - fraction * 360.0) * PI / 180.0)) * 360.0 / PI - 90.0;
+
+        float latR = lat * PI / 180.0;
+        float lonR = lon * PI / 180.0;
+        vec3 sphere = vec3(cos(latR) * sin(lonR), -sin(latR), cos(latR) * cos(lonR));
+
+        vec4 clip = materialParams.globeMatrix * vec4(sphere, 1.0);
+        // The depth bias, in clip space before the divide, which is where the Mercator path
+        // applies it.
+        clip.z += merc.z;
+        return clip;
+    }
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        const float EXTRUDE_SCALE = 63.0;
+        // mbgl's LINE_DISTANCE_SCALE: the distance along the line is stored halved, because two
+        // bytes and six bits have to reach across a tile.
+        const float LINE_DISTANCE_SCALE = 2.0;
+
+        float antialiasing = 1.0 / max(materialParams.pixelRatio, 1e-6) / 2.0;
+
+        vec2 posNormal = getPosition().xy;
+        vec2 center = floor(posNormal * 0.5);
+        vec2 normal = posNormal - 2.0 * center;
+        normal.y = normal.y * 2.0 - 1.0;
+
+        vec4 data = getCustom0();
+        vec2 extrude = data.xy - 128.0;
+        float direction = mod(data.z, 4.0) - 1.0;
+        // The high bits of `z` above `w`: the same two bytes the plain line ignores.
+        float linesofar = (floor(data.z / 4.0) + data.w * 64.0) * LINE_DISTANCE_SCALE;
+
+        float gapwidth = resolveLineGapWidth() * 0.5;
+        float halfwidth = resolveLineWidth() * 0.5;
+        float lineOffset = -1.0 * resolveLineOffset();
+        float floorwidth = max(resolveLineFloorWidth(), 1e-6);
+
+        float inset = gapwidth + (gapwidth > 0.0 ? antialiasing : 0.0);
+        float outset = gapwidth + halfwidth * (gapwidth > 0.0 ? 2.0 : 1.0)
+                     + (halfwidth == 0.0 ? 0.0 : antialiasing);
+
+        vec2 dist = outset * extrude / EXTRUDE_SCALE;
+
+        float u = 0.5 * direction;
+        float t = 1.0 - abs(u);
+        vec2 offset2 = lineOffset * extrude / EXTRUDE_SCALE * normal.y * mat2(t, -u, u, t);
+
+        float ratio = max(materialParams.ratio, 1e-6);
+
+        // Bent twice: the centerline point this vertex sits on, and the same point pushed
+        // sideways by the extrusion. Their difference is the projected extrusion, which on the
+        // plane is `matrix * vec4(dist, 0, 0)` -- the linear part this bend does not have.
+        vec2 at = center + offset2 / ratio;
+        vec4 placed = bend(at);
+        vec4 clip = bend(at + dist / ratio);
+        vec4 projectedExtrude = clip - placed;
+
+        float unprojected = length(dist);
+        float projected = length(projectedExtrude.xy / clip.w * materialParams.unitsToPixels);
+        float gammaScale = unprojected / max(projected, 1e-6);
+
+        material.lineEdge = vec4(normal, outset, inset);
+        material.lineGamma = vec4(gammaScale, resolveLineBlur(), floorwidth, 0.0);
+        material.linePaint = resolveLineColor() * resolveLineOpacity();
+        material.lineDash = vec4(
+            linesofar * materialParams.patternscaleA.x / floorwidth,
+            normal.y * materialParams.patternscaleA.y + materialParams.texYA,
+            linesofar * materialParams.patternscaleB.x / floorwidth,
+            normal.y * materialParams.patternscaleB.y + materialParams.texYB);
+        material.worldPosition = clip;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 normal = variable_lineEdge.xy;
+        float outset = variable_lineEdge.z;
+        float inset = variable_lineEdge.w;
+        float gammaScale = variable_lineGamma.x;
+        float floorwidth = max(variable_lineGamma.z, 1e-6);
+
+        float dist = length(normal) * outset;
+
+        float blur2 = (variable_lineGamma.y + 1.0 / max(materialParams.pixelRatio, 1e-6))
+                    * gammaScale;
+        float alpha = clamp(min(dist - (inset - blur2), outset - dist) / blur2, 0.0, 1.0);
+
+        // `.r`, where mbgl reads `.a`: a one-channel atlas goes into R8 here, because Filament
+        // has no ALPHA format. The bytes are the same bytes.
+        float sdfA = texture(materialParams_image0, variable_lineDash.xy).r;
+        float sdfB = texture(materialParams_image0, variable_lineDash.zw).r;
+        float sdfdist = mix(sdfA, sdfB, materialParams.dashMix);
+
+        // The dash boundary, feathered over a texel of the pattern. The field is stored with
+        // zero distance at half of full scale, so 0.5 is the boundary and the smoothstep runs
+        // symmetrically either side of it.
+        alpha *= smoothstep(0.5 - materialParams.sdfgamma / floorwidth,
+                            0.5 + materialParams.sdfgamma / floorwidth,
+                            sdfdist);
+
+        material.baseColor = variable_linePaint * alpha;
+    }
+}
