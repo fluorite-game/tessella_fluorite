@@ -40,6 +40,29 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 add_compile_options(-stdlib=libc++ -Wall -Wextra -Werror)
 add_link_options(-stdlib=libc++)
 
+# Every path above may be given relative to this package, and is resolved against
+# it here. A build driven from a manifest cannot write an absolute one: emb's
+# sysroot and build directories carry a profile hash that moves whenever the
+# manifest does, and cmake resolves a relative -D against its own build dir,
+# which is somewhere else again.
+foreach (_tsf_path TESSELLA_DIR TESSELLA_LIB FILAMENT_INCLUDE_DIR FLUORITE_INCLUDE_DIR
+        FLUORITE_CORE_FFI_LIB FILAMENT_LINK_LIBRARIES_DIR)
+    if (${_tsf_path} AND NOT IS_ABSOLUTE "${${_tsf_path}}")
+        get_filename_component(${_tsf_path} "${${_tsf_path}}"
+                ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif ()
+endforeach ()
+
+# The Filament headers, from the sysroot when nobody named them. A cross build
+# has them installed under CMAKE_SYSROOT, which find_path searches and a
+# hardcoded path cannot name.
+if (NOT FILAMENT_INCLUDE_DIR)
+    find_path(FILAMENT_INCLUDE_DIR filament/Engine.h)
+    if (FILAMENT_INCLUDE_DIR)
+        message(STATUS "filament headers: ${FILAMENT_INCLUDE_DIR} (found)")
+    endif ()
+endif ()
+
 if (NOT TESSELLA_DIR)
     message(FATAL_ERROR "set TESSELLA_DIR to a tessella checkout")
 endif ()

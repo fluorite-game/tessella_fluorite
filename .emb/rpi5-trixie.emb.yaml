@@ -375,20 +375,30 @@ cross:
       # so the platform-view factory has nothing to register against and every
       # pane fails twice over -- `register_factory('views/fluorite-view')
       # failed: -4`, then MissingPluginException on flutter/platform_views.
+      # Not reachable yet: emb blanks CC/CXX for a cross build on purpose
+      # ("the compiler selection is dropped only for cross", cross_builder.dart),
+      # and fluorite's clang wrapper reads $ENV{CC}, so it sets an empty
+      # compiler and the configure stops on "No CMAKE_CXX_COMPILER could be
+      # found". One `if(NOT "$ENV{CC}" STREQUAL "")` in that wrapper unblocks it.
+      # Until then the two libraries come from .emb-cross-libs.sh.
+      #
+      # The "embedder" for this manifest is this package's own native half:
+      # libtessella_fluorite.so. emb configures the embedder from the directory
+      # holding the manifest, which is this repo, and that reading is the honest
+      # one -- the shell is ivi-homescreen's artifact, built from its own .emb
+      # for the same board target, and nothing else here needs building.
+      #
+      # Every path is relative to this package; CMakeLists resolves them. An
+      # absolute one cannot be written down: emb's sysroot carries a profile
+      # hash that moves whenever this file does.
       backends:
-        drm-kms-vulkan:
-          BUILD_BACKEND_DRM_KMS_VULKAN: 'ON'
-          BUILD_BACKEND_WAYLAND_EGL: 'OFF'
-          BUILD_BACKEND_WAYLAND_VULKAN: 'OFF'
-          BUILD_BACKEND_DRM_KMS_EGL: 'OFF'
-          BUILD_BACKEND_SOFTWARE: 'OFF'
-          BUILD_COMPOSITOR: 'ON'
-        wayland-vulkan:
-          BUILD_BACKEND_WAYLAND_VULKAN: 'ON'
-          BUILD_BACKEND_WAYLAND_EGL: 'OFF'
-          BUILD_BACKEND_DRM_KMS_EGL: 'OFF'
-          BUILD_BACKEND_SOFTWARE: 'OFF'
-          BUILD_COMPOSITOR: 'ON'
+        consumer:
+          CMAKE_TOOLCHAIN_FILE: ../ihs_filament_view/packages/fluorite/clang-toolchain.cmake
+          CMAKE_BUILD_TYPE: Release
+          TESSELLA_DIR: ../tessella
+          TESSELLA_LIB: ../tessella/target/aarch64-unknown-linux-gnu/release/libtessella_ffi.a
+          FLUORITE_INCLUDE_DIR: ../ihs_filament_view/packages/fluorite/include
+          FLUORITE_CORE_FFI_LIB: build-arm64/libfluorite_core_ffi.so
 
       # No `modules:`. The two libraries that would go here -- fluorite's
       # renderer and the tessella extension -- link Filament's libc++ archives,
