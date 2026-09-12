@@ -3235,9 +3235,13 @@ void FilamentRenderer::issue(const Batch& batch) {
                 if (at + sizeof block <= drawables->second.size()) {
                     std::memcpy(&block, drawables->second.data() + at, sizeof block);
                 }
-                filament::math::mat4f placement;
-                std::memcpy(&placement, block.matrix, sizeof block.matrix);
-                instance->setParameter("matrix", placement);
+                // As the circle's and the raster's: only where a matrix is the placement. An
+                // anchored material takes the expansion instead and declares no `matrix`.
+                if (!useAnchored) {
+                    filament::math::mat4f placement;
+                    std::memcpy(&placement, block.matrix, sizeof block.matrix);
+                    instance->setParameter("matrix", placement);
+                }
                 instance->setParameter("pixelCoordUpper",
                                        filament::math::float2{block.pixel_coord_upper[0],
                                                               block.pixel_coord_upper[1]});

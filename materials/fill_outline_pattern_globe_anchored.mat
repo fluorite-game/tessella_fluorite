@@ -1,0 +1,121 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The outline of a patterned fill, bent onto a sphere by the anchored expansion -- plan.md §13.4's
+// consumer half.
+//
+// `fill_outline_pattern.mat` says what this draws. A sphere changes the placement and nothing else: the
+// sprite's position within its period is computed from the *tile-local* vertex and the drawable's
+// own ratio, so `patternPos` is the same arithmetic over the same inputs whichever surface the
+// tile ends up on.
+material {
+    name : tessella_fill_outline_pattern_globe_anchored,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        // The viewport in pixels, which turns a clip position into the one `gl_FragCoord`
+        // measures in. mbgl's `paintParams.world_size`.
+        { type : float2, name : worldSize },
+        // `globe_ubo::GlobeBendUbo`, in declaration order, and the tile center it expands about.
+        { type : float2, name : bendCenter },
+        { type : float4, name : bendAnchor },
+        { type : float4, name : bendU },
+        { type : float4, name : bendV },
+        { type : float4, name : bendUU },
+        { type : float4, name : bendVV },
+        { type : float4, name : bendUV },
+        { type : float2,    name : pixelCoordUpper },
+        { type : float2,    name : pixelCoordLower },
+        { type : float,     name : tileRatio },
+        { type : float4,    name : patternFrom },
+        { type : float4,    name : patternTo },
+        { type : float2,    name : texsize },
+        { type : float,     name : fromScale },
+        { type : float,     name : toScale },
+        { type : float,     name : fade },
+        { type : float,     name : opacity },
+        { type : float,     name : pixelRatio },
+        { type : sampler2d, name : image0 }
+    ],
+    requires : [ position ],
+    variables : [ patternPosA, patternPosB, outlinePos ]
+}
+
+vertex {
+    /// Where a vertex falls within the pattern's period, in pattern widths.
+    ///
+    /// The triple `mod` is mbgl's and is not redundant: it reduces the high half of the world
+    /// coordinate against the pattern size *before* multiplying it up by 256 twice, so the product
+    /// never leaves the range a float can hold exactly.
+    vec2 patternPos(vec2 upper, vec2 lower, vec2 size, float unitsToPixels, vec2 pos) {
+        vec2 offset = mod(mod(mod(upper, size) * 256.0, size) * 256.0 + lower, size);
+        return (unitsToPixels * pos + offset) / size;
+    }
+
+    // The expansion at a tile-local point, which is what replaces the placement matrix.
+    vec4 bend(vec2 tileLocal) {
+        vec2 d = tileLocal - materialParams.bendCenter;
+        return materialParams.bendAnchor
+             + materialParams.bendU * d.x
+             + materialParams.bendV * d.y
+             + 0.5 * (materialParams.bendUU * (d.x * d.x)
+                    + materialParams.bendVV * (d.y * d.y))
+             + materialParams.bendUV * (d.x * d.y);
+    }
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec2 position = getPosition().xy;
+
+        vec2 tlA = materialParams.patternFrom.xy;
+        vec2 brA = materialParams.patternFrom.zw;
+        vec2 tlB = materialParams.patternTo.xy;
+        vec2 brB = materialParams.patternTo.zw;
+
+        float ratio = max(materialParams.pixelRatio, 1e-6);
+        vec2 sizeA = (brA - tlA) / ratio;
+        vec2 sizeB = (brB - tlB) / ratio;
+
+        material.patternPosA = vec4(
+            patternPos(materialParams.pixelCoordUpper, materialParams.pixelCoordLower,
+                       materialParams.fromScale * sizeA, materialParams.tileRatio, position),
+            0.0, 0.0);
+        material.patternPosB = vec4(
+            patternPos(materialParams.pixelCoordUpper, materialParams.pixelCoordLower,
+                       materialParams.toScale * sizeB, materialParams.tileRatio, position),
+            0.0, 0.0);
+
+        vec4 clip = bend(position);
+        // The one-pixel fade that is a fill's whole antialiasing -- see `fill_outline.mat`,
+        // which says why this pass and not the triangles.
+        material.outlinePos = vec4(
+            (clip.xy / clip.w + 1.0) / 2.0 * materialParams.worldSize, 0.0, 0.0);
+        material.worldPosition = clip;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 tlA = materialParams.patternFrom.xy;
+        vec2 brA = materialParams.patternFrom.zw;
+        vec2 tlB = materialParams.patternTo.xy;
+        vec2 brB = materialParams.patternTo.zw;
+
+        // `mod` is what tiles the sprite: the position runs on across the world and this is what
+        // wraps it back into one copy of the pattern before it indexes the atlas.
+        vec2 within = mod(variable_patternPosA.xy, 1.0);
+        vec2 a = mix(tlA / materialParams.texsize, brA / materialParams.texsize, within);
+        vec4 color1 = texture(materialParams_image0, a);
+
+        vec2 withinB = mod(variable_patternPosB.xy, 1.0);
+        vec2 b = mix(tlB / materialParams.texsize, brB / materialParams.texsize, withinB);
+        vec4 color2 = texture(materialParams_image0, b);
+
+        // The atlas is premultiplied already, so the crossfade and the opacity scale it directly.
+        float dist = length(variable_outlinePos.xy - gl_FragCoord.xy);
+        float alpha = 1.0 - smoothstep(0.0, 1.0, dist);
+        material.baseColor =
+            mix(color1, color2, materialParams.fade) * alpha * materialParams.opacity;
+    }
+}
