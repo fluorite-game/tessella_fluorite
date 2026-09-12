@@ -62,3 +62,9 @@ hooks:
       # The planet this app reads is served over https. Without `tls` the
       # producer refuses the URL at the status call rather than drawing.
       cargo_features: tls
+      # The cross build's library, which the hook publishes rather than builds:
+      # emb compiles hooks with gcc and everything above links Filament, which
+      # is libc++. Built by .emb/README's two cmake invocations, against the
+      # sysroot the rpi5-trixie manifest resolves. Relative to the tessella_fluorite
+      # package root, like every other path here. Ignored by a host build.
+      prebuilt: build-arm64/libtessella_fluorite.so

@@ -4,3 +4,5 @@ example/quad/pubspec.lock
 .dart_tool/
 pubspec.lock
 example/quad/build/
+build-arm64/
+example/quad/libapp.so.release*

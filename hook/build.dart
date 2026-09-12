@@ -16,6 +16,10 @@
 //         fluorite_core_ffi: ... # libfluorite_core_ffi.so, to link against
 //         cargo_profile: release
 //         cargo_features: tls  # comma-separated tessella-ffi features
+//         prebuilt: ...        # a cross build's libtessella_fluorite.so
+//
+// `prebuilt` is the only one a cross build reads, and it is required there: see
+// the note at the top of the build function.
 //
 // Each also reads an environment variable of the same name upcased and
 // TESSELLA_-prefixed, which only helps a hook run directly with --config; under
@@ -33,6 +37,32 @@ void main(List<String> args) async {
     if (!input.config.buildCodeAssets) return;
 
     final packageRoot = input.packageRoot.toFilePath();
+
+    // A cross build takes this library prebuilt. The toolchain emb hands a
+    // build hook is gcc, and everything here links against Filament's archives,
+    // which are libc++ -- so there is no compiler in scope that could produce
+    // it. `emb cross` builds the native half separately, under the manifest
+    // that knows the target's sysroot, and names the result here.
+    if (input.config.code.targetArchitecture != Architecture.current) {
+      final prebuilt = _dir(input, 'prebuilt', 'TESSELLA_PREBUILT');
+      if (prebuilt == null || !File(prebuilt).existsSync()) {
+        throw StateError(
+          'cross build for ${input.config.code.targetArchitecture}: set '
+          'prebuilt to a libtessella_fluorite.so built for it, under '
+          'hooks: user_defines: tessella_fluorite: in the app pubspec'
+          '${prebuilt == null ? '' : ' (no file at $prebuilt)'}',
+        );
+      }
+      output.assets.code.add(
+        CodeAsset(
+          package: input.packageName,
+          name: 'src/ffi.dart',
+          linkMode: DynamicLoadingBundled(),
+          file: Uri.file(prebuilt),
+        ),
+      );
+      return;
+    }
     final tessellaDir =
         _dir(input, 'tessella_dir', 'TESSELLA_DIR') ?? '${packageRoot}../tessella';
     final filamentInclude = _dir(input, 'filament_include', 'TESSELLA_FILAMENT_INCLUDE');
