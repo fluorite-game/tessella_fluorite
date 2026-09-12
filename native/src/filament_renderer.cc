@@ -3039,9 +3039,15 @@ void FilamentRenderer::issue(const Batch& batch) {
                 if (at + sizeof block <= drawables->second.size()) {
                     std::memcpy(&block, drawables->second.data() + at, sizeof block);
                 }
-                filament::math::mat4f placement;
-                std::memcpy(&placement, block.matrix, sizeof block.matrix);
-                instance->setParameter("matrix", placement);
+                // The placement, except where the expansion is the placement. An anchored
+                // material declares no `matrix` at all and Filament panics on a uniform it does
+                // not have; the direct bend does declare one, and the generic bend block above
+                // has already set it to the same sixteen floats this would.
+                if (!useAnchored) {
+                    filament::math::mat4f placement;
+                    std::memcpy(&placement, block.matrix, sizeof block.matrix);
+                    instance->setParameter("matrix", placement);
+                }
                 instance->setParameter("extrudeScale",
                                        filament::math::float2{block.extrude_scale[0],
                                                               block.extrude_scale[1]});
