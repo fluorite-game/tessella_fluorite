@@ -6,3 +6,4 @@ pubspec.lock
 example/quad/build/
 build-arm64/
 example/quad/libapp.so.release*
+emb.lock
