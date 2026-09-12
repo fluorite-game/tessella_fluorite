@@ -3341,9 +3341,14 @@ void FilamentRenderer::issue(const Batch& batch) {
                 if (at + sizeof block <= drawables->second.size()) {
                     std::memcpy(&block, drawables->second.data() + at, sizeof block);
                 }
-                filament::math::mat4f placement;
-                std::memcpy(&placement, block.matrix, sizeof block.matrix);
-                instance->setParameter("matrix", placement);
+                // As the circle's: only where a matrix is the placement. An anchored material
+                // takes the expansion instead and declares no `matrix`, and the direct one has
+                // already been given the same sixteen floats by the generic bend block.
+                if (!useAnchored) {
+                    filament::math::mat4f placement;
+                    std::memcpy(&placement, block.matrix, sizeof block.matrix);
+                    instance->setParameter("matrix", placement);
+                }
 
                 const auto first = textures_.find(mesh->second.texture);
                 if (first == textures_.end()) {
