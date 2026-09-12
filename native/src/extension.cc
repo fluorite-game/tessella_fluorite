@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -142,7 +143,16 @@ void attach(void* /*user*/,
     // Tessella clips tiles with a stencil pass. Without a stencil attachment
     // the test has nothing to read and a tile is clipped to a band across the
     // middle of the map rather than to itself.
-    filamentView->setStencilBufferEnabled(true);
+    //
+    // TSF_NO_STENCIL turns it off, which is a diagnostic and not a mode: the
+    // clipping goes wrong. It exists because asking for a stencil is what makes
+    // Filament allocate a depth+stencil attachment, and a driver that cannot
+    // make an image view over the format it picks crashes inside
+    // vkCreateImageView with the render target half-built -- which is what the
+    // Pi 5's V3D does, in the one place fluorite's own examples never reach
+    // because none of them ask for a stencil.
+    static const bool noStencil = std::getenv("TSF_NO_STENCIL") != nullptr;
+    filamentView->setStencilBufferEnabled(!noStencil);
   }
   State& shared = state();
   const std::lock_guard<std::mutex> lock(shared.mutex);
