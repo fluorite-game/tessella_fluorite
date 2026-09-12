@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import 'dart:io';
+
 /// Where one pane of the quad looks.
 ///
 /// Zoom is per city rather than shared: a country wants a different one from a
@@ -47,3 +49,19 @@ const List<MapCamera> kQuad = <MapCamera>[
   // People's Square, so the Bund and both banks of the Huangpu are in frame.
   MapCamera(name: 'Shanghai', latitude: 31.2304, longitude: 121.4737, zoom: 14, pitch: _pitch),
 ];
+
+/// How many of [kQuad] the app *starts* with, from `TESSELLA_PANES`.
+///
+/// Four by default, which is the app. The count is changed while it runs (keys
+/// 1 to 4, or any other key to cycle); this only seeds it, so a board with no
+/// keyboard can still be told what to open with.
+///
+/// One is how a fault gets cornered: the four panes are four platform views and
+/// four Filament render targets, and a crash that only appears with all four is
+/// a different fault from one that appears with one -- the quad crashed the V3D
+/// driver inside `vkCreateImageView` where fluorite's own single-view example
+/// did not, and this is what separates "tessella" from "four of anything".
+int get kPanes {
+  final int asked = int.tryParse(Platform.environment['TESSELLA_PANES'] ?? '') ?? kQuad.length;
+  return asked.clamp(1, kQuad.length);
+}

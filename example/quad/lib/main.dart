@@ -5,6 +5,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:fluorite/fluorite.dart';
 import 'package:tessella_fluorite/tessella_fluorite.dart';
 
@@ -101,6 +102,19 @@ class _QuadAppState extends State<QuadApp> with SingleTickerProviderStateMixin {
   /// tickers would each wake the frame pipeline to set one camera.
   late final Ticker _ticker;
 
+  /// How many panes are on screen now.
+  ///
+  /// Seeded from `TESSELLA_PANES` and changed while the app runs -- keys 1 to 4
+  /// pick a count, and any other key cycles. Runtime rather than startup-only
+  /// because the question it answers is a comparison: the same build, the same
+  /// frame, one view against four, with nothing else moved. Dropping a pane
+  /// tears its platform view down and the slot's map with it; adding one brings
+  /// both back against the camera the slot has held all along.
+  int _panes = kPanes;
+
+  /// Takes the keyboard, so a count can be picked on a board with no pointer.
+  final FocusNode _keys = FocusNode();
+
   /// When the current pass began, or null while still waiting to start.
   Duration? _passBegan;
 
@@ -121,8 +135,8 @@ class _QuadAppState extends State<QuadApp> with SingleTickerProviderStateMixin {
   /// the whole of the first leg runs against a cache that has nothing in it --
   /// the camera is through a zoom before its tiles land -- so the one pass
   /// anybody watches from the beginning is the one pass with no map in it.
-  static bool _settled() {
-    for (int slot = 0; slot < kQuad.length; slot++) {
+  bool _settled() {
+    for (int slot = 0; slot < _panes; slot++) {
       final MapStats? stats = TessellaMaps.statsFor(slot);
       if (stats == null ||
           stats.readiness != MapReadiness.ready ||
@@ -161,7 +175,7 @@ class _QuadAppState extends State<QuadApp> with SingleTickerProviderStateMixin {
       into = Duration.zero;
     }
 
-    for (int slot = 0; slot < kQuad.length; slot++) {
+    for (int slot = 0; slot < _panes; slot++) {
       final MapCamera city = kQuad[slot];
       final ZoomSweep sweep = ZoomSweep(home: city.zoom, maxZoom: _ceiling);
       TessellaMaps.setCamera(
@@ -180,10 +194,21 @@ class _QuadAppState extends State<QuadApp> with SingleTickerProviderStateMixin {
   @override
   void dispose() {
     _ticker.dispose();
+    _keys.dispose();
     super.dispose();
   }
 
   FluoriteEngine get engine => widget.engine;
+
+  /// Picks a count from a key: 1 to 4 name one, anything else steps 1-2-4-1.
+  void _onKey(final KeyEvent event) {
+    if (event is! KeyDownEvent) return;
+    const Map<String, int> named = <String, int>{'1': 1, '2': 2, '3': 3, '4': 4};
+    final int? asked = named[event.character];
+    setState(() {
+      _panes = asked ?? switch (_panes) { 1 => 2, 2 => 4, _ => 1 };
+    });
+  }
 
   @override
   Widget build(final BuildContext context) {
@@ -192,12 +217,23 @@ class _QuadAppState extends State<QuadApp> with SingleTickerProviderStateMixin {
       home: Scaffold(
         backgroundColor: Colors.black,
         body: SafeArea(
-          child: Column(
-            children: <Widget>[
-              Expanded(child: _row(0)),
-              const SizedBox(height: 2),
-              Expanded(child: _row(2)),
-            ],
+          child: KeyboardListener(
+            focusNode: _keys,
+            autofocus: true,
+            onKeyEvent: _onKey,
+            // One pane fills the window; two share a row; three or four fill
+            // the grid, with the bottom row short when there are three.
+            child: _panes == 1
+                ? MapPane(engine: engine, slot: 0)
+                : Column(
+                    children: <Widget>[
+                      Expanded(child: _row(0)),
+                      if (_panes > 2) ...<Widget>[
+                        const SizedBox(height: 2),
+                        Expanded(child: _row(2)),
+                      ],
+                    ],
+                  ),
           ),
         ),
       ),
@@ -207,8 +243,10 @@ class _QuadAppState extends State<QuadApp> with SingleTickerProviderStateMixin {
   Widget _row(final int first) => Row(
         children: <Widget>[
           Expanded(child: MapPane(engine: engine, slot: first)),
-          const SizedBox(width: 2),
-          Expanded(child: MapPane(engine: engine, slot: first + 1)),
+          if (first + 1 < _panes) ...<Widget>[
+            const SizedBox(width: 2),
+            Expanded(child: MapPane(engine: engine, slot: first + 1)),
+          ],
         ],
       );
 }
