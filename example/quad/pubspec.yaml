@@ -31,6 +31,15 @@ hooks:
     # fluorite_register_ihs_pv compiles to its no-op stub and every pane fails
     # with "No platform-view factory registered for view type".
     fluorite:
+      # The hook builds fluorite host-native even when the app is being built
+      # for a board, and its cmake requires clang -- Filament's archives are
+      # libc++. Nothing sets CC/CXX in the subprocess Flutter runs it in, so
+      # cmake picks the host default, which on a Fedora host is gcc and stops
+      # the whole bundle on "fluorite_core_ffi requires clang (got GNU)". The
+      # cross build's library is substituted afterwards; this is only about
+      # letting the host one build at all.
+      cmake_c_compiler: clang
+      cmake_cxx_compiler: clang++
       ihs_dir: /mnt/dev/ivi-homescreen
       # Filament 1.75, not the 1.65.4 the emb overlay stages. fluorite's own
       # sources need it -- GT7 tone mapping, ColorGrading::customLut and the
@@ -67,4 +76,4 @@ hooks:
       # is libc++. Built by .emb/README's two cmake invocations, against the
       # sysroot the rpi5-trixie manifest resolves. Relative to the tessella_fluorite
       # package root, like every other path here. Ignored by a host build.
-      prebuilt: build-arm64/libtessella_fluorite.so
+      prebuilt: build-arm64/current/libtessella_fluorite.so

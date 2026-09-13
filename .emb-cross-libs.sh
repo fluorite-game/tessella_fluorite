@@ -13,7 +13,11 @@
 #     tessella_fluorite hook publishes as the bundled code asset, and
 #   - the deploy, which puts libfluorite_core_ffi.so beside it on the device.
 #
-#   .emb-cross-libs.sh <profile-dir> <emb-toolchain-file>
+#   .emb-cross-libs.sh <profile-dir> <emb-toolchain-file> [cpu-flag]
+#
+# The cpu flag defaults to the Pi 5's -mcpu=cortex-a76; a Pi 4 wants
+# -mcpu=cortex-a72, and it has to match the profile or the Rust half is built
+# for a core the board does not have.
 #
 # Both arguments come from `emb cross ... --update-lock`: the "target sysroot"
 # and "cmake tc file" lines. The profile hash moves whenever the manifest does.
@@ -21,7 +25,14 @@ set -euo pipefail
 
 P="${1:?profile dir, e.g. .../cross-aarch64-none-linux-gnu-<hash>}"
 TC="${2:?emb cmake toolchain file}"
-OUT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/build-arm64"
+CPU="${3:--mcpu=cortex-a76}"
+PKG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$PKG/build-arm64"
+# One directory per profile, because two boards are two sets of libraries, and
+# a `current` symlink beside them because the app's `prebuilt:` user-define is a
+# static string and has to name one. Whichever board was built last is the one
+# the bundle carries -- which is explicit rather than implied by a file date.
+OUT="$ROOT/$(basename "$P")"
 F=/mnt/dev/ihs_filament_view/packages/fluorite
 TESSELLA=/mnt/dev/tessella
 
@@ -36,7 +47,7 @@ mkdir -p "$OUT"
 
 # The producer. A Rust staticlib, so no C++ runtime of its own and no linker
 # needed for the archive -- but tessella-ffi also builds a cdylib, which does.
-FLAGS="--sysroot=$P/sysroot -mcpu=cortex-a76 -B$P/sysroot/usr/lib/aarch64-linux-gnu -L$P/sysroot/usr/lib/aarch64-linux-gnu -L$P/sysroot/lib/aarch64-linux-gnu -isystem$P/sysroot/usr/include/aarch64-linux-gnu"
+FLAGS="--sysroot=$P/sysroot $CPU -B$P/sysroot/usr/lib/aarch64-linux-gnu -L$P/sysroot/usr/lib/aarch64-linux-gnu -L$P/sysroot/lib/aarch64-linux-gnu -isystem$P/sysroot/usr/include/aarch64-linux-gnu"
 GCCBIN="$EMB_GCC_TOOLCHAIN/bin"
 ( cd "$TESSELLA" && env \
     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="$GCCBIN/aarch64-none-linux-gnu-gcc" \
@@ -55,7 +66,7 @@ cmake --build "$OUT/fluorite" --parallel
 cp "$OUT/fluorite/libfluorite_core_ffi.so" "$OUT/"
 
 # The tessella extension, linked against that copy.
-cmake -S "$(dirname "$OUT")" -B "$OUT/tessella" -G Ninja \
+cmake -S "$PKG" -B "$OUT/tessella" -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$F/clang-toolchain.cmake" \
   -DCMAKE_BUILD_TYPE=Release \
   -DTESSELLA_DIR="$TESSELLA" \
@@ -66,4 +77,5 @@ cmake -S "$(dirname "$OUT")" -B "$OUT/tessella" -G Ninja \
 cmake --build "$OUT/tessella" --parallel
 cp "$OUT/tessella/libtessella_fluorite.so" "$OUT/"
 
-echo "cross libs → $OUT"
+ln -sfn "$(basename "$OUT")" "$ROOT/current"
+echo "cross libs → $OUT (build-arm64/current)"

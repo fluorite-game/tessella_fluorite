@@ -398,7 +398,7 @@ cross:
           TESSELLA_DIR: ../tessella
           TESSELLA_LIB: ../tessella/target/aarch64-unknown-linux-gnu/release/libtessella_ffi.a
           FLUORITE_INCLUDE_DIR: ../ihs_filament_view/packages/fluorite/include
-          FLUORITE_CORE_FFI_LIB: build-arm64/libfluorite_core_ffi.so
+          FLUORITE_CORE_FFI_LIB: build-arm64/current/libfluorite_core_ffi.so
 
       # No `modules:`. The two libraries that would go here -- fluorite's
       # renderer and the tessella extension -- link Filament's libc++ archives,
