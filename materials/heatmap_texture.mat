@@ -1,0 +1,56 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// A heatmap layer's second pass: the density the first pass accumulated, read through a colour
+// ramp and drawn over the frame.
+//
+// One quad per layer, not per tile -- the unit square scaled to the world size here, which is
+// why this is the only family whose matrix takes no camera. It is an ortho over the frame, so
+// the quad covers the viewport however the map is panned or pitched.
+//
+// Ported from mbgl's `heatmap_texture.vertex.glsl` and `heatmap_texture.fragment.glsl`.
+
+material {
+    name : tessella_heatmap_texture,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    depthWrite : false,
+    depthCulling : false,
+    parameters : [
+        { type : mat4,      name : matrix },
+        // The frame, in pixels. The quad's vertices are the unit square and this is what makes
+        // them cover it.
+        { type : float2,    name : worldSize },
+        { type : float,     name : opacity },
+        // What the first pass drew, at half the frame's resolution.
+        { type : sampler2d, name : image },
+        // 256x1, from `heatmap-color` evaluated over the density range.
+        { type : sampler2d, name : colorRamp }
+    ],
+    requires : [ position ],
+    variables : [ heatmapUv ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec2 pos = getPosition().xy;
+        // Flipped in y, as mbgl's `v_pos.y = 1.0 - a_pos.y` is: the target was rendered with the
+        // frame's own orientation and is sampled with the texture's.
+        material.heatmapUv = vec4(pos.x, 1.0 - pos.y, 0.0, 0.0);
+        material.worldPosition =
+            materialParams.matrix * vec4(pos * materialParams.worldSize, 0.0, 1.0);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // The accumulated density, which is what the kernels summed into red.
+        float density = texture(materialParams_image, variable_heatmapUv.xy).r;
+        // The ramp is sampled at the middle of its one row, so nothing depends on how the
+        // sampler rounds a single-texel height.
+        vec4 color = texture(materialParams_colorRamp, vec2(density, 0.5));
+        material.baseColor = color * materialParams.opacity;
+    }
+}
