@@ -302,7 +302,10 @@ int main(int argc, char** argv) {
         offscreenViews.push_back(off);
         offscreenBits = static_cast<std::uint8_t>(offscreenBits | pass.layer);
     }
-    if (offscreenBits != 0) {
+    // TSF_KERNELS_ONSCREEN leaves the kernels visible to the map's own view as well, which is
+    // how "is the pass wrong or is the layer wrong" gets answered: a kernel that lands in the
+    // wrong place on screen lands in the wrong place in the target for the same reason.
+    if (offscreenBits != 0 && std::getenv("TSF_KERNELS_ONSCREEN") == nullptr) {
         view->setVisibleLayers(0xFF, static_cast<std::uint8_t>(0xFF & ~offscreenBits));
     }
     std::fprintf(stderr, "offscreen_passes %zu\n", offscreenViews.size());
