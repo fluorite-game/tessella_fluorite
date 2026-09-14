@@ -322,6 +322,44 @@ int main(int argc, char** argv) {
         engine->flushAndWait();
     }
 
+    // The offscreen target's own contents, for when the layer that samples it looks wrong and
+    // the question is which half is at fault. Written as a PPM of the density in all three
+    // channels, at the target's own size rather than the frame's.
+    if (const char* path = std::getenv("TSF_DUMP_TARGET"); path != nullptr && !offscreenViews.empty()) {
+        const auto& pass = map->renderer().offscreenPasses().front();
+        std::vector<float> texels(static_cast<std::size_t>(pass.width) * pass.height * 4);
+        filament::backend::PixelBufferDescriptor pb(
+            texels.data(), texels.size() * sizeof(float),
+            filament::backend::PixelDataFormat::RGBA, filament::backend::PixelDataType::FLOAT);
+        if (renderer->beginFrame(swapChain)) {
+            for (filament::View* off : offscreenViews) {
+                renderer->render(off);
+            }
+            renderer->readPixels(pass.target, 0, 0, pass.width, pass.height, std::move(pb));
+            renderer->endFrame();
+        }
+        engine->flushAndWait();
+        float peak = 0.0f;
+        for (std::size_t i = 0; i < texels.size(); i += 4) {
+            peak = std::max(peak, texels[i]);
+        }
+        double total = 0.0;
+        for (std::size_t i = 0; i < texels.size(); i += 4) {
+            total += texels[i];
+        }
+        std::fprintf(stderr, "target %ux%u peak_density %f integral %.1f\n", pass.width,
+                     pass.height, (double)peak, total);
+        if (FILE* out = std::fopen(path, "wb")) {
+            std::fprintf(out, "P6\n%u %u\n255\n", pass.width, pass.height);
+            for (std::size_t i = 0; i < texels.size(); i += 4) {
+                const auto byte = static_cast<unsigned char>(
+                    std::min(255.0f, std::max(0.0f, texels[i] * 255.0f)));
+                std::fputc(byte, out); std::fputc(byte, out); std::fputc(byte, out);
+            }
+            std::fclose(out);
+        }
+    }
+
     std::vector<uint8_t> pixels(W * H * 4);
     const auto capture = [&](std::vector<uint8_t>& into) {
         filament::backend::PixelBufferDescriptor pb(into.data(), into.size(),
