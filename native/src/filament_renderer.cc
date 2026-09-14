@@ -43,6 +43,8 @@ std::int32_t familyOf(const std::string& stem) {
     if (stem == "line") return TSL_BUILTIN_LINE_SHADER;
     if (stem == "line_sdf") return TSL_BUILTIN_LINE_SDFSHADER;
     if (stem == "circle") return TSL_BUILTIN_CIRCLE_SHADER;
+    if (stem == "heatmap") return TSL_BUILTIN_HEATMAP_SHADER;
+    if (stem == "heatmap_texture") return TSL_BUILTIN_HEATMAP_TEXTURE_SHADER;
     if (stem == "symbol_sdf") return TSL_BUILTIN_SYMBOL_SDFSHADER;
     if (stem == "symbol_icon") return TSL_BUILTIN_SYMBOL_ICON_SHADER;
     if (stem == "raster") return TSL_BUILTIN_RASTER_SHADER;
@@ -91,6 +93,10 @@ std::size_t drawableStride(std::int32_t family) {
             // constant for this family because it has one drawable block, so the block's own
             // size is the stride.
             return sizeof(tsl_circle_drawable_ubo);
+        case TSL_BUILTIN_HEATMAP_SHADER:
+            // 80: a matrix, a scalar extrude scale and two mix factors. One block, so the
+            // block's own size again.
+            return sizeof(tsl_heatmap_drawable_ubo);
         case TSL_BUILTIN_FILL_EXTRUSION_SHADER:
         case TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER:
         case TSL_BUILTIN_FILL_EXTRUSION_PATTERN_SHADER:
@@ -264,6 +270,23 @@ constexpr PaintSlot kLineSdfSlots[] = {
 /// The circle family's. Every attribute but the position is paint, which is what makes a circle
 /// the widest permutation space in the style spec -- seven properties, and mbgl compiles a shader
 /// for each of the hundred and twenty-eight combinations it meets.
+/// The heatmap kernels' attributes: the position, then weight and radius where they are
+/// data-driven. Two, against a circle's seven, and in the shader's own id order.
+constexpr PaintSlot kHeatmapSlots[] = {
+    {TSL_UBO_ID_HEATMAP_POS_VERTEX_ATTRIBUTE, -1, -1, 0,
+     filament::VertexBuffer::AttributeType::SHORT2},
+    {TSL_UBO_ID_HEATMAP_WEIGHT_VERTEX_ATTRIBUTE, 0, 0, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_HEATMAP_RADIUS_VERTEX_ATTRIBUTE, 1, 1, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+};
+
+/// The second pass's quad has a position and nothing else: its colour comes from two samplers.
+constexpr PaintSlot kHeatmapTextureSlots[] = {
+    {TSL_UBO_ID_HEATMAP_POS_VERTEX_ATTRIBUTE, -1, -1, 0,
+     filament::VertexBuffer::AttributeType::SHORT2},
+};
+
 constexpr PaintSlot kCircleSlots[] = {
     {TSL_UBO_ID_CIRCLE_POS_VERTEX_ATTRIBUTE, -1, -1, 0,
      filament::VertexBuffer::AttributeType::SHORT2},
@@ -340,6 +363,10 @@ std::pair<const PaintSlot*, std::size_t> paintSlots(std::int32_t shader) {
             return {kLineSdfSlots, std::size(kLineSdfSlots)};
         case TSL_BUILTIN_CIRCLE_SHADER:
             return {kCircleSlots, std::size(kCircleSlots)};
+        case TSL_BUILTIN_HEATMAP_SHADER:
+            return {kHeatmapSlots, std::size(kHeatmapSlots)};
+        case TSL_BUILTIN_HEATMAP_TEXTURE_SHADER:
+            return {kHeatmapTextureSlots, std::size(kHeatmapTextureSlots)};
         default:
             return {nullptr, 0};
     }
@@ -367,6 +394,8 @@ constexpr const char* kCircleConstants[] = {
     "opacityFromAttribute",     "strokeColorFromAttribute", "strokeWidthFromAttribute",
     "strokeOpacityFromAttribute"};
 
+constexpr const char* kHeatmapConstants[] = {"weightFromAttribute", "radiusFromAttribute"};
+
 std::pair<const char* const*, std::size_t> paintConstants(std::int32_t shader) {
     switch (shader) {
         case TSL_BUILTIN_FILL_SHADER:
@@ -378,6 +407,8 @@ std::pair<const char* const*, std::size_t> paintConstants(std::int32_t shader) {
             return {kLineSdfConstants, std::size(kLineSdfConstants)};
         case TSL_BUILTIN_CIRCLE_SHADER:
             return {kCircleConstants, std::size(kCircleConstants)};
+        case TSL_BUILTIN_HEATMAP_SHADER:
+            return {kHeatmapConstants, std::size(kHeatmapConstants)};
         case TSL_BUILTIN_FILL_EXTRUSION_SHADER:
         case TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER:
             return {kFillExtrusionConstants, std::size(kFillExtrusionConstants)};
@@ -481,7 +512,11 @@ bool patternPlaces(std::int32_t family) {
            // A circle's quad is extruded in *clip* space, by a radius in pixels scaled by the
            // projected w -- so the matrix has to be inside the shader, and the renderable carries
            // the identity like a line's does.
-           || family == TSL_BUILTIN_CIRCLE_SHADER;
+           || family == TSL_BUILTIN_CIRCLE_SHADER
+           // A heatmap's kernels are extruded in tile units before the matrix, and its quad is
+           // placed by an ortho that is not the camera's at all. Both carry their own.
+           || family == TSL_BUILTIN_HEATMAP_SHADER
+           || family == TSL_BUILTIN_HEATMAP_TEXTURE_SHADER;
 }
 
 /// Which primitive a family's indices describe.
@@ -2978,9 +3013,15 @@ void FilamentRenderer::issue(const Batch& batch) {
             const bool patterned =
                 batch.builtinShader == TSL_BUILTIN_FILL_PATTERN_SHADER
                 || batch.builtinShader == TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER;
+            // Neither heatmap pass has a colour either, and for a reason worth saying: the
+            // kernels write a *density* and the quad reads its colour out of the ramp texture.
+            // A layer whose colour is a texture has no colour uniform, and Filament panics on a
+            // uniform a material does not declare rather than ignoring it.
             const bool sharedColour = batch.builtinShader != TSL_BUILTIN_SYMBOL_SDFSHADER
                                       && batch.builtinShader != TSL_BUILTIN_SYMBOL_ICON_SHADER
                                       && batch.builtinShader != TSL_BUILTIN_RASTER_SHADER
+                                      && batch.builtinShader != TSL_BUILTIN_HEATMAP_SHADER
+                                      && batch.builtinShader != TSL_BUILTIN_HEATMAP_TEXTURE_SHADER
                                       && !patterned;
             if (sharedColour) {
                 float colour[4] = {0, 0, 0, 0};
@@ -3005,13 +3046,68 @@ void FilamentRenderer::issue(const Batch& batch) {
             // vector layers it should be showing through to. Every material declares the
             // parameter, so this runs for all of them; a family whose block has no opacity field
             // answers `bytes` above and keeps the one.
-            {
+            //
+            // With one family out: a heatmap's *kernels* have no opacity, because
+            // `heatmap-opacity` applies to the pass that reads the density and not to the pass
+            // that writes it. Fading the kernels would fade the density before the ramp saw it,
+            // which is a different picture rather than a fainter one -- and the material
+            // declares no such parameter, so Filament panics rather than ignoring it.
+            if (batch.builtinShader != TSL_BUILTIN_HEATMAP_SHADER) {
                 float opacity = 1.0f;
                 const std::size_t off = opacityOffset(batch.builtinShader, props->second.size());
                 if (off + sizeof(float) <= props->second.size()) {
                     std::memcpy(&opacity, props->second.data() + off, sizeof opacity);
                 }
                 instance->setParameter("opacity", opacity);
+            }
+
+            // The kernels. Weight and radius are here whether or not they are data-driven --
+            // mbgl writes `constantOr(defaultValue())` into the block and lets the shader's
+            // specialization choose -- so reading them unconditionally is right rather than
+            // lazy.
+            if (batch.builtinShader == TSL_BUILTIN_HEATMAP_SHADER) {
+                tsl_heatmap_evaluated_props_ubo paint{};
+                paint.weight = 1.0f;
+                paint.radius = 30.0f;
+                paint.intensity = 1.0f;
+                if (props->second.size() >= sizeof paint) {
+                    std::memcpy(&paint, props->second.data(), sizeof paint);
+                }
+                instance->setParameter("weight", paint.weight);
+                instance->setParameter("radius", paint.radius);
+                instance->setParameter("intensity", paint.intensity);
+
+                tsl_heatmap_drawable_ubo block{};
+                if (at + sizeof block <= drawables->second.size()) {
+                    std::memcpy(&block, drawables->second.data() + at, sizeof block);
+                }
+                filament::math::mat4f placement;
+                std::memcpy(&placement, block.matrix, sizeof block.matrix);
+                instance->setParameter("matrix", placement);
+                // A scalar, not a pair: a heatmap has no pitch alignment to choose between.
+                instance->setParameter("extrudeScale", block.extrude_scale);
+                instance->setParameter("weightT", block.weight_t);
+                instance->setParameter("radiusT", block.radius_t);
+            }
+
+            // And the quad that reads what they drew. Its whole block is a matrix and an
+            // opacity; the two samplers are bound with the drawable's texture references.
+            if (batch.builtinShader == TSL_BUILTIN_HEATMAP_TEXTURE_SHADER) {
+                tsl_heatmap_texture_props_ubo pass{};
+                pass.opacity = 1.0f;
+                if (props->second.size() >= sizeof pass) {
+                    std::memcpy(&pass, props->second.data(), sizeof pass);
+                }
+                filament::math::mat4f ortho;
+                std::memcpy(&ortho, pass.matrix, sizeof pass.matrix);
+                instance->setParameter("matrix", ortho);
+                instance->setParameter("opacity", pass.opacity);
+                // The unit square is scaled to this, which is what makes one quad cover the
+                // frame however the map is panned.
+                instance->setParameter(
+                    "worldSize",
+                    filament::math::float2{static_cast<float>(width_),
+                                           static_cast<float>(height_)});
             }
 
             // A circle takes its size and its stroke from the layer's paint and its extrude
