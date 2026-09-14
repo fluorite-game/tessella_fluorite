@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+#
 #
 # The two libc++ libraries a cross build cannot get from anywhere else.
 #

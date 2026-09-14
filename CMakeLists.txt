@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+#
 # Native build for the tessella_fluorite package.
 #
 # Two things have to agree on a C++ runtime here, and only two: Filament and this. Filament's

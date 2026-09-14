@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+#
 # The tessella quad on a Raspberry Pi 5 running PiOS trixie (gcc 15 / glibc 2.41).
 #
 # Layered board -> project -> app. The board (toolchain, trixie image, partition,

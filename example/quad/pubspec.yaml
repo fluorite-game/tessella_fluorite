@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+#
 name: tessella_quad
 description: Four tessella maps, four ihs platform views, one app.
 publish_to: 'none'

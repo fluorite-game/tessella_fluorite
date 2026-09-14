@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+#
 name: tessella_fluorite
 description: >-
   Draws a tessella map into a fluorite Filament scene, by consuming tessella's capture stream
