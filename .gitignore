@@ -7,3 +7,11 @@ example/quad/build/
 build-arm64/
 example/quad/libapp.so.release*
 emb.lock
+
+# The render probe and the example app write their tile cache into the working
+# directory. It was tracked, and a 5.7 MB binary that changes on every run is four
+# commits of noise in the history for a file nothing reads back.
+cache.sqlite
+cache.sqlite-journal
+cache.sqlite-wal
+cache.sqlite-shm
