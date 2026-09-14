@@ -39,6 +39,6 @@ differing pixels** across five cameras — z14 and z16 at pitch 0 and 60 in 1024
 Four maps run on one engine, each in its own view, sharing one tile store. The quad runs on
 desktop and on a Raspberry Pi 4 and 5.
 
-## Licence
+## License
 
 Apache-2.0. See [LICENSE](LICENSE).
