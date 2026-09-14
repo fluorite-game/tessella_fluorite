@@ -1920,7 +1920,8 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
     // The layer's own evaluated value, which is what the shader would have read as a uniform.
     float constantBase = 0.0f;
     float constantHeight = 0.0f;
-    if (const auto layer = uniforms_.find(add.layerIndex); layer != uniforms_.end()) {
+    if (const auto layer = uniforms_.find(uniformKey(add.view, add.layerIndex));
+        layer != uniforms_.end()) {
         if (const auto props = layer->second.find(kPropsSlot);
             props != layer->second.end() && props->second.size() >= sizeof(tsl_fill_extrusion_props_ubo)) {
             tsl_fill_extrusion_props_ubo paint{};
@@ -2649,6 +2650,10 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
         // zero and nothing noticed. A dashed line reads its distance field through it, and a
         // zero here is `missing_atlas` on every drawable of the layer.
         mesh.texture = textureFor(add);
+        // And slot one, which joined this path the same way: a heatmap's quad reads its colour
+        // ramp there, and a zero is the whole second pass skipped for want of a texture the
+        // producer sent. The comment above is this one's, one field along and one family later.
+        mesh.texture1 = textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE);
         mesh.layerIndex = add.layerIndex;
         mesh.zoom = add.tileID ? add.tileID->z : std::uint8_t{0};
         mesh.overscaledZoom = add.tileID ? add.tileID->overscaled_z : std::uint8_t{0};
@@ -2750,7 +2755,7 @@ void FilamentRenderer::onRetire(std::uint64_t id) {
 void FilamentRenderer::onUniforms(const UboUpdate& update) {
     // A frame-wide block has no layer; it is kept under -1 so the lookup is uniform.
     const std::int32_t layer = update.layerIndex.value_or(-1);
-    auto& blocks = uniforms_[layer];
+    auto& blocks = uniforms_[uniformKey(update.view, layer)];
     blocks[update.slot].assign(update.bytes.data, update.bytes.data + update.bytes.size);
 }
 
@@ -2785,7 +2790,8 @@ void FilamentRenderer::endFrame(std::uint64_t) {
     // masks rather than before. Walked once, keyed by tile, and handed to `writeMasks` below.
     tileBends_.clear();
     for (const Batch& batch : pending_) {
-        const auto layer = uniforms_.find(static_cast<std::int32_t>(batch.layerIndex));
+        const auto layer = uniforms_.find(
+            uniformKey(batch.view, static_cast<std::int32_t>(batch.layerIndex)));
         if (layer == uniforms_.end()) {
             continue;
         }
@@ -2902,7 +2908,8 @@ void FilamentRenderer::issue(const Batch& batch) {
         return;
     }
 
-    const auto layer = uniforms_.find(static_cast<std::int32_t>(batch.layerIndex));
+    const auto layer =
+        uniforms_.find(uniformKey(batch.view, static_cast<std::int32_t>(batch.layerIndex)));
 
     // One renderable per drawable, because a renderable carries one transform and each drawable
     // carries its own matrix -- different tiles do not share one. That gives up the multi-primitive
@@ -2949,18 +2956,33 @@ void FilamentRenderer::issue(const Batch& batch) {
         if (layer == uniforms_.end()) {
             continue;
         }
+        // The heatmap's second pass is the one family with no per-drawable block. It is one
+        // quad per layer rather than one per tile, so there is nothing to index and nothing to
+        // place: its matrix is an ortho over the frame and arrives in its props at slot 5, like
+        // mbgl's, which emits no drawable block for it either.
+        //
+        // Requiring one here is what kept it from ever being configured. The renderable existed
+        // and drew, with an identity matrix and no world size, so the quad covered a region the
+        // size of two device pixels and the layer read as "nothing happened".
+        const bool placeless = batch.builtinShader == TSL_BUILTIN_HEATMAP_TEXTURE_SHADER;
         const auto drawables = layer->second.find(kDrawableSlot);
-        if (drawables == layer->second.end()) {
+        if (!placeless && drawables == layer->second.end()) {
             continue;
         }
         const std::size_t at =
-            static_cast<std::size_t>(batch.uboIndexes[i]) * drawableStride(batch.builtinShader);
-        if (at + sizeof(float) * 16 > drawables->second.size()) {
+            placeless ? 0
+                      : static_cast<std::size_t>(batch.uboIndexes[i])
+                            * drawableStride(batch.builtinShader);
+        if (!placeless && at + sizeof(float) * 16 > drawables->second.size()) {
             unplaced_++;
             continue;
         }
         filament::math::mat4f transform;
-        std::memcpy(&transform, drawables->second.data() + at, sizeof(float) * 16);
+        if (placeless) {
+            transform = filament::math::mat4f{};
+        } else {
+            std::memcpy(&transform, drawables->second.data() + at, sizeof(float) * 16);
+        }
 
         placements_.insert({transform[3][0], transform[3][1], transform[0][0]});
         scales_[transform[0][0]]++;
@@ -3223,7 +3245,7 @@ void FilamentRenderer::issue(const Batch& batch) {
                 // pixel size while the map is pitched. Read from the frame-wide block the same
                 // way a symbol reads it.
                 tsl_global_paint_params_ubo frame{};
-                if (const auto global = uniforms_.find(-1); global != uniforms_.end()) {
+                if (const auto global = uniforms_.find(uniformKey(0, -1)); global != uniforms_.end()) {
                     if (const auto slot = global->second.find(TSL_UBO_ID_GLOBAL_PAINT_PARAMS_UBO);
                         slot != global->second.end() && slot->second.size() >= sizeof frame) {
                         std::memcpy(&frame, slot->second.data(), sizeof frame);
@@ -3456,7 +3478,7 @@ void FilamentRenderer::issue(const Batch& batch) {
                 instance->setParameter("opacity", paint.opacity);
 
                 tsl_global_paint_params_ubo frame{};
-                if (const auto global = uniforms_.find(-1); global != uniforms_.end()) {
+                if (const auto global = uniforms_.find(uniformKey(0, -1)); global != uniforms_.end()) {
                     if (const auto slot = global->second.find(TSL_UBO_ID_GLOBAL_PAINT_PARAMS_UBO);
                         slot != global->second.end() && slot->second.size() >= sizeof frame) {
                         std::memcpy(&frame, slot->second.data(), sizeof frame);
@@ -3731,7 +3753,7 @@ void FilamentRenderer::issue(const Batch& batch) {
                 }
 
                 tsl_global_paint_params_ubo frame{};
-                if (const auto global = uniforms_.find(-1); global != uniforms_.end()) {
+                if (const auto global = uniforms_.find(uniformKey(0, -1)); global != uniforms_.end()) {
                     if (const auto slot = global->second.find(TSL_UBO_ID_GLOBAL_PAINT_PARAMS_UBO);
                         slot != global->second.end() && slot->second.size() >= sizeof frame) {
                         std::memcpy(&frame, slot->second.data(), sizeof frame);

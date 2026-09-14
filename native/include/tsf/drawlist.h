@@ -89,6 +89,14 @@ private:
         std::int32_t builtinShader = 0;
         std::uint64_t permutationKey = 0;
         std::vector<TextureBinding> textureRefs;
+        /// The view whose use joined this geometry.
+        ///
+        /// Not the order's. An order is per view and its entries carry none, which was right
+        /// while every drawable in a view's order belonged to that view -- and a heatmap's
+        /// kernels do not: they are bound into an offscreen view of their own (DR-25) and
+        /// ordered in the map's, because that is where their place in the painter's sequence
+        /// is. Taking the view from the order stamped them as the map's and they drew onto it.
+        std::uint32_t view = 0;
     };
 
     std::unordered_map<std::uint64_t, Known> byId_;

@@ -469,7 +469,23 @@ private:
     std::vector<std::int32_t> missingGlobeFamilies_;
     std::size_t materialsRejected_ = 0;
     std::unordered_map<std::uint64_t, Mesh> meshes_;
-    std::unordered_map<std::int32_t, Blocks> uniforms_;
+    /// Uniform blocks, keyed by *view and* layer.
+    ///
+    /// The view is not decoration. A heatmap writes two blocks at layer 2 slot 5 -- the kernels'
+    /// evaluated properties in its offscreen view, and the second pass's props in the map's --
+    /// and keyed on the layer alone the second overwrote the first. The kernels then read an
+    /// eighty-byte block as a sixteen-byte one, took a matrix out of the wrong bytes, and
+    /// rasterized nothing at all.
+    ///
+    /// The oracle's own dump had the identical bug and was fixed the identical way: mbgl
+    /// hardcodes a render target's group to index 0, so two heatmap layers both claimed it.
+    std::unordered_map<std::uint64_t, Blocks> uniforms_;
+
+    /// The key `uniforms_` is held under. Frame-wide blocks arrive with layer `-1`.
+    static std::uint64_t uniformKey(std::uint32_t view, std::int32_t layer) noexcept {
+        return (static_cast<std::uint64_t>(view) << 32)
+               | static_cast<std::uint32_t>(layer);
+    }
 
     /// This frame's batches, held until `endFrame`.
     ///

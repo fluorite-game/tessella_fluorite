@@ -23,6 +23,7 @@ void DrawList::observe(const DrawableAdd& add) {
     known.builtinShader = add.builtinShader;
     known.permutationKey = add.permutationKey;
     known.textureRefs = add.textureRefs;
+    known.view = add.view;
     // Assigned rather than inserted: a drawable re-announced with modified attributes keeps its
     // id, and the newer record is the one that describes what will be drawn.
     byId_[add.id] = std::move(known);
@@ -53,8 +54,10 @@ std::vector<Batch> DrawList::build(const FrameOrder& order) const {
         const bool symbol = isSymbol(known.builtinShader);
         const bool extends = open && !symbol && [&] {
             const Batch& run = batches.back();
-            return run.layerIndex == entry.layer_index && run.pass == entry.pass &&
-                   run.builtinShader == known.builtinShader &&
+            // Never across views: two drawables in different views are two passes, and one
+            // renderable cannot be in both.
+            return run.view == known.view && run.layerIndex == entry.layer_index &&
+                   run.pass == entry.pass && run.builtinShader == known.builtinShader &&
                    run.permutationKey == known.permutationKey &&
                    run.textureRefs == known.textureRefs;
         }();
@@ -67,7 +70,8 @@ std::vector<Batch> DrawList::build(const FrameOrder& order) const {
         }
 
         Batch fresh;
-        fresh.view = order.view;
+        // The drawable's view, not the order's -- see `Known::view`.
+        fresh.view = known.view;
         fresh.layerIndex = entry.layer_index;
         fresh.pass = entry.pass;
         fresh.builtinShader = known.builtinShader;
