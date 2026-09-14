@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace filament {
@@ -94,6 +95,15 @@ class MapView {
   /// A globe wants one: every wrap of a tile bends to the same patch, so a repeated cover draws
   /// that patch twice and z-fights with itself.
   bool setWorldCopies(tessella_world_copies copies);
+
+  /// Replaces this map's annotations from a GeoJSON feature collection. See
+  /// `Host::setAnnotations`; before the first `tick`.
+  bool setAnnotations(std::string_view geojson);
+
+  /// Adds an encoded image a symbol annotation's `icon` can name. See
+  /// `Host::addAnnotationImage`; before the first `tick`.
+  bool addAnnotationImage(std::string_view id, std::string_view image, double pixelRatio = 1.0,
+                          bool sdf = false);
 
   void advance(double elapsed_millis);
 

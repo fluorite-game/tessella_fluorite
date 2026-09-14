@@ -98,6 +98,16 @@ int main(int argc, char** argv) {
     const double pitch = argc > 9 ? std::atof(argv[9]) : 0.0;
     const double bearing = argc > 10 ? std::atof(argv[10]) : 0.0;
 
+    // Annotations are not in the style and cannot be: there is no `"type": "annotation"` and no
+    // stylesheet can produce one. The oracle takes them on the command line as `--annotations` and
+    // `--annotation-image id=file.png`; these are the same two, named in the environment because
+    // this probe's arguments are positional and a camera is what they are for.
+    //
+    //   TSF_ANNOTATIONS        a GeoJSON feature collection, by path
+    //   TSF_ANNOTATION_IMAGES  `id=file.png`, comma separated
+    const char* annotations = std::getenv("TSF_ANNOTATIONS");
+    const char* annotationImages = std::getenv("TSF_ANNOTATION_IMAGES");
+
     auto* engine = filament::Engine::Builder()
                        .backend(filament::Engine::Backend::VULKAN)
                        .build();
@@ -144,6 +154,46 @@ int main(int argc, char** argv) {
     if (!map) {
         std::fprintf(stderr, "probe: %s\n", error.c_str());
         return 1;
+    }
+
+    // Before the first tick, which is what starts source resolution -- and resolution is where
+    // the layers an annotation draws through are synthesized into the style. Images first: a
+    // symbol names one by id, and an id with no image draws nothing.
+    if (annotationImages != nullptr) {
+        std::string_view rest(annotationImages);
+        while (!rest.empty()) {
+            const auto comma = rest.find(',');
+            const std::string_view spec = rest.substr(0, comma);
+            rest = comma == std::string_view::npos ? std::string_view() : rest.substr(comma + 1);
+            const auto equals = spec.find('=');
+            if (equals == std::string_view::npos) {
+                std::fprintf(stderr, "probe: annotation image wants id=path, got %.*s\n",
+                             (int)spec.size(), spec.data());
+                return 2;
+            }
+            const std::string path(spec.substr(equals + 1));
+            const std::string bytes = slurp(path.c_str());
+            if (bytes.empty()) {
+                std::fprintf(stderr, "probe: cannot read %s\n", path.c_str());
+                return 2;
+            }
+            if (!map->addAnnotationImage(spec.substr(0, equals), bytes)) {
+                std::fprintf(stderr, "probe: annotation image %s refused (%d)\n", path.c_str(),
+                             (int)map->lastResult());
+                return 1;
+            }
+        }
+    }
+    if (annotations != nullptr) {
+        const std::string document = slurp(annotations);
+        if (document.empty()) {
+            std::fprintf(stderr, "probe: cannot read %s\n", annotations);
+            return 2;
+        }
+        if (!map->setAnnotations(document)) {
+            std::fprintf(stderr, "probe: annotations refused (%d)\n", (int)map->lastResult());
+            return 1;
+        }
     }
 
     // `create` places the camera flat and north-up; anything else is a second call. Only made

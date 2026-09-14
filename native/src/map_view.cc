@@ -132,6 +132,15 @@ bool MapView::setWorldCopies(const tessella_world_copies copies) {
   return host_->setWorldCopies(copies);
 }
 
+bool MapView::setAnnotations(std::string_view geojson) {
+  return host_->setAnnotations(geojson);
+}
+
+bool MapView::addAnnotationImage(std::string_view id, std::string_view image,
+                                 const double pixelRatio, const bool sdf) {
+  return host_->addAnnotationImage(id, image, pixelRatio, sdf);
+}
+
 tessella_result MapView::lastResult() const { return host_->lastResult(); }
 
 std::uint64_t MapView::produceNs() const { return host_->produceNs(); }

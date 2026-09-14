@@ -121,6 +121,20 @@ bool Host::setWorldCopies(tessella_world_copies copies) {
     return last_ == TESSELLA_OK;
 }
 
+bool Host::setAnnotations(std::string_view geojson) {
+    last_ = tessella_set_annotations(
+        map_, reinterpret_cast<const std::uint8_t*>(geojson.data()), geojson.size());
+    return last_ == TESSELLA_OK;
+}
+
+bool Host::addAnnotationImage(std::string_view id, std::string_view image, double pixelRatio,
+                              bool sdf) {
+    last_ = tessella_add_annotation_image(
+        map_, reinterpret_cast<const std::uint8_t*>(id.data()), id.size(),
+        reinterpret_cast<const std::uint8_t*>(image.data()), image.size(), pixelRatio, sdf);
+    return last_ == TESSELLA_OK;
+}
+
 bool Host::setViewport(std::uint32_t width, std::uint32_t height) {
     last_ = tessella_set_viewport(map_, width, height);
     return last_ == TESSELLA_OK;

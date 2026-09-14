@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace tsf {
@@ -123,6 +124,24 @@ public:
 
     /// Sets how many copies of the world the cover asks for.
     bool setWorldCopies(tessella_world_copies copies);
+
+    /// Replaces the map's annotations from a GeoJSON feature collection.
+    ///
+    /// An annotation is not a style layer and no stylesheet can produce one; the source and the
+    /// layers it draws through are synthesized into the style the map renders. Geometry type
+    /// picks the class -- point, line, polygon -- and a feature's `icon`, `opacity`, `width`,
+    /// `color` and `outlineColor` are read.
+    ///
+    /// Before the first `tick`. The layers are synthesized during source resolution, which the
+    /// first tick starts and which happens once.
+    bool setAnnotations(std::string_view geojson);
+
+    /// Adds an encoded image a symbol annotation's `icon` can name.
+    ///
+    /// `default_marker` is the id an annotation with no icon asks for. Before the first `tick`,
+    /// for the reason `setAnnotations` gives.
+    bool addAnnotationImage(std::string_view id, std::string_view image, double pixelRatio = 1.0,
+                            bool sdf = false);
 
     /// Tells the map its viewport changed. The cover, the projection and every
     /// screen-space placement follow from it, so this is what a resize is; the
