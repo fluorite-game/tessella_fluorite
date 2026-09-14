@@ -58,6 +58,14 @@ public:
     /// Pixels for a texture, whole or in rects.
     virtual void onTexture(const TextureUpdate& /*update*/) {}
 
+    /// A view that draws into a texture rather than onto the screen (DR-25).
+    ///
+    /// A heatmap's kernels go into one of these and its second pass reads what they summed. A
+    /// backend that ignores this draws the kernels onto the map instead of through the ramp,
+    /// which is a picture rather than an error -- so ignoring it is not a safe default, and a
+    /// backend that cannot render to a texture is better off drawing neither pass.
+    virtual void onViewTarget(const tsl_view_target& /*target*/) {}
+
     /// The tiles a layer group wants clipped to.
     ///
     /// §11.7's clip obligation. A parent tile is drawn to fill what its children have not covered

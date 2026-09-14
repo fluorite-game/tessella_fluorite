@@ -12,6 +12,7 @@
 #include <filament/Camera.h>
 #include <filament/Material.h>
 #include <filament/MaterialInstance.h>
+#include <filament/RenderTarget.h>
 #include <filament/Scene.h>
 #include <filament/Texture.h>
 #include <utils/Entity.h>
@@ -133,6 +134,28 @@ public:
     void onUniforms(const UboUpdate& update) override;
     void onTexture(const TextureUpdate& update) override;
     void onStencilTiles(const StencilTiles& tiles) override;
+    void onViewTarget(const tsl_view_target& target) override;
+
+    /// One offscreen pass this map needs: what to render into it, and where it lands.
+    ///
+    /// The caller owns the Filament `View` because the caller owns the one it draws the map
+    /// with. This says what that view must be configured as, which is the whole of what the
+    /// consumer can derive and the caller cannot.
+    struct OffscreenPass {
+        /// The producer's view id, which is derived from the map's view and the layer.
+        std::uint32_t view = 0;
+        /// The target to attach, already sized and formatted.
+        filament::RenderTarget* target = nullptr;
+        /// The layer bit its drawables carry, for `View::setVisibleLayers`.
+        std::uint8_t layer = 0;
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+    };
+
+    /// The offscreen passes this map has been told about, in declaration order.
+    [[nodiscard]] const std::vector<OffscreenPass>& offscreenPasses() const noexcept {
+        return offscreen_;
+    }
 
     /// How many batches were skipped for want of a material.
     [[nodiscard]] std::uint64_t missing() const noexcept { return missing_; }
@@ -507,6 +530,17 @@ private:
     /// Atlases by id, kept until the engine goes. A glyph or sprite atlas outlives any one tile
     /// and is re-uploaded in rects as it fills, so it is owned here rather than with a drawable.
     std::unordered_map<std::uint64_t, filament::Texture*> textures_;
+
+    /// The offscreen passes, keyed for lookup and kept in order for the caller.
+    std::vector<OffscreenPass> offscreen_;
+    std::unordered_map<std::uint32_t, std::size_t> offscreenByView_;
+    /// The next layer bit an offscreen pass takes.
+    ///
+    /// The mask is eight bits and the caller has already spent one per pane -- four for the
+    /// quad. So this counts down from the top and a style with more heatmap layers than bits
+    /// left gets no pass rather than a wrong one: drawing its kernels onto the map would be a
+    /// picture, and drawing nothing is a missing layer, which is the failure worth having.
+    std::uint8_t nextOffscreenLayer_ = 0x80;
     std::uint64_t textureUploads_ = 0;
     std::uint64_t textureSkipped_ = 0;
 };

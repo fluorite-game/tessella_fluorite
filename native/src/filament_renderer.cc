@@ -991,6 +991,60 @@ void FilamentRenderer::onTexture(const TextureUpdate& update) {
     }
 }
 
+void FilamentRenderer::onViewTarget(const tsl_view_target& target) {
+    if (offscreenByView_.count(target.view) != 0) {
+        return;
+    }
+    // The size is a fraction of the parent rather than pixels, which is what keeps a resize off
+    // the wire -- so it is resolved here, against the viewport this renderer was built for.
+    const std::uint32_t width =
+        target.scale_den == 0 ? 0 : width_ * target.scale_num / target.scale_den;
+    const std::uint32_t height =
+        target.scale_den == 0 ? 0 : height_ * target.scale_num / target.scale_den;
+    if (width == 0 || height == 0) {
+        return;
+    }
+    // Out of layer bits. Better a missing layer than kernels drawn onto the map: see
+    // `nextOffscreenLayer_`.
+    if (nextOffscreenLayer_ == 0) {
+        return;
+    }
+
+    // HalfFloat because a kernel sum runs past one, which the producer says rather than this
+    // inferring: an 8-bit target clips the sum to a flat cap over every dense cluster.
+    const auto format = target.channel_type == TSL_TEXTURE_CHANNEL_DATA_TYPE_HALF_FLOAT
+                            ? filament::Texture::InternalFormat::RGBA16F
+                            : filament::Texture::InternalFormat::RGBA8;
+    filament::Texture* texture = filament::Texture::Builder()
+                                     .width(width)
+                                     .height(height)
+                                     .levels(1)
+                                     .format(format)
+                                     .usage(filament::Texture::Usage::COLOR_ATTACHMENT
+                                            | filament::Texture::Usage::SAMPLEABLE)
+                                     .build(*engine_);
+    if (texture == nullptr) {
+        return;
+    }
+    filament::RenderTarget* rt =
+        filament::RenderTarget::Builder()
+            .texture(filament::RenderTarget::AttachmentPoint::COLOR, texture)
+            .build(*engine_);
+    if (rt == nullptr) {
+        engine_->destroy(texture);
+        return;
+    }
+
+    // The id the second pass binds. Nothing uploads pixels to it, so it goes in the texture
+    // table by hand rather than through `onTexture` -- which is also why it is not in
+    // `textures_`'s upload accounting.
+    textures_[target.texture] = texture;
+
+    offscreenByView_[target.view] = offscreen_.size();
+    offscreen_.push_back(OffscreenPass{target.view, rt, nextOffscreenLayer_, width, height});
+    nextOffscreenLayer_ = static_cast<std::uint8_t>(nextOffscreenLayer_ >> 1);
+}
+
 void FilamentRenderer::onStencilTiles(const StencilTiles& tiles) {
     // Kept for this frame only. The producer names the tile set a layer group wants clipped *now*;
     // holding onto earlier frames' tiles leaves stale masks overlapping the live ones, and since
@@ -1795,7 +1849,13 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
     meshes_[add.id] = Mesh{built, built_indexes, indexCount, add.layerIndex,
                            add.tileID ? add.tileID->z : std::uint8_t{0},
                            add.tileID ? add.tileID->overscaled_z : std::uint8_t{0},
-                           add.tileID ? *add.tileID : TileID{}};
+                           add.tileID ? *add.tileID : TileID{},
+                           // Both slots, on every path that builds a mesh. Two of the four set
+                           // only slot zero, and a drawable that sampled two textures lost the
+                           // second in silence -- a heatmap quad with no colour ramp was skipped
+                           // entirely, and a raster cross-fade fell back to its first picture,
+                           // which is what kept the gap from ever showing.
+                           textureFor(add), textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE)};
     meshes_[add.id].clipped = add.enableStencil;
     meshes_[add.id].colour = add.enableColor;
     meshes_[add.id].paintMask = colour != nullptr ? 1u : 0u;
@@ -1983,7 +2043,13 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
     meshes_[add.id] = Mesh{vertices, indices, indexCount, add.layerIndex,
                            add.tileID ? add.tileID->z : std::uint8_t{0},
                            add.tileID ? add.tileID->overscaled_z : std::uint8_t{0},
-                           add.tileID ? *add.tileID : TileID{}};
+                           add.tileID ? *add.tileID : TileID{},
+                           // Both slots, on every path that builds a mesh. Two of the four set
+                           // only slot zero, and a drawable that sampled two textures lost the
+                           // second in silence -- a heatmap quad with no colour ramp was skipped
+                           // entirely, and a raster cross-fade fell back to its first picture,
+                           // which is what kept the gap from ever showing.
+                           textureFor(add), textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE)};
     meshes_[add.id].clipped = add.enableStencil;
     meshes_[add.id].colour = add.enableColor;
     meshes_[add.id].paintMask = colour != nullptr ? 1u : 0u;
@@ -2220,7 +2286,13 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
                            add.tileID ? add.tileID->z : std::uint8_t{0},
                            add.tileID ? add.tileID->overscaled_z : std::uint8_t{0},
                            add.tileID ? *add.tileID : TileID{},
-                           textureFor(add)};
+                           textureFor(add),
+                           // Slot one, which two families use and which this path used to drop:
+                           // a raster's second picture for its cross-fade, and a heatmap quad's
+                           // colour ramp. Left at zero the ramp resolved to nothing and the
+                           // whole second pass was skipped for want of a texture the producer
+                           // had sent.
+                           textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE)};
     meshes_[add.id].filter = filterFor(add);
     meshes_[add.id].clipped = add.enableStencil;
     meshes_[add.id].colour = add.enableColor;
@@ -3476,6 +3548,38 @@ void FilamentRenderer::issue(const Batch& batch) {
                 instance->setParameter("image1", second, sampler);
             }
 
+            // The heatmap's second pass samples two as well, and the same two slots carry them:
+            // slot 0 is what the first pass drew and slot 1 the colour ramp, which is
+            // `TSL_UBO_ID_RASTER_IMAGE1_TEXTURE`'s number and `TSL_UBO_ID_HEATMAP_COLOR_RAMP_TEXTURE`'s
+            // too. The render target is in `textures_` without ever having been uploaded --
+            // nothing sends pixels to a target -- which is why it is put there by hand when the
+            // target is created.
+            //
+            // Both are clamped. The ramp is 256x1 and a density of exactly one would wrap to its
+            // first stop under repeat, which paints the hottest pixels the colour of the coldest.
+            if (batch.builtinShader == TSL_BUILTIN_HEATMAP_TEXTURE_SHADER) {
+                const auto image = textures_.find(mesh->second.texture);
+                const auto ramp = textures_.find(mesh->second.texture1);
+                if (image == textures_.end() || ramp == textures_.end()) {
+                    missingAtlas_++;
+                    if (std::getenv("TSF_MISSING_LOG")) {
+                        std::fprintf(stderr,
+                                     "heatmap quad: image=%llu %s ramp=%llu %s\n",
+                                     (unsigned long long)mesh->second.texture,
+                                     image == textures_.end() ? "MISSING" : "ok",
+                                     (unsigned long long)mesh->second.texture1,
+                                     ramp == textures_.end() ? "MISSING" : "ok");
+                    }
+                    continue;
+                }
+                const filament::TextureSampler sampler(
+                    filament::TextureSampler::MinFilter::LINEAR,
+                    filament::TextureSampler::MagFilter::LINEAR,
+                    filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
+                instance->setParameter("image", image->second, sampler);
+                instance->setParameter("colorRamp", ramp->second, sampler);
+            }
+
             // A symbol needs three matrices, the atlas it samples, the layer's text paint, and
             // the frame's camera distance -- the last because how far a label's anchor is from
             // the camera is what sets its size on screen.
@@ -4033,9 +4137,24 @@ void FilamentRenderer::issue(const Batch& batch) {
             }
         }
 
+        // The layer bit a batch draws on, which is this map's own unless the batch belongs to an
+        // offscreen pass. That is the whole of what isolates a heatmap's kernels from the frame:
+        // the Filament View with the render target shows only this bit, and the map's View shows
+        // only its own, so the kernels reach the target and nothing else.
+        //
+        // A batch for an offscreen view with no pass -- out of layer bits, or a target that
+        // would have had no area -- keeps `layer_` and would draw onto the map. Refused instead,
+        // below, because kernels on the map are a picture and a missing layer is a gap.
+        std::uint8_t drawLayer = layer_;
+        if (const auto pass = offscreenByView_.find(batch.view); pass != offscreenByView_.end()) {
+            drawLayer = offscreen_[pass->second].layer;
+        } else if ((batch.view & 0x8000'0000u) != 0) {
+            continue;
+        }
+
         filament::RenderableManager::Builder builder(1);
         builder.boundingBox({{0, 0, 0}, {8192, 8192, 8192}})
-            .layerMask(0xFF, layer_)
+            .layerMask(0xFF, drawLayer)
             .culling(false)
             .priority(band)
             // Painter order within the pass, enforced rather than hoped for.

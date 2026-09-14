@@ -273,12 +273,42 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "probe: %s\n", reason.c_str());
     }
 
+    // One Filament View per offscreen pass, sharing the scene and the camera and differing in
+    // three things: the render target it draws into, the layer bit it shows, and its viewport,
+    // which is the target's rather than the frame's.
+    //
+    // The map's own view has to *stop* showing those bits, or the kernels would be drawn twice
+    // -- once into the target where they belong and once over the map, which is the picture the
+    // whole offscreen pass exists to avoid.
+    std::vector<filament::View*> offscreenViews;
+    std::uint8_t offscreenBits = 0;
+    for (const auto& pass : map->renderer().offscreenPasses()) {
+        filament::View* off = engine->createView();
+        off->setScene(scene);
+        off->setCamera(camera);
+        off->setRenderTarget(pass.target);
+        off->setViewport({0, 0, pass.width, pass.height});
+        off->setVisibleLayers(0xFF, pass.layer);
+        off->setPostProcessingEnabled(false);
+        // Nothing in this pass tests depth or stencil: the kernels are meant to overlap and sum.
+        off->setStencilBufferEnabled(false);
+        offscreenViews.push_back(off);
+        offscreenBits = static_cast<std::uint8_t>(offscreenBits | pass.layer);
+    }
+    if (offscreenBits != 0) {
+        view->setVisibleLayers(0xFF, static_cast<std::uint8_t>(0xFF & ~offscreenBits));
+    }
+    std::fprintf(stderr, "offscreen_passes %zu\n", offscreenViews.size());
+
     // Rendered once before the capture. A headless swap chain hands out buffers in rotation, and
     // reading back on the very first frame returns one nothing has drawn into -- which produced a
     // constant image that did not move when the scene, the materials, or even the clear colour
     // changed, and cost a long detour before it was noticed.
     for (int warm = 0; warm < 2; warm++) {
         if (renderer->beginFrame(swapChain)) {
+            for (filament::View* off : offscreenViews) {
+                renderer->render(off);
+            }
             renderer->render(view);
             renderer->endFrame();
         }
@@ -291,6 +321,10 @@ int main(int argc, char** argv) {
                                                     filament::backend::PixelDataFormat::RGBA,
                                                     filament::backend::PixelDataType::UBYTE);
         if (renderer->beginFrame(swapChain)) {
+            // The passes that write what the map samples, before the map that samples them.
+            for (filament::View* off : offscreenViews) {
+                renderer->render(off);
+            }
             renderer->render(view);
             renderer->readPixels(0, 0, W, H, std::move(pb));
             renderer->endFrame();

@@ -396,6 +396,14 @@ void Reader::dispatch(const tsl_record_header& header,
         sink.onViewDeclare(declare.view, declare.camera_mode);
         break;
     }
+    case TSL_ENVELOPE_KIND_VIEW_TARGET: {
+        tsl_view_target target{};
+        if (!read(fixed, header.record_len, target)) {
+            return;
+        }
+        sink.onViewTarget(target);
+        break;
+    }
     case TSL_ENVELOPE_KIND_VIEW_UNDECLARE: {
         tsl_view_undeclare undeclare{};
         if (!read(fixed, header.record_len, undeclare)) {

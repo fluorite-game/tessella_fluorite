@@ -41,6 +41,7 @@ public:
     void onUboUpdate(const UboUpdate& update) override { renderer_.onUniforms(update); }
     void onStencilTiles(const StencilTiles& tiles) override { renderer_.onStencilTiles(tiles); }
     void onTextureUpdate(const TextureUpdate& update) override { renderer_.onTexture(update); }
+    void onViewTarget(const tsl_view_target& target) override { renderer_.onViewTarget(target); }
 
     void onFrameOrder(const FrameOrder& order) override {
         // The camera is the commit point: an order without one names an epoch the producer has

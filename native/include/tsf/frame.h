@@ -261,6 +261,14 @@ public:
     virtual void onViewDeclare(std::uint32_t /*view*/, std::uint8_t /*cameraMode*/) {}
     virtual void onViewUndeclare(std::uint32_t /*view*/) {}
 
+    /// A view that draws into a texture rather than onto the screen.
+    ///
+    /// Ordered after the `tsl_view_declare` naming `target.view` and before anything binds into
+    /// it. A view with no target draws to the screen, which is every view that existed before
+    /// this envelope did -- so a consumer that ignores this still draws every stream it drew
+    /// before, and draws a heatmap's kernels onto the map instead of through its ramp.
+    virtual void onViewTarget(const tsl_view_target& /*target*/) {}
+
     /// An authored mesh: bytes and a format the consumer's own loader reads.
     ///
     /// A consumer meeting a format it does not know must skip the mesh rather than guess at the
