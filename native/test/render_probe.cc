@@ -290,6 +290,13 @@ int main(int argc, char** argv) {
         off->setViewport({0, 0, pass.width, pass.height});
         off->setVisibleLayers(0xFF, pass.layer);
         off->setPostProcessingEnabled(false);
+        // Nothing that resamples. None of these was the quarter-scale loss the kernels take
+        // through the target -- measured, with the quantum unchanged at 0.25 either way -- but
+        // an offscreen pass that accumulates has no use for antialiasing or dithering, and
+        // leaving them on would put a second suspect beside the first.
+        off->setMultiSampleAntiAliasingOptions({.sampleCount = 1, .enabled = false});
+        off->setAntiAliasing(filament::View::AntiAliasing::NONE);
+        off->setDithering(filament::View::Dithering::NONE);
         // Nothing in this pass tests depth or stencil: the kernels are meant to overlap and sum.
         off->setStencilBufferEnabled(false);
         offscreenViews.push_back(off);
