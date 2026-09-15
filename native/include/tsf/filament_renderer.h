@@ -302,16 +302,21 @@ private:
         std::uint64_t texture = 0;
         /// The second picture, for a raster tile fading from its parent.
         std::uint64_t texture1 = 0;
-        /// The tile's raw elevation, for a family the terrain raises. Zero on a flat map.
-        std::uint64_t elevation = 0;
         /// The third, which only a color relief has: its elevation stops are slot one and its
         /// colors slot two. Beside the others rather than after `filter`, for the reason the
-        /// note below gives -- and every positional initialiser of this record carries it.
+        /// note below gives -- and every positional initializer of this record carries it.
         std::uint64_t texture2 = 0;
+        /// The tile's raw elevation, for a family the terrain raises. Zero on a flat map.
+        ///
+        /// Last of the four, and added to all four positional initializers at once. Inserted
+        /// before `texture2` instead, it took that field's argument and left `texture2` value
+        /// initialized -- a color relief losing its colors, silently, exactly as the note below
+        /// says such a slip goes.
+        std::uint64_t elevation = 0;
         /// How slot zero is sampled: 0 linear, 1 nearest. See `filterFor`.
         ///
         /// After the textures, because both mesh records above are built with positional
-        /// initialisers and a field between them would silently take the next one's value.
+        /// initializers and a field between them would silently take the next one's value.
         std::uint32_t filter = 0;
         /// Whether this drawable writes colour.
         ///

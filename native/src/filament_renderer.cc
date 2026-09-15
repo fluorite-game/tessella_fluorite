@@ -2006,7 +2006,8 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
                            // entirely, and a raster cross-fade fell back to its first picture,
                            // which is what kept the gap from ever showing.
                            textureFor(add), textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE),
-                           textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE)};
+                           textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE),
+                           textureFor(add, kTerrainElevationSlot)};
     meshes_[add.id].clipped = add.enableStencil;
     meshes_[add.id].colour = add.enableColor;
     meshes_[add.id].paintMask = colour != nullptr ? 1u : 0u;
@@ -2222,7 +2223,8 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
                            // entirely, and a raster cross-fade fell back to its first picture,
                            // which is what kept the gap from ever showing.
                            textureFor(add), textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE),
-                           textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE)};
+                           textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE),
+                           textureFor(add, kTerrainElevationSlot)};
     meshes_[add.id].clipped = add.enableStencil;
     meshes_[add.id].colour = add.enableColor;
     meshes_[add.id].paintMask = colour != nullptr ? 1u : 0u;
@@ -2467,10 +2469,11 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
                            // had sent.
                            textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE),
                            // And slot two, which only a color relief uses. Every positional
-                           // initialiser of this record carries it: a site left short does not
-                           // fail to compile, it value-initialises the fields after it -- so the
+                           // initializer of this record carries it: a site left short does not
+                           // fail to compile, it value-initializes the fields after it -- so the
                            // one that stopped at slot one would also have zeroed `filter`.
-                           textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE)};
+                           textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE),
+                           textureFor(add, kTerrainElevationSlot)};
     meshes_[add.id].filter = filterFor(add);
     meshes_[add.id].clipped = add.enableStencil;
     meshes_[add.id].colour = add.enableColor;
@@ -2918,10 +2921,11 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
                            textureFor(add),
                            textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE),
                            // And slot two, which only a color relief uses. Every positional
-                           // initialiser of this record carries it: a site left short does not
-                           // fail to compile, it value-initialises the fields after it -- so the
+                           // initializer of this record carries it: a site left short does not
+                           // fail to compile, it value-initializes the fields after it -- so the
                            // one that stopped at slot one would also have zeroed `filter`.
-                           textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE)};
+                           textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE),
+                           textureFor(add, kTerrainElevationSlot)};
     meshes_[add.id].clipped = add.enableStencil;
     meshes_[add.id].colour = add.enableColor;
 }
