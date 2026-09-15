@@ -55,7 +55,9 @@ material {
         { type : float3, name : lightPosition },
         { type : float,  name : lightIntensity },
         { type : float,  name : verticalGradient },
-        // The frame's zoom-mix factor, from `FillExtrusionDrawableUBO`.
+        // The frame's zoom-mix factors, from `FillExtrusionDrawableUBO`.
+        { type : float,  name : baseT },
+        { type : float,  name : heightT },
         { type : float,  name : colorT }
     ],
     requires : [ position, custom0, custom1, custom2, custom3 ],
@@ -78,12 +80,12 @@ vertex {
         // block instead leaves every building zero metres tall and flat on the ground, which is
         // what it was doing. A property the style left constant is handed over as a pair of equal
         // values, so this one path serves both.
-        // One component each: the binder interleaves this layer's data-driven properties into a
-        // single buffer, so base and height are neighbours at one stride rather than a pair
-        // apiece. The zoom-mix factors are zero for a property that varies by feature and not by
-        // zoom, which is what `["get", "render_height"]` is, so the mix reduces to this value.
-        float base = max(getCustom1().x, 0.0);
-        float height = max(getCustom2().x, 0.0);
+        // Each is one float, or the lower and upper zoom stop when it also varies with zoom. A
+        // single float reads zero into `y`, and its factor is zero too, so the mix reduces to
+        // `x`. Reading `x` alone drew `["interpolate", ["linear"], ["zoom"], 15, 0, 16, ...]` at
+        // its lower stop -- no height at all between 15 and 16.
+        float base = max(mix(getCustom1().x, getCustom1().y, materialParams.baseT), 0.0);
+        float height = max(mix(getCustom2().x, getCustom2().y, materialParams.heightT), 0.0);
         float z = t > 0.0 ? height : base;
 
         // The fraction the position was packed with, seven bits an axis. Integer tile units make

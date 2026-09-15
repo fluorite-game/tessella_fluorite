@@ -439,7 +439,10 @@ constexpr MixFactor kLineFactors[] = {{"colorT", 68},    {"blurT", 72},   {"opac
 constexpr MixFactor kLineSdfFactors[] = {{"colorT", 92},    {"blurT", 96},      {"opacityT", 100},
                                          {"gapWidthT", 104}, {"offsetT", 108},  {"widthT", 112},
                                          {"floorWidthT", 116}};
-constexpr MixFactor kFillExtrusionFactors[] = {{"colorT", 96}};
+// Behind the matrix, the two pixel coordinates, the height factor and the tile ratio. All three
+// are read: a zoom-interpolated height -- `["interpolate", ["linear"], ["zoom"], 15, 0, 16, ...]`,
+// how buildings rise out of the ground in most styles -- mixed by nothing drew at its lower stop.
+constexpr MixFactor kFillExtrusionFactors[] = {{"baseT", 88}, {"heightT", 92}, {"colorT", 96}};
 // Behind the matrices, the two texture sizes and the size pair; `SymbolDrawableUBO` is 260 bytes
 // and these are its last five.
 constexpr MixFactor kSymbolSdfFactors[] = {{"colorT", 240},
@@ -1665,7 +1668,7 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
     std::vector<std::uint16_t> indexes;
     vertices.reserve(instanceCount * templateCount * 3);
     normals.reserve(instanceCount * templateCount * 2);
-    extents.reserve(instanceCount * templateCount * 2);
+    extents.reserve(instanceCount * templateCount * 4);
     indexes.reserve(instanceCount * templateIndexCount);
 
     for (std::size_t i = 0; i + 1 < instanceCount; i++) {
@@ -1708,7 +1711,10 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
             // rather than read past, which the material takes as "use the paint block". Reading
             // past it flung whole walls across the tile -- the picture is long thin quads
             // radiating from a few points, which is what a garbage height looks like.
-            if (attribute == nullptr || index >= attribute->count()) {
+            // `count` measures whole strides and not the offset into one, so an offset that
+            // leaves no room for the float inside its stride is refused here too.
+            if (attribute == nullptr || index >= attribute->count()
+                || attribute->desc.offset + sizeof value > attribute->desc.stride) {
                 return std::numeric_limits<float>::quiet_NaN();
             }
             std::memcpy(&value,
@@ -1717,8 +1723,27 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
                         sizeof value);
             return value;
         };
+        // And the upper zoom stop, which is the second float of a `FLOAT2` pair and the same
+        // value again for a property that does not vary with zoom -- its factor is zero, so the
+        // repeat is never weighed, but it keeps the shader's mix free of a branch.
+        const auto readUpper = [&](const Attribute* attribute, std::size_t index) {
+            float value = 0.0f;
+            if (attribute == nullptr
+                || attribute->desc.data_type != TSL_ATTRIBUTE_DATA_TYPE_FLOAT2
+                || index >= attribute->count()
+                || attribute->desc.offset + 2 * sizeof value > attribute->desc.stride) {
+                return readFloat(attribute, index);
+            }
+            std::memcpy(&value,
+                        attribute->data.data + index * attribute->desc.stride
+                            + attribute->desc.offset + sizeof value,
+                        sizeof value);
+            return value;
+        };
         const float instanceBase = readFloat(base, i);
         const float instanceHeight = readFloat(height, i);
+        const float instanceBaseUpper = readUpper(base, i);
+        const float instanceHeightUpper = readUpper(height, i);
         // This instance's colour bytes, or none when the layer's paint is uniform.
         const std::uint8_t* instanceColour =
             colour != nullptr && i < colour->count()
@@ -1741,6 +1766,8 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
             normals.push_back(ny);
             extents.push_back(instanceBase);
             extents.push_back(instanceHeight);
+            extents.push_back(instanceBaseUpper);
+            extents.push_back(instanceHeightUpper);
             if (colourWidth != 0) {
                 const std::size_t at = colours.size();
                 colours.resize(at + colourWidth, 0);
@@ -1770,8 +1797,9 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
                                  filament::VertexBuffer::AttributeType::FLOAT3, 0, 12)
                       .attribute(filament::VertexAttribute::CUSTOM0, 1,
                                  filament::VertexBuffer::AttributeType::FLOAT2, 0, 8)
+                      // Base and height at the lower zoom stop, then both at the upper.
                       .attribute(filament::VertexAttribute::CUSTOM1, 2,
-                                 filament::VertexBuffer::AttributeType::FLOAT2, 0, 8)
+                                 filament::VertexBuffer::AttributeType::FLOAT4, 0, 16)
                       // The colour, declared whether or not this layer drives it -- `requires` is
                       // baked into the package -- and fed by the shared zero buffer when it does
                       // not, which the specialization compiles away.
@@ -1903,6 +1931,29 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
     if (count == 0) {
         return false;
     }
+    // One float, or the zoom pair. Anything else the wire might name is not a scalar paint value,
+    // and a buffer too short for the last vertex at that width would be read past by the GPU;
+    // either is dropped to the layer's constant rather than bound as garbage.
+    const auto scalarType = [count](const Attribute*& attribute) {
+        using AT = filament::VertexBuffer::AttributeType;
+        AT type = AT::FLOAT;
+        if (attribute == nullptr) {
+            return type;
+        }
+        const bool scalar = attributeType(attribute->desc.data_type, type)
+                            && (type == AT::FLOAT || type == AT::FLOAT2);
+        const std::size_t width = type == AT::FLOAT2 ? 2 * sizeof(float) : sizeof(float);
+        const std::size_t needed = static_cast<std::size_t>(count - 1) * attribute->desc.stride
+                                   + attribute->desc.offset + width;
+        if (!scalar || attribute->desc.offset + width > attribute->desc.stride
+            || needed > attribute->data.size) {
+            attribute = nullptr;
+            type = AT::FLOAT;
+        }
+        return type;
+    };
+    const filament::VertexBuffer::AttributeType baseType = scalarType(base);
+    const filament::VertexBuffer::AttributeType heightType = scalarType(height);
 
     // A zoom-interpolated property arrives as the pair the zoom mixes between; one that only
     // varies by feature writes the first and leaves the factor at zero, so reading both is right
@@ -1951,19 +2002,16 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
                          .attribute(filament::VertexAttribute::CUSTOM0, 1,
                                     filament::VertexBuffer::AttributeType::USHORT2,
                                     decimals->desc.offset, decimals->desc.stride)
-                         // One float each, not a pair. The binder interleaves the layer's
+                         // At the width the wire supplies. The binder interleaves the layer's
                          // data-driven properties into a single buffer -- base at offset 0 and
-                         // height at offset 4 of an 8-byte stride for this style -- so reading
-                         // either as a pair runs into the other property, and then into the next
-                         // vertex. The wire says which: `FLOAT` is one component, and a
-                         // zoom-interpolated property would arrive as `FLOAT2` with the pair mbgl
-                         // mixes between.
-                         .attribute(filament::VertexAttribute::CUSTOM1, 2,
-                                    filament::VertexBuffer::AttributeType::FLOAT,
+                         // height at offset 4 of an 8-byte stride for `["get", ...]` -- so reading a
+                         // one-float property as a pair runs into its neighbor. A
+                         // zoom-interpolated one arrives as `FLOAT2`, the pair mbgl mixes between,
+                         // and declaring that as `FLOAT` kept only the lower stop.
+                         .attribute(filament::VertexAttribute::CUSTOM1, 2, baseType,
                                     base ? base->desc.offset : 0,
                                     base ? base->desc.stride : 4)
-                         .attribute(filament::VertexAttribute::CUSTOM2, 3,
-                                    filament::VertexBuffer::AttributeType::FLOAT,
+                         .attribute(filament::VertexAttribute::CUSTOM2, 3, heightType,
                                     height ? height->desc.offset : 0,
                                     height ? height->desc.stride : 4)
                          // The colour, when this layer's is the feature's. Declared either way,

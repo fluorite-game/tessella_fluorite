@@ -42,7 +42,9 @@ material {
         { type : float3, name : lightPosition },
         { type : float,  name : lightIntensity },
         { type : float,  name : verticalGradient },
-        // The frame's zoom-mix factor, from `FillExtrusionDrawableUBO`.
+        // The frame's zoom-mix factors, from `FillExtrusionDrawableUBO`.
+        { type : float,  name : baseT },
+        { type : float,  name : heightT },
         { type : float,  name : colorT }
     ],
     requires : [ position, custom0, custom1, custom2 ],
@@ -73,12 +75,20 @@ vertex {
         // NaN marks the pair absent, which is the constant-paint case: there is no binder buffer
         // then, and the paint block is the right source. Tested with `!=` on itself because that
         // is the one comparison a NaN answers true to.
-        vec2 extent = getCustom1().xy;
+        //
+        // Base and height at the lower zoom stop, then at the upper, mixed by the frame's factors
+        // as the roof mixes its own. The consumer repeats the lower stop for a property that does
+        // not vary with zoom.
+        vec4 extent = getCustom1();
         // Clamped at zero, as mbgl clamps both -- `base = max(0.0, base)` -- and as the roof
         // shader already did. A wall whose foot went below the ground did not agree with the roof
         // that shares its top edge.
-        float base = max(extent.x != extent.x ? materialParams.base : extent.x, 0.0);
-        float height = max(extent.y != extent.y ? materialParams.height : extent.y, 0.0);
+        float base = max(extent.x != extent.x ? materialParams.base
+                                              : mix(extent.x, extent.z, materialParams.baseT),
+                         0.0);
+        float height = max(extent.y != extent.y ? materialParams.height
+                                                : mix(extent.y, extent.w, materialParams.heightT),
+                           0.0);
 
         float z = t > 0.0 ? height : base;
 
