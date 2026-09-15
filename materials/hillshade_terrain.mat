@@ -41,7 +41,9 @@ material {
         // block the ground itself reads, at the same slot -- see `terrain.mat`.
         { type : sampler2d, name : elevation },
         { type : float4,    name : unpack },
-        { type : float4,    name : params }
+        { type : float4,    name : params },
+        // The skirt, in meters, and three spare. Only the ground reads it.
+        { type : float4,    name : skirt }
     ],
     requires : [ position, custom0 ],
     variables : [ hillshadeUv ]
@@ -55,12 +57,12 @@ vertex {
         // skirt -- this is a quad on the surface rather than the surface -- so `params.w` is
         // unread here.
         vec3 channels = texture(materialParams_elevation,
-                                position * materialParams.params.x + materialParams.params.y).rgb
+                                position * materialParams.params.x + materialParams.params.yz).rgb
                       * 255.0;
         float height = (channels.r * materialParams.unpack.r
                       + channels.g * materialParams.unpack.g
                       + channels.b * materialParams.unpack.b
-                      - materialParams.unpack.a) * materialParams.params.z;
+                      - materialParams.unpack.a) * materialParams.params.w;
         // int16 over 8192, the same EXTENT the positions use, which is what gives the quad enough
         // precision to sample at a fraction of a texel.
         material.hillshadeUv = vec4(getCustom0().xy / 8192.0, 0.0, 0.0);

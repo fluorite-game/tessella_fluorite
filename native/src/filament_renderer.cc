@@ -3312,6 +3312,7 @@ void FilamentRenderer::issue(const Batch& batch) {
                 float unpack[4];
                 float color[4];
                 float params[4];
+                float skirt[4];
             } block{};
             static_assert(sizeof(TerrainBlock) == TSL_STRIDE_TERRAIN_DRAWABLE_UBO,
                           "terrain block disagrees with the stride the producer emits");
@@ -3333,6 +3334,9 @@ void FilamentRenderer::issue(const Batch& batch) {
             instance->setParameter("params",
                                    filament::math::float4{block.params[0], block.params[1],
                                                           block.params[2], block.params[3]});
+            instance->setParameter("skirt",
+                                   filament::math::float4{block.skirt[0], block.skirt[1],
+                                                          block.skirt[2], block.skirt[3]});
             coloured_++;
 
             const auto found = textures_.find(mesh->second.texture);
@@ -3359,6 +3363,7 @@ void FilamentRenderer::issue(const Batch& batch) {
                 float unpack[4];
                 float color[4];
                 float params[4];
+                float skirt[4];
             } block{};
             static_assert(sizeof(RaiseBlock) == TSL_STRIDE_TERRAIN_DRAWABLE_UBO,
                           "the raise block disagrees with the stride the producer emits");
@@ -3377,6 +3382,9 @@ void FilamentRenderer::issue(const Batch& batch) {
             instance->setParameter("params",
                                    filament::math::float4{block.params[0], block.params[1],
                                                           block.params[2], block.params[3]});
+            instance->setParameter("skirt",
+                                   filament::math::float4{block.skirt[0], block.skirt[1],
+                                                          block.skirt[2], block.skirt[3]});
             // The elevation, for a variant that needs one. Not every one does: a color relief's
             // own picture *is* the raw elevation, because coloring a height is what it draws, so
             // its variant reads that and the producer sends no second reference. Bound only when

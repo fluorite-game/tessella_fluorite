@@ -43,8 +43,10 @@ material {
         { type : float4,    name : unpack },
         // What bare ground is painted -- the style's background color.
         { type : float4,    name : color },
-        // uv scale, uv offset, exaggeration, skirt length in meters.
+        // uv scale, then an offset per axis, then the exaggeration.
         { type : float4,    name : params },
+        // The skirt, in meters, and three spare.
+        { type : float4,    name : skirt },
         { type : sampler2d, name : elevation }
     ],
     requires : [ position, custom0 ]
@@ -59,7 +61,7 @@ vertex {
 
         // One multiply-add an axis: the producer folded the DEM's width, its border pixel and the
         // half texel that centers a cell into these two numbers. See `terrain_ubo`.
-        vec2 uv = vertex.xy * materialParams.params.x + materialParams.params.y;
+        vec2 uv = vertex.xy * materialParams.params.x + materialParams.params.yz;
         vec4 texel = texture(materialParams_elevation, uv);
 
         // The encoding's own dot product, the way `Dem::elevation_exact` reads it: the channels
@@ -70,9 +72,9 @@ vertex {
                      + channels.b * materialParams.unpack.b
                      - materialParams.unpack.a;
 
-        float height = meters * materialParams.params.z;
+        float height = meters * materialParams.params.w;
         // The skirt drops, and only the skirt: `vertex.z` is one there and zero everywhere else.
-        height -= vertex.z * materialParams.params.w;
+        height -= vertex.z * materialParams.skirt.x;
 
         material.worldPosition = materialParams.matrix * vec4(vertex.xy, height, 1.0);
     }

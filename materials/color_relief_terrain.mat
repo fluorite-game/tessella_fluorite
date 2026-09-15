@@ -28,7 +28,9 @@ material {
         { type : sampler2d, name : colorStops },
         // How to read a height for the displacement: the sampling pair, the exaggeration and the
         // skirt, from the block the ground itself reads. See `terrain.mat`.
-        { type : float4,    name : params }
+        { type : float4,    name : params },
+        // The skirt, in meters, and three spare. Only the ground reads it.
+        { type : float4,    name : skirt }
     ],
     requires : [ position, custom0 ],
     variables : [ reliefUv ]
@@ -52,12 +54,12 @@ vertex {
         // No second sampler: this family's `image` already is the raw elevation, which is what a
         // relief colors. A hillshade needs one because its own picture is a slope field.
         vec3 channels = texture(materialParams_image,
-                                position * materialParams.params.x + materialParams.params.y).rgb
+                                position * materialParams.params.x + materialParams.params.yz).rgb
                       * 255.0;
         float height = (channels.r * materialParams.unpack.r
                       + channels.g * materialParams.unpack.g
                       + channels.b * materialParams.unpack.b
-                      - materialParams.unpack.a) * materialParams.params.z;
+                      - materialParams.unpack.a) * materialParams.params.w;
         material.worldPosition = materialParams.matrix * vec4(position, height, 1.0);
     }
 }
