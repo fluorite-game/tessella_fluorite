@@ -302,6 +302,8 @@ private:
         std::uint64_t texture = 0;
         /// The second picture, for a raster tile fading from its parent.
         std::uint64_t texture1 = 0;
+        /// The tile's raw elevation, for a family the terrain raises. Zero on a flat map.
+        std::uint64_t elevation = 0;
         /// The third, which only a color relief has: its elevation stops are slot one and its
         /// colors slot two. Beside the others rather than after `filter`, for the reason the
         /// note below gives -- and every positional initialiser of this record carries it.
@@ -467,6 +469,11 @@ private:
     /// because a flat layer over a bent one is a worse picture than a missing layer and a much
     /// harder one to diagnose.
     std::unordered_map<std::int32_t, filament::Material*> globeMaterials_;
+    /// Families with a variant that raises its own geometry from an elevation.
+    ///
+    /// A family with none draws its flat material on a terrain, which is the picture it drew
+    /// before terrain existed -- so the set fills in one family at a time rather than all at once.
+    std::unordered_map<std::int32_t, filament::Material*> terrainMaterials_;
     /// The projection the current frame's batches draw under.
     std::int32_t projection_ = TSL_PROJECTION_MODE_MERCATOR;
     /// Unit sphere to clip, meaningful only under `TSL_PROJECTION_MODE_GLOBE`.

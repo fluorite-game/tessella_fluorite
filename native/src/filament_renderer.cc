@@ -574,6 +574,14 @@ std::pair<const MixFactor*, std::size_t> mixFactors(std::int32_t shader) {
 constexpr std::uint32_t kSurfaceFlat = 0;
 constexpr std::uint32_t kSurfaceGlobe = 1;
 constexpr std::uint32_t kSurfaceAnchored = 2;
+/// Raised from an elevation. The fourth and last: `materialKey` spends two bits on the surface.
+constexpr std::uint32_t kSurfaceTerrain = 3;
+
+/// Where a raised family samples the elevation -- `emit::TERRAIN_ELEVATION_SLOT`.
+///
+/// Eight, past every slot mbgl's own families use, so a terrain variant's second texture cannot
+/// land on one its flat variant already reads.
+constexpr std::uint32_t kTerrainElevationSlot = 8;
 
 std::uint32_t materialKey(std::int32_t family, std::uint32_t surface) {
     return (static_cast<std::uint32_t>(family) << 2) | surface;
@@ -818,12 +826,19 @@ FilamentRenderer::FilamentRenderer(filament::Engine* engine,
         // would leave `fill_globe_anchored` filed as a family called `fill_globe_anchored`.
         const std::string anchoredSuffix = "_globe_anchored";
         const std::string globeSuffix = "_globe";
+        // And the terrain's, which is a fourth surface rather than a second bend: the geometry is
+        // raised from an elevation rather than bent onto a sphere, and a style has one or the
+        // other.
+        const std::string terrainSuffix = "_terrain";
         const bool anchored = endsWith(stem, anchoredSuffix);
         const bool bent = anchored || endsWith(stem, globeSuffix);
+        const bool raised = !bent && endsWith(stem, terrainSuffix);
         if (anchored) {
             stem.erase(stem.size() - anchoredSuffix.size());
         } else if (bent) {
             stem.erase(stem.size() - globeSuffix.size());
+        } else if (raised) {
+            stem.erase(stem.size() - terrainSuffix.size());
         }
         const std::int32_t family = familyOf(stem);
         if (family == TSL_BUILTIN_NONE) {
@@ -840,6 +855,8 @@ FilamentRenderer::FilamentRenderer(filament::Engine* engine,
         if (material != nullptr) {
             if (anchored) {
                 anchoredMaterials_[family] = material;
+            } else if (raised) {
+                terrainMaterials_[family] = material;
             } else {
                 (bent ? globeMaterials_ : materials_)[family] = material;
             }
@@ -1532,6 +1549,10 @@ FilamentRenderer::~FilamentRenderer() {
         engine_->destroy(material);
     }
     anchoredMaterials_.clear();
+    for (auto& [family, material] : terrainMaterials_) {
+        engine_->destroy(material);
+    }
+    terrainMaterials_.clear();
     for (auto& [family, material] : globeMaterials_) {
         engine_->destroy(material);
     }
@@ -2483,8 +2504,9 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
 filament::Material* FilamentRenderer::materialFor(std::int32_t family, std::uint32_t surface,
                                                   std::uint32_t mask) {
     auto& table = surface == kSurfaceAnchored ? anchoredMaterials_
-                  : surface == kSurfaceGlobe  ? globeMaterials_
-                                              : materials_;
+                  : surface == kSurfaceGlobe   ? globeMaterials_
+                  : surface == kSurfaceTerrain ? terrainMaterials_
+                                               : materials_;
     const auto base = table.find(family);
     if (mask == 0) {
         return base == table.end() ? nullptr : base->second;
@@ -2813,6 +2835,9 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
         // And slot two, which only a color relief uses: its colors, beside the elevations that
         // index them.
         mesh.texture2 = textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE);
+        // And the elevation, where a raised family carries one. Its slot is past everything
+        // mbgl's own families use, so it cannot collide with a texture the flat variant reads.
+        mesh.elevation = textureFor(add, kTerrainElevationSlot);
         mesh.layerIndex = add.layerIndex;
         mesh.zoom = add.tileID ? add.tileID->z : std::uint8_t{0};
         mesh.overscaledZoom = add.tileID ? add.tileID->overscaled_z : std::uint8_t{0};
@@ -3200,8 +3225,13 @@ void FilamentRenderer::issue(const Batch& batch) {
         // declare different attributes. The mask is the mesh's rather than the batch's because
         // the mesh is what declared the slots.
         const std::uint32_t paintMask = mesh->second.paintMask;
+        // Raised, where the producer said so and this family has a variant that can. A family
+        // with none draws its flat material, which is the picture it drew before terrain existed
+        // -- so the variants fill in one at a time rather than all at once.
+        const bool raised = batch.onTerrain && !useAnchored && !bent
+                            && terrainMaterials_.count(batch.builtinShader) != 0;
         const auto key = std::make_tuple(batch.layerIndex, batch.builtinShader, batch.uboIndexes[i],
-                                         useAnchored, paintMask);
+                                         useAnchored ? 2u : (raised ? 1u : 0u), paintMask);
         // A family that only has an anchored package and did not take it has nothing to draw
         // with. Skipped rather than dereferencing the end iterator.
         if (!useAnchored && material == table.end()) {
@@ -3209,8 +3239,10 @@ void FilamentRenderer::issue(const Batch& batch) {
         }
         auto found = instances_.find(key);
         if (found == instances_.end()) {
-            const std::uint32_t surface =
-                useAnchored ? kSurfaceAnchored : (bent ? kSurfaceGlobe : kSurfaceFlat);
+            const std::uint32_t surface = useAnchored ? kSurfaceAnchored
+                                          : bent       ? kSurfaceGlobe
+                                          : raised     ? kSurfaceTerrain
+                                                       : kSurfaceFlat;
             auto* chosen = materialFor(batch.builtinShader, surface, paintMask);
             if (chosen == nullptr) {
                 continue;
@@ -3308,6 +3340,46 @@ void FilamentRenderer::issue(const Batch& batch) {
             // repeating wrap there reads the far side of the tile -- a cliff along every seam.
             instance->setParameter(
                 "elevation", found->second,
+                filament::TextureSampler(filament::TextureSampler::MinFilter::LINEAR,
+                                         filament::TextureSampler::MagFilter::LINEAR,
+                                         filament::TextureSampler::WrapMode::CLAMP_TO_EDGE));
+        }
+
+        // What raises a layer standing on the ground: the same block the surface itself reads,
+        // at the same slot, and the tile's elevation at slot eight. The producer sends both to
+        // every layer it marked raised, whatever family it is, so this is one path rather than
+        // one per variant.
+        if (raised) {
+            struct RaiseBlock {
+                float matrix[16];
+                float unpack[4];
+                float color[4];
+                float params[4];
+            } block{};
+            static_assert(sizeof(RaiseBlock) == TSL_STRIDE_TERRAIN_DRAWABLE_UBO,
+                          "the raise block disagrees with the stride the producer emits");
+            const auto elevation = layer->second.find(TSL_UBO_ID_TERRAIN_DRAWABLE_UBO);
+            const std::size_t raiseAt =
+                static_cast<std::size_t>(batch.uboIndexes[i]) * sizeof block;
+            if (elevation == layer->second.end()
+                || raiseAt + sizeof block > elevation->second.size()) {
+                noDrawableBlock_++;
+                continue;
+            }
+            std::memcpy(&block, elevation->second.data() + raiseAt, sizeof block);
+            instance->setParameter("unpack",
+                                   filament::math::float4{block.unpack[0], block.unpack[1],
+                                                          block.unpack[2], block.unpack[3]});
+            instance->setParameter("params",
+                                   filament::math::float4{block.params[0], block.params[1],
+                                                          block.params[2], block.params[3]});
+            const auto height = textures_.find(mesh->second.elevation);
+            if (height == textures_.end()) {
+                missingAtlas_++;
+                continue;
+            }
+            instance->setParameter(
+                "elevation", height->second,
                 filament::TextureSampler(filament::TextureSampler::MinFilter::LINEAR,
                                          filament::TextureSampler::MagFilter::LINEAR,
                                          filament::TextureSampler::WrapMode::CLAMP_TO_EDGE));

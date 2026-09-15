@@ -29,6 +29,9 @@ struct Batch {
     /// strip of one family over one vertex buffer, adjacent in the order and alike in every
     /// other respect, and one renderable draws one primitive.
     std::uint8_t topology = 0;
+    /// Whether the terrain raises these. Part of the merge key: a raised drawable and a flat one
+    /// take different materials, and one renderable has one material.
+    bool onTerrain = false;
     std::vector<TextureBinding> textureRefs;
 
     /// Geometry ids, in draw order.
@@ -93,6 +96,7 @@ private:
         std::int32_t builtinShader = 0;
         std::uint64_t permutationKey = 0;
         std::uint8_t topology = 0;
+        bool onTerrain = false;
         std::vector<TextureBinding> textureRefs;
         /// The view whose use joined this geometry.
         ///
