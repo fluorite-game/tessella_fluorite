@@ -150,20 +150,25 @@ std::size_t drawableStride(std::int32_t family) {
 /// And which carries the layer's evaluated paint.
 constexpr std::uint32_t kPropsSlot = 5;
 
-/// Where the anchored bend's coefficients arrive -- `globe_ubo::ID_GLOBE_BEND_UBO`.
+/// Where the anchored bend's coefficients arrive.
 ///
 /// Eleven, past everything mbgl binds. Not five: that is `kPropsSlot`, the layer's evaluated paint,
 /// and every family keeps it there.
-constexpr std::uint32_t kGlobeBendSlot = 11;
-
-/// Seven `vec4` -- `globe_ubo::GlobeBendUbo::STRIDE`.
 ///
-/// Seven, not six: the last row is `d_h`, the clip displacement per metre of height, which only
+/// From the generated header rather than written out. It used to be a literal with this comment
+/// beside it, which is one copy of a number the producer owns -- the ABI header exists so that
+/// every other such number is agreed in one place, and mbgl having no globe is not a reason for
+/// this one to be the exception.
+constexpr std::uint32_t kGlobeBendSlot = TSL_UBO_ID_GLOBE_BEND_UBO;
+
+/// Seven `vec4`.
+///
+/// Seven, not six: the last row is `d_h`, the clip displacement per meter of height, which only
 /// the extrusions read. It is sent for every family all the same, because the block is one shape
 /// and a stride that varied by family would be a second thing for the two sides to agree on --
 /// and this constant is already the thing they have to agree on, since every row after the first
 /// is read at an offset from it.
-constexpr std::size_t kGlobeBendStride = 112;
+constexpr std::size_t kGlobeBendStride = TSL_STRIDE_GLOBE_BEND_UBO;
 
 /// Half a tile's extent, which is the offset the producer expanded the bend about.
 constexpr float kHalfExtent = 8192.0f / 2.0f;
