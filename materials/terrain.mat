@@ -1,0 +1,83 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The ground, raised from its own elevation.
+//
+// tessella draws terrain by displacing geometry rather than by draping a picture over it. MapLibre
+// GL JS renders every 2D layer into a per-tile texture and maps that onto a terrain mesh, because
+// it has no geometry subdivision and no per-vertex surface transform; this build has both, for the
+// globe. So there is no drape here: this material raises the surface, and every other family's
+// terrain variant raises its own geometry the same way and draws on it.
+//
+// What that buys, measured against the alternatives at a z14 cover: per-tile render targets cost
+// about 24 extra render passes a frame and 40 MB, one atlas per stack costs 2 to 4 passes and
+// 32 MB, and this costs none of either -- the elevation texture is already uploaded for hillshade
+// and color relief. A drape also renders at a fixed tile resolution and magnifies, which is
+// softest exactly where terrain is looked at: obliquely, close to a slope.
+//
+// # The mesh is the same for every tile
+//
+// 129 vertices a side over a tile's own coordinates and nothing about which tile. Two tiles at
+// different heights draw the same vertices through different matrices and different elevation
+// textures, so the surface is one geometry the whole frame shares.
+//
+// # The third component is a flag
+//
+// Zero for the surface, one for a skirt vertex -- the curtain hanging from each tile edge that
+// hides the crack where two tiles at different zooms sample the DEM at different resolutions. A
+// flagged vertex takes the same height as the surface and then drops by `skirt` meters. Read as an
+// elevation it would be a terrain one unit tall.
+//
+// # Why the height is in meters and the matrix takes it
+//
+// `world_to_camera` post-multiplies its z row by pixels-per-meter, so a matrix built for a tile
+// already converts a height in meters into the world pixels the projection wants. A fill
+// extrusion's height goes the same way. Nothing here scales z.
+material {
+    name : tessella_terrain,
+    shadingModel : unlit,
+    culling : none,
+    parameters : [
+        { type : mat4,      name : matrix },
+        // The DEM's own unpack vector: red, green, blue, base shift.
+        { type : float4,    name : unpack },
+        // What bare ground is painted -- the style's background color.
+        { type : float4,    name : color },
+        // uv scale, uv offset, exaggeration, skirt length in meters.
+        { type : float4,    name : params },
+        { type : sampler2d, name : elevation }
+    ],
+    requires : [ position ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        // Tile units on x and y; the skirt flag on z.
+        vec3 vertex = getPosition().xyz;
+
+        // One multiply-add an axis: the producer folded the DEM's width, its border pixel and the
+        // half texel that centers a cell into these two numbers. See `terrain_ubo`.
+        vec2 uv = vertex.xy * materialParams.params.x + materialParams.params.y;
+        vec4 texel = texture(materialParams_elevation, uv);
+
+        // The encoding's own dot product, the way `Dem::elevation_exact` reads it: the channels
+        // come back normalized, so they are scaled to bytes first.
+        vec3 channels = texel.rgb * 255.0;
+        float meters = channels.r * materialParams.unpack.r
+                     + channels.g * materialParams.unpack.g
+                     + channels.b * materialParams.unpack.b
+                     - materialParams.unpack.a;
+
+        float height = meters * materialParams.params.z;
+        // The skirt drops, and only the skirt: `vertex.z` is one there and zero everywhere else.
+        height -= vertex.z * materialParams.params.w;
+
+        material.worldPosition = materialParams.matrix * vec4(vertex.xy, height, 1.0);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = materialParams.color;
+    }
+}

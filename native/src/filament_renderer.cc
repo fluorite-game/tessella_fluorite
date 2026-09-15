@@ -54,6 +54,7 @@ std::int32_t familyOf(const std::string& stem) {
     if (stem == "location_indicator") return TSL_BUILTIN_LOCATION_INDICATOR_SHADER;
     if (stem == "location_indicator_textured")
         return TSL_BUILTIN_LOCATION_INDICATOR_TEXTURED_SHADER;
+    if (stem == "terrain") return TSL_BUILTIN_TERRAIN_SHADER;
     return TSL_BUILTIN_NONE;
 }
 
@@ -72,6 +73,9 @@ constexpr std::uint32_t kDrawableSlot = 2;
 /// family for which the shared constant is wrong -- and wrong quietly: the lookup finds nothing,
 /// every drawable is skipped, and the layer simply is not in the frame.
 std::uint32_t drawableSlotFor(std::int32_t family) {
+    if (family == TSL_BUILTIN_TERRAIN_SHADER) {
+        return TSL_UBO_ID_TERRAIN_DRAWABLE_UBO;
+    }
     return family == TSL_BUILTIN_LOCATION_INDICATOR_SHADER
                    || family == TSL_BUILTIN_LOCATION_INDICATOR_TEXTURED_SHADER
                ? TSL_UBO_ID_LOCATION_INDICATOR_DRAWABLE_UBO
@@ -125,6 +129,11 @@ std::size_t drawableStride(std::int32_t family) {
             // 80: a matrix, a scalar extrude scale and two mix factors. One block, so the
             // block's own size again.
             return sizeof(tsl_heatmap_drawable_ubo);
+        case TSL_BUILTIN_TERRAIN_SHADER:
+            // A matrix, the DEM's unpack vector, the ground's color and four scalars. Not an
+            // mbgl block, so there is no generated struct for it -- the stride is the constant
+            // the producer emits.
+            return TSL_STRIDE_TERRAIN_DRAWABLE_UBO;
         case TSL_BUILTIN_LOCATION_INDICATOR_SHADER:
         case TSL_BUILTIN_LOCATION_INDICATOR_TEXTURED_SHADER:
             // 80 as well: a matrix and the color. The color is per drawable because the two
@@ -599,7 +608,10 @@ bool patternPlaces(std::int32_t family) {
            // A heatmap's kernels are extruded in tile units before the matrix, and its quad is
            // placed by an ortho that is not the camera's at all. Both carry their own.
            || family == TSL_BUILTIN_HEATMAP_SHADER
-           || family == TSL_BUILTIN_HEATMAP_TEXTURE_SHADER;
+           || family == TSL_BUILTIN_HEATMAP_TEXTURE_SHADER
+           // The ground is raised per vertex from a texture, so the height is known inside the
+           // shader and the matrix has to be there to receive it.
+           || family == TSL_BUILTIN_TERRAIN_SHADER;
 }
 
 /// Which primitive a drawable's indices describe.
@@ -3248,6 +3260,52 @@ void FilamentRenderer::issue(const Batch& batch) {
         } else if (bent) {
             instance->setParameter("matrix", transform);
             instance->setParameter("globeMatrix", globeMatrix_);
+        }
+
+        // The ground. Its whole block is per tile -- matrix, unpack vector, color and scalars --
+        // and it is read here rather than in the shared paint block below, which a layer with
+        // nothing at `kPropsSlot` skips entirely. A terrain layer is synthesized and has no paint.
+        if (batch.builtinShader == TSL_BUILTIN_TERRAIN_SHADER) {
+            struct TerrainBlock {
+                float matrix[16];
+                float unpack[4];
+                float color[4];
+                float params[4];
+            } block{};
+            static_assert(sizeof(TerrainBlock) == TSL_STRIDE_TERRAIN_DRAWABLE_UBO,
+                          "terrain block disagrees with the stride the producer emits");
+            if (at + sizeof block > drawables->second.size()) {
+                unplaced_++;
+                continue;
+            }
+            std::memcpy(&block, drawables->second.data() + at, sizeof block);
+
+            filament::math::mat4f placement;
+            std::memcpy(&placement, block.matrix, sizeof block.matrix);
+            instance->setParameter("matrix", placement);
+            instance->setParameter("unpack",
+                                   filament::math::float4{block.unpack[0], block.unpack[1],
+                                                          block.unpack[2], block.unpack[3]});
+            instance->setParameter("color",
+                                   filament::math::float4{block.color[0], block.color[1],
+                                                          block.color[2], block.color[3]});
+            instance->setParameter("params",
+                                   filament::math::float4{block.params[0], block.params[1],
+                                                          block.params[2], block.params[3]});
+            coloured_++;
+
+            const auto found = textures_.find(mesh->second.texture);
+            if (found == textures_.end()) {
+                missingAtlas_++;
+                continue;
+            }
+            // Clamped, because the mesh samples the border pixel at a tile's own edge and a
+            // repeating wrap there reads the far side of the tile -- a cliff along every seam.
+            instance->setParameter(
+                "elevation", found->second,
+                filament::TextureSampler(filament::TextureSampler::MinFilter::LINEAR,
+                                         filament::TextureSampler::MagFilter::LINEAR,
+                                         filament::TextureSampler::WrapMode::CLAMP_TO_EDGE));
         }
 
         // A puck's three pictures. Its own texture each, not an atlas rectangle: the quad's
