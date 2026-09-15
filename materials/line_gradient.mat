@@ -1,0 +1,163 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// A line colored along its length by a ramp.
+//
+// Mirrors mbgl's `line_gradient.vertex.glsl` and `line_gradient.fragment.glsl`. The geometry is
+// the plain line's -- the same quads, the same extrusion, the same edge feather -- and so is every
+// property but one: there is no color. The color is the layer's `line-gradient`, baked by the
+// producer into a 256x1 ramp and sampled at how far along the whole line the fragment is.
+//
+// That distance arrives in the line's own `data` bytes. A plain line keeps a running distance in
+// tile units there, for dashes; a line from a GeoJSON source with `lineMetrics` has had it rescaled
+// so that the whole line, across every tile it was cut into, runs from zero to the field's top.
+// Fourteen bits, six in the third byte above the direction and eight in the fourth, and the top is
+// `32767 * 0.5`, so doubling and dividing by 32767 brings it back to a progress from zero to one.
+material {
+    name : tessella_line_gradient,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    constants : [
+        // The permutation, as the plain line's minus the color it does not have.
+        { name : blurFromAttribute,     type : bool, default : false },
+        { name : opacityFromAttribute,  type : bool, default : false },
+        { name : gapWidthFromAttribute, type : bool, default : false },
+        { name : offsetFromAttribute,   type : bool, default : false },
+        { name : widthFromAttribute,    type : bool, default : false }
+    ],
+    parameters : [
+        { type : mat4,      name : matrix },
+        { type : float,     name : opacity },
+        { type : float,     name : width },
+        { type : float,     name : gapwidth },
+        { type : float,     name : offset },
+        { type : float,     name : blur },
+        { type : float,     name : ratio },
+        { type : float,     name : pixelRatio },
+        { type : float2,    name : unitsToPixels },
+        // The frame's zoom-mix factors, from `LineGradientDrawableUBO`.
+        { type : float,     name : blurT },
+        { type : float,     name : opacityT },
+        { type : float,     name : gapWidthT },
+        { type : float,     name : offsetT },
+        { type : float,     name : widthT },
+        // The ramp. Clamped and linear, as mbgl samples it.
+        { type : sampler2d, name : image0, precision : high }
+    ],
+    // Custom slot 1 is the plain line's color and is not declared here: the slot numbers are the
+    // family's, so blur through width keep the slots a plain line gives them.
+    requires : [ position, custom0, custom2, custom3, custom4, custom5, custom6 ],
+    // `lineGamma.z` carries the progress, which the plain line leaves empty.
+    variables : [ lineEdge, lineGamma, linePaint ]
+}
+
+vertex {
+#include "paint.glsl"
+
+    float resolveLineBlur() {
+        return materialConstants_blurFromAttribute
+                   ? unpackMixFloat(getCustom2().xy, materialParams.blurT)
+                   : materialParams.blur;
+    }
+
+    float resolveLineOpacity() {
+        return materialConstants_opacityFromAttribute
+                   ? unpackMixFloat(getCustom3().xy, materialParams.opacityT)
+                   : materialParams.opacity;
+    }
+
+    float resolveLineGapWidth() {
+        return materialConstants_gapWidthFromAttribute
+                   ? unpackMixFloat(getCustom4().xy, materialParams.gapWidthT)
+                   : materialParams.gapwidth;
+    }
+
+    float resolveLineOffset() {
+        return materialConstants_offsetFromAttribute
+                   ? unpackMixFloat(getCustom5().xy, materialParams.offsetT)
+                   : materialParams.offset;
+    }
+
+    float resolveLineWidth() {
+        return materialConstants_widthFromAttribute
+                   ? unpackMixFloat(getCustom6().xy, materialParams.widthT)
+                   : materialParams.width;
+    }
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        // EXTRUDE_SCALE is mbgl's: the byte pair encodes a unit vector over 63.
+        const float EXTRUDE_SCALE = 63.0;
+        // mbgl's shader constant, one less than the generator's, which is what the generator
+        // scales to: `(MAX_LINE_DISTANCE - 1) * progress`.
+        const float MAX_LINE_DISTANCE = 32767.0;
+
+        float antialiasing = 1.0 / max(materialParams.pixelRatio, 1e-6) / 2.0;
+
+        vec2 posNormal = getPosition().xy;
+        vec2 center = floor(posNormal * 0.5);
+        vec2 normal = posNormal - 2.0 * center;
+        normal.y = normal.y * 2.0 - 1.0;
+
+        // Raw bytes, as the plain line reads them: UBYTE4 without a normalize flag.
+        vec4 data = getCustom0();
+        vec2 extrude = data.xy - 128.0;
+        float direction = mod(data.z, 4.0) - 1.0;
+        float progress = (floor(data.z / 4.0) + data.w * 64.0) * 2.0 / MAX_LINE_DISTANCE;
+
+        float gapwidth = resolveLineGapWidth() * 0.5;
+        float halfwidth = resolveLineWidth() * 0.5;
+        float lineOffset = -1.0 * resolveLineOffset();
+
+        float inset = gapwidth + (gapwidth > 0.0 ? antialiasing : 0.0);
+        float outset = gapwidth + halfwidth * (gapwidth > 0.0 ? 2.0 : 1.0)
+                     + (halfwidth == 0.0 ? 0.0 : antialiasing);
+
+        vec2 dist = outset * extrude / EXTRUDE_SCALE;
+
+        float u = 0.5 * direction;
+        float t = 1.0 - abs(u);
+        vec2 offset2 = lineOffset * extrude / EXTRUDE_SCALE * normal.y * mat2(t, -u, u, t);
+
+        float ratio = max(materialParams.ratio, 1e-6);
+
+        // Placed by the shader, as the plain line is: the extrusion happens in tile units before
+        // the tile-to-clip step.
+        vec4 projectedExtrude = materialParams.matrix * vec4(dist / ratio, 0.0, 0.0);
+        vec4 clip = materialParams.matrix * vec4(center + offset2 / ratio, 0.0, 1.0)
+                  + projectedExtrude;
+
+        float unprojected = length(dist);
+        float projected = length(projectedExtrude.xy / clip.w * materialParams.unitsToPixels);
+        float gammaScale = unprojected / max(projected, 1e-6);
+
+        material.lineEdge = vec4(normal, outset, inset);
+        material.lineGamma = vec4(gammaScale, resolveLineBlur(), progress, 0.0);
+        material.linePaint = vec4(resolveLineOpacity(), 0.0, 0.0, 0.0);
+        material.worldPosition = clip;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 normal = variable_lineEdge.xy;
+        float outset = variable_lineEdge.z;
+        float inset = variable_lineEdge.w;
+        float gammaScale = variable_lineGamma.x;
+        float progress = variable_lineGamma.z;
+        float opacity = variable_linePaint.x;
+
+        float dist = length(normal) * outset;
+
+        float blur2 = (variable_lineGamma.y + 1.0 / max(materialParams.pixelRatio, 1e-6))
+                    * gammaScale;
+        float alpha = clamp(min(dist - (inset - blur2), outset - dist) / blur2, 0.0, 1.0);
+
+        // The ramp at this fragment's progress. Its texels are what mbgl uploads, and mbgl's
+        // fragment multiplies them by the coverage and the opacity with no further conversion.
+        vec4 color = texture(materialParams_image0, vec2(progress, 0.5));
+
+        material.baseColor = color * (alpha * opacity);
+    }
+}

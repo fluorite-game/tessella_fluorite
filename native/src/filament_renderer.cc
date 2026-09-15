@@ -42,6 +42,7 @@ std::int32_t familyOf(const std::string& stem) {
     if (stem == "fill_extrusion_instanced") return TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER;
     if (stem == "line") return TSL_BUILTIN_LINE_SHADER;
     if (stem == "line_sdf") return TSL_BUILTIN_LINE_SDFSHADER;
+    if (stem == "line_gradient") return TSL_BUILTIN_LINE_GRADIENT_SHADER;
     if (stem == "circle") return TSL_BUILTIN_CIRCLE_SHADER;
     if (stem == "heatmap") return TSL_BUILTIN_HEATMAP_SHADER;
     if (stem == "heatmap_texture") return TSL_BUILTIN_HEATMAP_TEXTURE_SHADER;
@@ -306,6 +307,28 @@ constexpr PaintSlot kLineSdfSlots[] = {
      filament::VertexBuffer::AttributeType::FLOAT2},
 };
 
+/// The gradient line family's: the plain line's with no color.
+///
+/// The ramp is the color, so `LineGradientShader` declares no color attribute. The custom slots
+/// stay the plain line's -- blur is still slot 2 and width slot 6 -- and only the bits close up,
+/// because the bits index the material's constants and the gradient material has five.
+constexpr PaintSlot kLineGradientSlots[] = {
+    {TSL_UBO_ID_LINE_POS_NORMAL_VERTEX_ATTRIBUTE, -1, -1, 0,
+     filament::VertexBuffer::AttributeType::SHORT2},
+    {TSL_UBO_ID_LINE_DATA_VERTEX_ATTRIBUTE, 0, -1, sizeof(std::uint8_t) * 4,
+     filament::VertexBuffer::AttributeType::UBYTE4},
+    {TSL_UBO_ID_LINE_BLUR_VERTEX_ATTRIBUTE, 2, 0, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_LINE_OPACITY_VERTEX_ATTRIBUTE, 3, 1, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_LINE_GAP_WIDTH_VERTEX_ATTRIBUTE, 4, 2, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_LINE_OFFSET_VERTEX_ATTRIBUTE, 5, 3, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_LINE_WIDTH_VERTEX_ATTRIBUTE, 6, 4, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+};
+
 /// The circle family's. Every attribute but the position is paint, which is what makes a circle
 /// the widest permutation space in the style spec -- seven properties, and mbgl compiles a shader
 /// for each of the hundred and twenty-eight combinations it meets.
@@ -400,6 +423,8 @@ std::pair<const PaintSlot*, std::size_t> paintSlots(std::int32_t shader) {
             return {kLineSlots, std::size(kLineSlots)};
         case TSL_BUILTIN_LINE_SDFSHADER:
             return {kLineSdfSlots, std::size(kLineSdfSlots)};
+        case TSL_BUILTIN_LINE_GRADIENT_SHADER:
+            return {kLineGradientSlots, std::size(kLineGradientSlots)};
         case TSL_BUILTIN_CIRCLE_SHADER:
             return {kCircleSlots, std::size(kCircleSlots)};
         case TSL_BUILTIN_HEATMAP_SHADER:
@@ -420,6 +445,9 @@ constexpr const char* kLineSdfConstants[] = {
     "colorFromAttribute",  "blurFromAttribute",   "opacityFromAttribute",
     "gapWidthFromAttribute", "offsetFromAttribute", "widthFromAttribute",
     "floorWidthFromAttribute"};
+constexpr const char* kLineGradientConstants[] = {"blurFromAttribute", "opacityFromAttribute",
+                                                  "gapWidthFromAttribute", "offsetFromAttribute",
+                                                  "widthFromAttribute"};
 /// The extrusion family binds `base` and `height` unconditionally -- they shape the geometry and
 /// the builder synthesises a constant fill where the style did not drive them -- so the colour is
 /// the only property with a permutation, and the mask is one bit wide.
@@ -444,6 +472,8 @@ std::pair<const char* const*, std::size_t> paintConstants(std::int32_t shader) {
             return {kLineConstants, std::size(kLineConstants)};
         case TSL_BUILTIN_LINE_SDFSHADER:
             return {kLineSdfConstants, std::size(kLineSdfConstants)};
+        case TSL_BUILTIN_LINE_GRADIENT_SHADER:
+            return {kLineGradientConstants, std::size(kLineGradientConstants)};
         case TSL_BUILTIN_CIRCLE_SHADER:
             return {kCircleConstants, std::size(kCircleConstants)};
         case TSL_BUILTIN_HEATMAP_SHADER:
@@ -478,6 +508,10 @@ constexpr MixFactor kLineFactors[] = {{"colorT", 68},    {"blurT", 72},   {"opac
 constexpr MixFactor kLineSdfFactors[] = {{"colorT", 92},    {"blurT", 96},      {"opacityT", 100},
                                          {"gapWidthT", 104}, {"offsetT", 108},  {"widthT", 112},
                                          {"floorWidthT", 116}};
+// `LineGradientDrawableUBO` is the plain line's block without the color's factor, so the other
+// five sit one slot earlier: 68 through 84 where a plain line has them at 72 through 88.
+constexpr MixFactor kLineGradientFactors[] = {{"blurT", 68},    {"opacityT", 72}, {"gapWidthT", 76},
+                                              {"offsetT", 80},  {"widthT", 84}};
 // Behind the matrix, the two pixel coordinates, the height factor and the tile ratio. All three
 // are read: a zoom-interpolated height -- `["interpolate", ["linear"], ["zoom"], 15, 0, 16, ...]`,
 // how buildings rise out of the ground in most styles -- mixed by nothing drew at its lower stop.
@@ -503,6 +537,8 @@ std::pair<const MixFactor*, std::size_t> mixFactors(std::int32_t shader) {
             return {kLineFactors, std::size(kLineFactors)};
         case TSL_BUILTIN_LINE_SDFSHADER:
             return {kLineSdfFactors, std::size(kLineSdfFactors)};
+        case TSL_BUILTIN_LINE_GRADIENT_SHADER:
+            return {kLineGradientFactors, std::size(kLineGradientFactors)};
         case TSL_BUILTIN_CIRCLE_SHADER:
             return {kCircleFactors, std::size(kCircleFactors)};
         case TSL_BUILTIN_FILL_EXTRUSION_SHADER:
@@ -615,6 +651,8 @@ std::size_t opacityOffset(std::int32_t family, std::size_t bytes) {
             return offsetof(tsl_fill_evaluated_props_ubo, opacity);
         case TSL_BUILTIN_LINE_SHADER:
         case TSL_BUILTIN_LINE_SDFSHADER:
+        // A gradient line reads the same evaluated block; only its drawable block differs.
+        case TSL_BUILTIN_LINE_GRADIENT_SHADER:
             return offsetof(tsl_line_evaluated_props_ubo, opacity);
         case TSL_BUILTIN_CIRCLE_SHADER:
             return offsetof(tsl_circle_evaluated_props_ubo, opacity);
@@ -3262,6 +3300,9 @@ void FilamentRenderer::issue(const Batch& batch) {
                                       && batch.builtinShader != TSL_BUILTIN_HEATMAP_TEXTURE_SHADER
                                       && batch.builtinShader != TSL_BUILTIN_HILLSHADE_SHADER
                                       && batch.builtinShader != TSL_BUILTIN_COLOR_RELIEF_SHADER
+                                      // A gradient line's color is its ramp, sampled along the
+                                      // line, and its material declares no color uniform.
+                                      && batch.builtinShader != TSL_BUILTIN_LINE_GRADIENT_SHADER
                                       && !patterned;
             if (sharedColour) {
                 float colour[4] = {0, 0, 0, 0};
@@ -3409,8 +3450,11 @@ void FilamentRenderer::issue(const Batch& batch) {
 
             // A line needs the widths from the layer's paint and the drawable's own ratio, which
             // is what keeps a road at a constant pixel width as the tile scales.
+            // A gradient line's block puts its ratio where a plain line's does, at 64, which is
+            // what the non-SDF branch of the offset below reads.
             if (batch.builtinShader == TSL_BUILTIN_LINE_SHADER
-                || batch.builtinShader == TSL_BUILTIN_LINE_SDFSHADER) {
+                || batch.builtinShader == TSL_BUILTIN_LINE_SDFSHADER
+                || batch.builtinShader == TSL_BUILTIN_LINE_GRADIENT_SHADER) {
                 // The whole block rather than one field: width, gap width, offset and blur all
                 // feed the same edge arithmetic, and a shader given some of them from this frame
                 // and the rest from a default draws a line of a width nothing asked for.
@@ -3522,6 +3566,27 @@ void FilamentRenderer::issue(const Batch& batch) {
                     filament::TextureSampler::WrapMode::REPEAT);
                 sampler.setWrapModeT(filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
                 instance->setParameter("image0", atlas->second, sampler);
+            }
+
+            // A gradient line adds its ramp: 256 texels across, sampled at the fragment's
+            // progress along the whole line. Clamped both ways, as mbgl's sampler is -- a progress
+            // at the very end must not wrap onto the start of the ramp.
+            if (batch.builtinShader == TSL_BUILTIN_LINE_GRADIENT_SHADER) {
+                const auto ramp = textures_.find(mesh->second.texture);
+                if (ramp == textures_.end()) {
+                    missingAtlas_++;
+                    if (std::getenv("TSF_MISSING_LOG")) {
+                        std::fprintf(stderr, "missing gradient ramp id=%llu layer=%u\n",
+                                     (unsigned long long)mesh->second.texture,
+                                     (unsigned)batch.layerIndex);
+                    }
+                    continue;
+                }
+                const filament::TextureSampler sampler(
+                    filament::TextureSampler::MinFilter::LINEAR,
+                    filament::TextureSampler::MagFilter::LINEAR,
+                    filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
+                instance->setParameter("image0", ramp->second, sampler);
             }
 
             // A fill's outline places itself and measures in pixels: it is the pass that
