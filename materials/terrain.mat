@@ -35,6 +35,7 @@
 material {
     name : tessella_terrain,
     shadingModel : unlit,
+    blending : transparent,
     culling : none,
     parameters : [
         { type : mat4,      name : matrix },
@@ -46,13 +47,15 @@ material {
         { type : float4,    name : params },
         { type : sampler2d, name : elevation }
     ],
-    requires : [ position ]
+    requires : [ position, custom0 ]
 }
 
 vertex {
     void materialVertex(inout MaterialVertexInputs material) {
         // Tile units on x and y; the skirt flag on z.
-        vec3 vertex = getPosition().xyz;
+        // The flag arrives beside the position rather than as a third component: Filament
+        // draws nothing from a `Short3` attribute. See `encode_terrain`.
+        vec3 vertex = vec3(getPosition().xy, getCustom0().x);
 
         // One multiply-add an axis: the producer folded the DEM's width, its border pixel and the
         // half texel that centers a cell into these two numbers. See `terrain_ubo`.
