@@ -161,6 +161,11 @@ struct DrawableAdd {
     /// Slot to texture id and sampler, for the slots this drawable's shader declares.
     std::vector<TextureBinding> textureRefs;
 
+    /// `TSL_DRAW_FLAG_ON_TERRAIN`: this drawable's geometry is raised from an elevation.
+    ///
+    /// Not a render state like the four below it -- it chooses which variant of the family's
+    /// material draws this, the way a bend does.
+    bool onTerrain = false;
     bool is3D = false;
     bool enableStencil = false;
     bool enableDepth = false;

@@ -95,6 +95,7 @@ void Reader::join(const Geometry& held, const tsl_view_use& use, FrameSink& sink
             out.tileID = TileID{use.tile.z, use.tile.x, use.tile.y, use.tile.wrap,
                                 use.tile.overscaled_z};
         }
+        out.onTerrain = (use.draw_flags & TSL_DRAW_FLAG_ON_TERRAIN) != 0;
         out.is3D = (use.draw_flags & TSL_DRAW_FLAG_IS_3D) != 0;
         out.enableStencil = (use.draw_flags & TSL_DRAW_FLAG_ENABLE_STENCIL) != 0;
         out.enableDepth = (use.draw_flags & TSL_DRAW_FLAG_ENABLE_DEPTH) != 0;
