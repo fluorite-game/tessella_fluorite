@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// A location indicator's accuracy circle: where the device thinks it is, and how sure it is.
+//
+// The two simplest shaders in the family tree, and both of them are here:
+//
+//     void main() { gl_Position = u_matrix * vec4(a_pos, 0.0, 1.0); }
+//     void main() { fragColor = u_color; }
+//
+// So there is nothing to port and everything to place. The vertices are offsets in world pixels
+// from the puck -- floats, not the shorts every tiled family uses, because the value is not a
+// tile coordinate and at z22 it reaches eight figures -- and the matrix that places them is the
+// camera's projection times a translation to the puck's own position. The matrix rides on the
+// renderable's transform, as a fill's does; see `fill.mat` for why a material that writes
+// `worldPosition` does not move anything.
+//
+// # One material, two drawables
+//
+// The interior and the border are the same shader over the same seventy-three vertices, with
+// different index buffers and different colors: `accuracy-radius-color` for the disc and
+// `accuracy-radius-border-color` for the ring around it. That is why the color is in the
+// *drawable* block rather than in a layer's evaluated paint -- it is the only thing that tells
+// the two apart.
+//
+// The border is a line strip, which is the one place on this wire where the topology is not the
+// shader family's. `tsl_geometry_add.topology` carries it and `primitiveFor` reads it.
+material {
+    name : tessella_location_indicator,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        { type : float4, name : color }
+    ],
+    requires : [ position ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = materialParams.color;
+    }
+}
