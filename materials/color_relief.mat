@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The color-relief family: elevation looked up in a ramp.
+//
+// The same quad a raster tile draws, over the *raw* DEM rather than the slope field a hillshade
+// reads. A relief asks how high the ground is at a pixel and what color that height is; a
+// hillshade asks how the height is changing. So a style with both draws two layers from one DEM
+// tile and this samples the elevation itself.
+//
+// # Why the ramp is two textures and not one
+//
+// A heatmap's ramp bakes into 256 texels because its parameter is a density in 0..1 -- a fixed
+// domain, so a fixed sampling loses nothing. An elevation has no fixed domain: a ramp over the
+// Alps and one over the Netherlands share no range, and 256 texels spread across the planet would
+// put the whole of the Netherlands in two of them.
+//
+// So the stops travel as they were written -- their elevations in one texture and their colors
+// in another -- and the fragment finds the pair that bracket its own elevation by halving the
+// range. `stops` is how many there are, which is the style's rather than a constant, which is why
+// it is a uniform and why this cannot be a uniform array.
+//
+// The elevations are a *float* texture. A stop is meters above the sea over a range that spans the
+// planet, and eight bits across that is a forty-meter step.
+material {
+    name : tessella_color_relief,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        { type : mat4,      name : matrix },
+        // How the DEM packs elevation into its channels: three multipliers and a bias.
+        { type : float4,    name : unpack },
+        // The padded width of the DEM tile, which is its own width plus the border ring.
+        { type : float2,    name : dimension },
+        { type : int,       name : stops },
+        { type : float,     name : opacity },
+        { type : sampler2d, name : image },
+        { type : sampler2d, name : elevationStops },
+        { type : sampler2d, name : colorStops }
+    ],
+    requires : [ position, custom0 ],
+    variables : [ reliefUv ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec2 position = getPosition().xy;
+        // Scaled and offset into the tile's own square inside the padded image: the border ring
+        // is one texel on each side, so the interior spans `1/stride` to `(dim + 1)/stride`.
+        vec2 epsilon = 1.0 / materialParams.dimension;
+        float scale = (materialParams.dimension.x - 2.0) / materialParams.dimension.x;
+        vec2 uv = (getCustom0().xy / 8192.0) * scale + epsilon;
+        material.reliefUv = vec4(uv, 0.0, 0.0);
+        material.worldPosition = materialParams.matrix * vec4(position, 0.0, 1.0);
+    }
+}
+
+fragment {
+    // The stop at `index`, sampled at its texel's center so nearest filtering cannot round to the
+    // neighbour.
+    float elevationStop(int index) {
+        float x = (float(index) + 0.5) / float(materialParams.stops);
+        return texture(materialParams_elevationStops, vec2(x, 0.5)).r;
+    }
+
+    vec4 colorStop(int index) {
+        float x = (float(index) + 0.5) / float(materialParams.stops);
+        return texture(materialParams_colorStops, vec2(x, 0.5));
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // The elevation here, unpacked the way the DEM encodes it: the texel times 255, its alpha
+        // replaced by -1, dotted with the unpack vector.
+        vec4 data = texture(materialParams_image, variable_reliefUv.xy) * 255.0;
+        data.a = -1.0;
+        float elevation = dot(data, materialParams.unpack);
+
+        // The pair of stops that bracket it, by halving the range. A linear walk would be the
+        // same answer and would cost the whole table on every pixel of every frame.
+        int r = materialParams.stops - 1;
+        int l = 0;
+        while (r - l > 1) {
+            int m = (r + l) / 2;
+            if (elevation < elevationStop(m)) {
+                r = m;
+            } else {
+                l = m;
+            }
+        }
+
+        float left = elevationStop(l);
+        float right = elevationStop(r);
+        // Two stops at the same elevation is a ramp with a hard edge in it, and the division that
+        // would find where between them this pixel sits has nothing to divide by.
+        float span = right - left;
+        float t = abs(span) < 0.0001 ? 0.0 : clamp((elevation - left) / span, 0.0, 1.0);
+
+        material.baseColor = materialParams.opacity * mix(colorStop(l), colorStop(r), t);
+    }
+}
