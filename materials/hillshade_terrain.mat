@@ -1,0 +1,121 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// A hillshade, raised onto the terrain it shades.
+//
+// `hillshade.mat` with one difference: the quad's corners are lifted to the ground's own height
+// before the matrix places them, so the shading sits on the surface instead of under it. The
+// arithmetic that reads a height is `terrain.mat`'s, from the same block at the same slot -- a
+// layer standing on the ground and the ground itself have to agree about where the ground is, and
+// reading the same numbers the same way is how that is made certain rather than hoped for.
+//
+// This is the first family raised beside the surface, and the one that makes a terrain legible:
+// the ground is painted the style's background color and shows no shape on its own, so until
+// something shades it there is nothing to look at.
+//
+// # Why the quad is a grid
+//
+// A raster quad is four corners on a plane. Four corners on a *terrain* chord straight through
+// every ridge between them, so the producer builds this one on the terrain mesh's own grid --
+// `Surface::Terrain` carries the cell count. Coarser than the surface it would float above it;
+// finer it would chord against the surface's own chords.
+
+material {
+    name : tessella_hillshade_terrain,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        { type : mat4,      name : matrix },
+        // The tile's north and south edges in degrees, for the Mercator correction.
+        { type : float2,    name : latrange },
+        { type : float,     name : exaggeration },
+        { type : float4,    name : accent },
+        // Radians, both, and already turned by the camera's bearing where the style anchored the
+        // light to the viewport -- the producer does that, because it is the one that knows.
+        { type : float,     name : azimuth },
+        { type : float,     name : altitude },
+        { type : float4,    name : shadow },
+        { type : float4,    name : highlight },
+        { type : sampler2d, name : image },
+        // The raw elevation this quad is raised from, and how to read it. Both arrive in the
+        // block the ground itself reads, at the same slot -- see `terrain.mat`.
+        { type : sampler2d, name : elevation },
+        { type : float4,    name : unpack },
+        { type : float4,    name : params }
+    ],
+    requires : [ position, custom0 ],
+    variables : [ hillshadeUv ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec2 position = getPosition().xy;
+        // The ground's height at this corner, read the way `terrain.mat` reads it: the encoding's
+        // dot product over channels scaled back to bytes, times the style's exaggeration. No
+        // skirt -- this is a quad on the surface rather than the surface -- so `params.w` is
+        // unread here.
+        vec3 channels = texture(materialParams_elevation,
+                                position * materialParams.params.x + materialParams.params.y).rgb
+                      * 255.0;
+        float height = (channels.r * materialParams.unpack.r
+                      + channels.g * materialParams.unpack.g
+                      + channels.b * materialParams.unpack.b
+                      - materialParams.unpack.a) * materialParams.params.z;
+        // int16 over 8192, the same EXTENT the positions use, which is what gives the quad enough
+        // precision to sample at a fraction of a texel.
+        material.hillshadeUv = vec4(getCustom0().xy / 8192.0, 0.0, 0.0);
+        material.worldPosition = materialParams.matrix * vec4(position, height, 1.0);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // Filament already defines `PI` in its own math header, so this one is named apart.
+        const float kPi = 3.141592653589793;
+
+        vec2 uv = variable_hillshadeUv.xy;
+        vec4 pixel = texture(materialParams_image, uv);
+
+        // Where this fragment is in latitude, and how much Mercator stretched it there.
+        float latitude = (materialParams.latrange[0] - materialParams.latrange[1]) * (1.0 - uv.y)
+                       + materialParams.latrange[1];
+        float scaleFactor = cos(radians(latitude));
+
+        // Back from the texture's [0, 1] to the slope's [-4, 4]: the prepare pass stored
+        // `deriv / 8 + 0.5`, and this is that read backwards.
+        vec2 deriv = ((pixel.rg * 8.0) - 4.0) / scaleFactor;
+
+        float azimuth = materialParams.azimuth + kPi;
+        float slope = atan(0.625 * length(deriv));
+        // `atan(y, x)` is undefined at the origin, so a purely vertical derivative is answered
+        // directly rather than asked for.
+        float aspect = deriv.x != 0.0
+            ? atan(deriv.y, -deriv.x)
+            : kPi / 2.0 * (deriv.y > 0.0 ? 1.0 : -1.0);
+
+        float intensity = materialParams.exaggeration;
+
+        // The slope is bent exponentially by the intensity: base under one steepens the response
+        // and over one flattens it. At exactly a half the base is one and the expression is 0/0,
+        // which is why mbgl tests for it rather than letting it divide.
+        float base = 1.875 - intensity * 1.75;
+        float maxValue = 0.5 * kPi;
+        float scaledSlope = abs(intensity - 0.5) > 1e-6
+            ? ((pow(base, slope) - 1.0) / (pow(base, maxValue) - 1.0)) * maxValue
+            : slope;
+
+        float accent = cos(scaledSlope);
+        vec4 accentColor = (1.0 - accent) * materialParams.accent
+                         * clamp(intensity * 2.0, 0.0, 1.0);
+
+        // Which way this face turns relative to the light, folded into [0, 1]: the `mod` by two
+        // and the distance from one make the shading symmetric about the light's axis.
+        float shade = abs(mod((aspect + azimuth) / kPi + 0.5, 2.0) - 1.0);
+        vec4 shadeColor = mix(materialParams.shadow, materialParams.highlight, shade)
+                        * sin(scaledSlope) * clamp(intensity * 2.0, 0.0, 1.0);
+
+        material.baseColor = accentColor * (1.0 - shadeColor.a) + shadeColor;
+    }
+}
