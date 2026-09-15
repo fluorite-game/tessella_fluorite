@@ -50,6 +50,7 @@ std::int32_t familyOf(const std::string& stem) {
     if (stem == "raster") return TSL_BUILTIN_RASTER_SHADER;
     if (stem == "hillshade") return TSL_BUILTIN_HILLSHADE_SHADER;
     if (stem == "color_relief") return TSL_BUILTIN_COLOR_RELIEF_SHADER;
+    if (stem == "location_indicator") return TSL_BUILTIN_LOCATION_INDICATOR_SHADER;
     return TSL_BUILTIN_NONE;
 }
 
@@ -60,6 +61,18 @@ std::int32_t familyOf(const std::string& stem) {
 /// own layout rather than a global numbering. A family is always known here, so the collision
 /// costs nothing.
 constexpr std::uint32_t kDrawableSlot = 2;
+
+/// Which slot a family's per-drawable block actually arrives on.
+///
+/// Two for everything but the location indicator, whose own layout puts it at eight. The ids are
+/// per family and mbgl numbers this one past the slots a tiled layer uses, so it is the one
+/// family for which the shared constant is wrong -- and wrong quietly: the lookup finds nothing,
+/// every drawable is skipped, and the layer simply is not in the frame.
+std::uint32_t drawableSlotFor(std::int32_t family) {
+    return family == TSL_BUILTIN_LOCATION_INDICATOR_SHADER
+               ? TSL_UBO_ID_LOCATION_INDICATOR_DRAWABLE_UBO
+               : kDrawableSlot;
+}
 
 /// What separates consecutive drawable blocks in a layer's consolidated buffer.
 ///
@@ -108,6 +121,11 @@ std::size_t drawableStride(std::int32_t family) {
             // 80: a matrix, a scalar extrude scale and two mix factors. One block, so the
             // block's own size again.
             return sizeof(tsl_heatmap_drawable_ubo);
+        case TSL_BUILTIN_LOCATION_INDICATOR_SHADER:
+            // 80 as well: a matrix and the color. The color is per drawable because the two
+            // drawables of a puck's circle are one shader over one vertex buffer and the color
+            // is what tells the disc from the ring around it.
+            return sizeof(tsl_location_indicator_drawable_ubo);
         case TSL_BUILTIN_FILL_EXTRUSION_SHADER:
         case TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER:
         case TSL_BUILTIN_FILL_EXTRUSION_PATTERN_SHADER:
@@ -3051,7 +3069,7 @@ void FilamentRenderer::issue(const Batch& batch) {
         // and drew, with an identity matrix and no world size, so the quad covered a region the
         // size of two device pixels and the layer read as "nothing happened".
         const bool placeless = batch.builtinShader == TSL_BUILTIN_HEATMAP_TEXTURE_SHADER;
-        const auto drawables = layer->second.find(kDrawableSlot);
+        const auto drawables = layer->second.find(drawableSlotFor(batch.builtinShader));
         if (!placeless && drawables == layer->second.end()) {
             continue;
         }
@@ -3182,6 +3200,22 @@ void FilamentRenderer::issue(const Batch& batch) {
         } else if (bent) {
             instance->setParameter("matrix", transform);
             instance->setParameter("globeMatrix", globeMatrix_);
+        }
+
+        // A puck's circle, which has no evaluated-paint block at all: its one color is in the
+        // drawable block, beside the matrix, because the disc and the ring around it are one
+        // shader over one vertex buffer and the color is the only thing that tells them apart.
+        // Set before the shared paint block below and outside it -- that block is skipped
+        // entirely for a layer with nothing at `kPropsSlot`, which is every location indicator.
+        if (batch.builtinShader == TSL_BUILTIN_LOCATION_INDICATOR_SHADER) {
+            tsl_location_indicator_drawable_ubo block{};
+            if (at + sizeof block <= drawables->second.size()) {
+                std::memcpy(&block, drawables->second.data() + at, sizeof block);
+            }
+            instance->setParameter("color",
+                                   filament::math::float4{block.color[0], block.color[1],
+                                                          block.color[2], block.color[3]});
+            coloured_++;
         }
 
         if (const auto props = layer->second.find(kPropsSlot);
