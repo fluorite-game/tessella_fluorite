@@ -48,6 +48,7 @@ std::int32_t familyOf(const std::string& stem) {
     if (stem == "symbol_sdf") return TSL_BUILTIN_SYMBOL_SDFSHADER;
     if (stem == "symbol_icon") return TSL_BUILTIN_SYMBOL_ICON_SHADER;
     if (stem == "raster") return TSL_BUILTIN_RASTER_SHADER;
+    if (stem == "hillshade") return TSL_BUILTIN_HILLSHADE_SHADER;
     return TSL_BUILTIN_NONE;
 }
 
@@ -81,6 +82,10 @@ std::size_t drawableStride(std::int32_t family) {
             // A matrix and nothing else, where a fill's block is 96. Falling through to the
             // fill's stride read every raster drawable after the first at the wrong offset.
             return sizeof(tsl_raster_drawable_ubo);
+        case TSL_BUILTIN_HILLSHADE_SHADER:
+            // Also a matrix and nothing else. Its second per-drawable block -- the tile's
+            // latitude range -- rides in the tile-props slot, at its own stride.
+            return sizeof(tsl_hillshade_drawable_ubo);
         case TSL_BUILTIN_SYMBOL_SDFSHADER:
         case TSL_BUILTIN_SYMBOL_ICON_SHADER:
         case TSL_BUILTIN_SYMBOL_TEXT_AND_ICON_SHADER:
@@ -3116,6 +3121,7 @@ void FilamentRenderer::issue(const Batch& batch) {
                                       && batch.builtinShader != TSL_BUILTIN_RASTER_SHADER
                                       && batch.builtinShader != TSL_BUILTIN_HEATMAP_SHADER
                                       && batch.builtinShader != TSL_BUILTIN_HEATMAP_TEXTURE_SHADER
+                                      && batch.builtinShader != TSL_BUILTIN_HILLSHADE_SHADER
                                       && !patterned;
             if (sharedColour) {
                 float colour[4] = {0, 0, 0, 0};
@@ -3146,7 +3152,11 @@ void FilamentRenderer::issue(const Batch& batch) {
             // that writes it. Fading the kernels would fade the density before the ramp saw it,
             // which is a different picture rather than a fainter one -- and the material
             // declares no such parameter, so Filament panics rather than ignoring it.
-            if (batch.builtinShader != TSL_BUILTIN_HEATMAP_SHADER) {
+            // And a hillshade, whose colours are three of its own -- shadow, highlight and
+            // accent -- and whose block has no opacity at all. A layer's strength is
+            // `hillshade-exaggeration`, which rides in the tile props beside the latitude range.
+            if (batch.builtinShader != TSL_BUILTIN_HEATMAP_SHADER
+                && batch.builtinShader != TSL_BUILTIN_HILLSHADE_SHADER) {
                 float opacity = 1.0f;
                 const std::size_t off = opacityOffset(batch.builtinShader, props->second.size());
                 if (off + sizeof(float) <= props->second.size()) {
@@ -3504,6 +3514,66 @@ void FilamentRenderer::issue(const Batch& batch) {
                                        filament::TextureSampler(
                                            filament::TextureSampler::MinFilter::LINEAR,
                                            filament::TextureSampler::MagFilter::LINEAR));
+            }
+
+            // A hillshade needs its placement, the tile's latitude range, and the light. The
+            // slope field is its only texture: there is nothing to fade between, because the
+            // field is a property of the tile rather than of the moment.
+            if (batch.builtinShader == TSL_BUILTIN_HILLSHADE_SHADER) {
+                tsl_hillshade_drawable_ubo block{};
+                if (at + sizeof block <= drawables->second.size()) {
+                    std::memcpy(&block, drawables->second.data() + at, sizeof block);
+                }
+                if (!useAnchored) {
+                    filament::math::mat4f placement;
+                    std::memcpy(&placement, block.matrix, sizeof block.matrix);
+                    instance->setParameter("matrix", placement);
+                }
+
+                // Per drawable, not per layer: a tile's latitude range is the tile's, and one
+                // range for the layer would have every tile read the slope of whichever wrote it.
+                tsl_hillshade_tile_props_ubo tile{};
+                if (const auto props = layer->second.find(kSymbolTilePropsSlot);
+                    props != layer->second.end()) {
+                    const std::size_t tileAt =
+                        static_cast<std::size_t>(batch.uboIndexes[i]) * sizeof tile;
+                    if (tileAt + sizeof tile <= props->second.size()) {
+                        std::memcpy(&tile, props->second.data() + tileAt, sizeof tile);
+                    }
+                }
+                instance->setParameter(
+                    "latrange", filament::math::float2{tile.latrange[0], tile.latrange[1]});
+                instance->setParameter("exaggeration", tile.exaggeration);
+
+                tsl_hillshade_evaluated_props_ubo paint{};
+                if (props->second.size() >= sizeof paint) {
+                    std::memcpy(&paint, props->second.data(), sizeof paint);
+                }
+                instance->setParameter("accent",
+                                       filament::math::float4{paint.accent[0], paint.accent[1],
+                                                              paint.accent[2], paint.accent[3]});
+                // The first light. `num_lights` is in the block and the other three slots are
+                // there; the standard method reads one, which is what every style writes.
+                instance->setParameter("azimuth", paint.azimuths[0]);
+                instance->setParameter("altitude", paint.altitudes[0]);
+                instance->setParameter(
+                    "shadow", filament::math::float4{paint.shadows[0], paint.shadows[1],
+                                                     paint.shadows[2], paint.shadows[3]});
+                instance->setParameter("highlight",
+                                       filament::math::float4{paint.highlights[0],
+                                                              paint.highlights[1],
+                                                              paint.highlights[2],
+                                                              paint.highlights[3]});
+
+                const auto found = textures_.find(mesh->second.texture);
+                if (found == textures_.end()) {
+                    missingAtlas_++;
+                    continue;
+                }
+                instance->setParameter(
+                    "image", found->second,
+                    filament::TextureSampler(filament::TextureSampler::MinFilter::LINEAR,
+                                             filament::TextureSampler::MagFilter::LINEAR));
             }
 
             // A raster tile needs its own placement, the style's colour adjustments, and both

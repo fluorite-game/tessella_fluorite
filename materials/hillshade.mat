@@ -1,0 +1,117 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The hillshade family: relief shaded from a slope field.
+//
+// The quad is a raster tile's quad and the attributes are its attributes. What it samples is not
+// a picture but the *slope field* the producer cut from the tile's elevation -- a Sobel of the
+// DEM, encoded with the x derivative in red and the y derivative in green over a range of
+// [-4, 4]. mbgl computes that field in a GPU pass of its own per tile; this side computes it once
+// on the CPU when the tile decodes, because every uniform that pass reads is a property of the
+// tile and none of them is the camera's. So there is one texture here where mbgl has a render
+// target, and the arithmetic below is the second half of its `hillshade.fragment.glsl`.
+//
+// # Mercator has to be undone first
+//
+// The slope field is in tile units, and a tile's ground width shrinks with the cosine of its
+// latitude. Read straight, a hillshade in Svalbard would be three times as steep as the same
+// ground at the equator. `latrange` is the tile's north and south edges and the fragment
+// interpolates between them, which is what `scaleFactor` divides out.
+//
+// # One method of five
+//
+// mbgl's shader dispatches on `u_method` -- standard, combined, igor, multidirectional, basic --
+// and takes up to four light sources. This draws the standard one, which is the spec's default
+// and what `hillshade-method` means when a style says nothing, and it reads the first light. The
+// other four are a `switch` away and the uniforms already carry the method and the light count,
+// so adding one is a material and not a format.
+//
+// # The exaggeration is an intensity here
+//
+// mbgl's own note: "This implementation uses u_exaggeration as intensity, though it typically
+// should be derived from u_altitudes.x." Transcribed as it is rather than as it should be --
+// changing it would be a different picture from the oracle's, which is the one thing this cannot
+// be.
+material {
+    name : tessella_hillshade,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        { type : mat4,      name : matrix },
+        // The tile's north and south edges in degrees, for the Mercator correction.
+        { type : float2,    name : latrange },
+        { type : float,     name : exaggeration },
+        { type : float4,    name : accent },
+        // Radians, both, and already turned by the camera's bearing where the style anchored the
+        // light to the viewport -- the producer does that, because it is the one that knows.
+        { type : float,     name : azimuth },
+        { type : float,     name : altitude },
+        { type : float4,    name : shadow },
+        { type : float4,    name : highlight },
+        { type : sampler2d, name : image }
+    ],
+    requires : [ position, custom0 ],
+    variables : [ hillshadeUv ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec2 position = getPosition().xy;
+        // int16 over 8192, the same EXTENT the positions use, which is what gives the quad enough
+        // precision to sample at a fraction of a texel.
+        material.hillshadeUv = vec4(getCustom0().xy / 8192.0, 0.0, 0.0);
+        material.worldPosition = materialParams.matrix * vec4(position, 0.0, 1.0);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // Filament already defines `PI` in its own math header, so this one is named apart.
+        const float kPi = 3.141592653589793;
+
+        vec2 uv = variable_hillshadeUv.xy;
+        vec4 pixel = texture(materialParams_image, uv);
+
+        // Where this fragment is in latitude, and how much Mercator stretched it there.
+        float latitude = (materialParams.latrange[0] - materialParams.latrange[1]) * (1.0 - uv.y)
+                       + materialParams.latrange[1];
+        float scaleFactor = cos(radians(latitude));
+
+        // Back from the texture's [0, 1] to the slope's [-4, 4]: the prepare pass stored
+        // `deriv / 8 + 0.5`, and this is that read backwards.
+        vec2 deriv = ((pixel.rg * 8.0) - 4.0) / scaleFactor;
+
+        float azimuth = materialParams.azimuth + kPi;
+        float slope = atan(0.625 * length(deriv));
+        // `atan(y, x)` is undefined at the origin, so a purely vertical derivative is answered
+        // directly rather than asked for.
+        float aspect = deriv.x != 0.0
+            ? atan(deriv.y, -deriv.x)
+            : kPi / 2.0 * (deriv.y > 0.0 ? 1.0 : -1.0);
+
+        float intensity = materialParams.exaggeration;
+
+        // The slope is bent exponentially by the intensity: base under one steepens the response
+        // and over one flattens it. At exactly a half the base is one and the expression is 0/0,
+        // which is why mbgl tests for it rather than letting it divide.
+        float base = 1.875 - intensity * 1.75;
+        float maxValue = 0.5 * kPi;
+        float scaledSlope = abs(intensity - 0.5) > 1e-6
+            ? ((pow(base, slope) - 1.0) / (pow(base, maxValue) - 1.0)) * maxValue
+            : slope;
+
+        float accent = cos(scaledSlope);
+        vec4 accentColor = (1.0 - accent) * materialParams.accent
+                         * clamp(intensity * 2.0, 0.0, 1.0);
+
+        // Which way this face turns relative to the light, folded into [0, 1]: the `mod` by two
+        // and the distance from one make the shading symmetric about the light's axis.
+        float shade = abs(mod((aspect + azimuth) / kPi + 0.5, 2.0) - 1.0);
+        vec4 shadeColor = mix(materialParams.shadow, materialParams.highlight, shade)
+                        * sin(scaledSlope) * clamp(intensity * 2.0, 0.0, 1.0);
+
+        material.baseColor = accentColor * (1.0 - shadeColor.a) + shadeColor;
+    }
+}
