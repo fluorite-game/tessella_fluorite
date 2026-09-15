@@ -3118,6 +3118,7 @@ void FilamentRenderer::issue(const Batch& batch) {
         // read: identity is not a neutral choice here -- it puts tile-local coordinates straight
         // into clip space, where they cover the viewport and look like a bug somewhere else.
         if (layer == uniforms_.end()) {
+            noUniforms_++;
             continue;
         }
         // The heatmap's second pass is the one family with no per-drawable block. It is one
@@ -3131,6 +3132,10 @@ void FilamentRenderer::issue(const Batch& batch) {
         const bool placeless = batch.builtinShader == TSL_BUILTIN_HEATMAP_TEXTURE_SHADER;
         const auto drawables = layer->second.find(drawableSlotFor(batch.builtinShader));
         if (!placeless && drawables == layer->second.end()) {
+            // The layer has uniforms and not the one this family places itself with. Counted
+            // rather than passed over in silence: a drawable dropped here is announced, known,
+            // ordered and then simply absent, which is the hardest shape of missing there is.
+            noDrawableBlock_++;
             continue;
         }
         const std::size_t at =

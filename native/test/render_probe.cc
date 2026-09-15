@@ -313,6 +313,8 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+    std::printf("no_uniforms %llu\n", (unsigned long long)map->renderer().noUniforms());
+    std::printf("no_drawable_block %llu\n", (unsigned long long)map->renderer().noDrawableBlock());
     std::printf("missing_atlas %llu\n", (unsigned long long)map->renderer().missingAtlas());
     std::printf("pitched_labels %llu\n", (unsigned long long)map->renderer().pitchedLabels());
     std::printf("missing_batches %llu\n", (unsigned long long)map->renderer().missing());

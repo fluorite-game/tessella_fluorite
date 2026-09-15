@@ -185,6 +185,10 @@ public:
 
     /// Drawables skipped because their matrix slot was past the end of the layer's buffer.
     [[nodiscard]] std::uint64_t unplaced() const noexcept { return unplaced_; }
+    /// Drawables dropped because their layer had no uniform buffers at all.
+    [[nodiscard]] std::uint64_t noUniforms() const noexcept { return noUniforms_; }
+    /// And those dropped because it had uniforms but not the block their family places with.
+    [[nodiscard]] std::uint64_t noDrawableBlock() const noexcept { return noDrawableBlock_; }
 
     /// Geometries issued more than once in a frame. Each extra draw blends again, so a
     /// translucent fill drawn twice is visibly darker than the same fill drawn once.
@@ -530,6 +534,13 @@ private:
     std::map<std::uint8_t, std::uint64_t> overZooms_;
     std::uint64_t ordered_ = 0;
     std::uint64_t unplaced_ = 0;
+    /// Drawables dropped for want of a uniform block, by which one was missing.
+    ///
+    /// Both were silent `continue`s. A drawable that is announced, known, ordered and then simply
+    /// absent is the hardest shape of missing there is, because every count upstream of it is
+    /// right.
+    std::uint64_t noUniforms_ = 0;
+    std::uint64_t noDrawableBlock_ = 0;
     std::uint64_t atlasMismatched_ = 0;
     std::uint64_t scissored_ = 0;
     std::set<std::pair<std::uint32_t, std::uint32_t>> slotsThisFrame_;
