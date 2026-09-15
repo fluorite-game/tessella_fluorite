@@ -151,6 +151,8 @@ struct DrawableAdd {
     std::vector<Attribute> instanceAttrs;
     std::size_t vertexCount = 0;
     std::uint8_t vertexType = 0;
+    /// `tsl_topology`: what the indices describe. Zero is triangles.
+    std::uint8_t topology = 0;
 
     /// The index buffer, borrowed. `uint16` elements, as every shader here declares.
     Bytes indexes;

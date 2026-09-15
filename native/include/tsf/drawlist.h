@@ -25,6 +25,10 @@ struct Batch {
 
     std::int32_t builtinShader = 0;
     std::uint64_t permutationKey = 0;
+    /// `tsl_topology`. Part of the merge key: the location indicator's circle is a fan and a
+    /// strip of one family over one vertex buffer, adjacent in the order and alike in every
+    /// other respect, and one renderable draws one primitive.
+    std::uint8_t topology = 0;
     std::vector<TextureBinding> textureRefs;
 
     /// Geometry ids, in draw order.
@@ -88,6 +92,7 @@ private:
     struct Known {
         std::int32_t builtinShader = 0;
         std::uint64_t permutationKey = 0;
+        std::uint8_t topology = 0;
         std::vector<TextureBinding> textureRefs;
         /// The view whose use joined this geometry.
         ///

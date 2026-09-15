@@ -538,21 +538,22 @@ bool patternPlaces(std::int32_t family) {
            || family == TSL_BUILTIN_HEATMAP_TEXTURE_SHADER;
 }
 
-/// Which primitive a family's indices describe.
+/// Which primitive a drawable's indices describe.
 ///
-/// The ABI carries no topology, and it does not need to: the family settles it. A fill outline is
-/// the same vertices as its fill with its own indices over them, and those indices are pairs --
-/// mbgl draws them with `gfx::DrawMode::Lines`. Drawing them as triangles produces geometry that
-/// is wrong in a way that still fills pixels, which is the kind of wrong worth naming.
+/// Read off the record. The family used to settle this -- a fill outline is the same vertices as
+/// its fill with pairs of indices over them, and everything else is triangles -- and the location
+/// indicator is where that stopped working: its accuracy circle is a triangle fan and a line
+/// strip of one family over one vertex buffer, so the family answers for both and is wrong for
+/// one. Drawing a strip as a fan produces geometry that is wrong in a way that still fills
+/// pixels, which is the kind of wrong worth naming.
 ///
-/// The triangulated outline is the exception that proves it: its indices are a polyline's, over
-/// its own extruded vertices rather than the fill's, and it is triangles. Listed here as LINES it
-/// drew every ring as a scatter of hairlines.
-filament::RenderableManager::PrimitiveType primitiveFor(std::int32_t family) {
-    switch (family) {
-        case TSL_BUILTIN_FILL_OUTLINE_SHADER:
-        case TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER:
+/// An unknown value draws triangles, which is what a producer that never set the byte means.
+filament::RenderableManager::PrimitiveType primitiveFor(std::uint8_t topology) {
+    switch (topology) {
+        case TSL_TOPOLOGY_LINES:
             return filament::RenderableManager::PrimitiveType::LINES;
+        case TSL_TOPOLOGY_LINE_STRIP:
+            return filament::RenderableManager::PrimitiveType::LINE_STRIP;
         default:
             return filament::RenderableManager::PrimitiveType::TRIANGLES;
     }
@@ -4426,7 +4427,7 @@ void FilamentRenderer::issue(const Batch& batch) {
                                std::min<std::uint64_t>(ordered_, 0x7FFF)))
             .globalBlendOrderEnabled(0, true)
             .material(0, instance)
-            .geometry(0, primitiveFor(batch.builtinShader), mesh->second.vertices,
+            .geometry(0, primitiveFor(batch.topology), mesh->second.vertices,
                       mesh->second.indices, 0, mesh->second.indexCount);
 
         utils::Entity entity = utils::EntityManager::get().create();

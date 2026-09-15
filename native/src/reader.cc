@@ -87,6 +87,7 @@ void Reader::join(const Geometry& held, const tsl_view_use& use, FrameSink& sink
         out.permutationKey = held.record.permutation_key;
         out.vertexCount = held.record.vertex_count;
         out.vertexType = held.record.vertex_type;
+        out.topology = held.record.topology;
         out.layerIndex = use.layer_index;
         out.subLayerIndex = use.sub_layer_index;
         out.renderPass = use.render_pass;

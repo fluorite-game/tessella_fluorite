@@ -22,6 +22,7 @@ void DrawList::observe(const DrawableAdd& add) {
     Known known;
     known.builtinShader = add.builtinShader;
     known.permutationKey = add.permutationKey;
+    known.topology = add.topology;
     known.textureRefs = add.textureRefs;
     known.view = add.view;
     // Assigned rather than inserted: a drawable re-announced with modified attributes keeps its
@@ -59,6 +60,7 @@ std::vector<Batch> DrawList::build(const FrameOrder& order) const {
             return run.view == known.view && run.layerIndex == entry.layer_index &&
                    run.pass == entry.pass && run.builtinShader == known.builtinShader &&
                    run.permutationKey == known.permutationKey &&
+                   run.topology == known.topology &&
                    run.textureRefs == known.textureRefs;
         }();
 
@@ -76,6 +78,7 @@ std::vector<Batch> DrawList::build(const FrameOrder& order) const {
         fresh.pass = entry.pass;
         fresh.builtinShader = known.builtinShader;
         fresh.permutationKey = known.permutationKey;
+        fresh.topology = known.topology;
         fresh.textureRefs = known.textureRefs;
         fresh.geometries.push_back(entry.geometry);
         fresh.uboIndexes.push_back(entry.ubo_index);
