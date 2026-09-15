@@ -1,0 +1,51 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// A location indicator's three pictures: the shadow under it, the bearing image on the ground,
+// and the hat over both.
+//
+// The family's other shader, and almost as short as the circle's:
+//
+//     void main() { frag_uv = a_uv; gl_Position = u_matrix * vec4(a_pos, 0.0, 1.0); }
+//     void main() { fragColor = texture(u_image, frag_uv); }
+//
+// The picture is taken whole. `u_color` is in the block the vertex and fragment stages both
+// declare and neither reads -- mbgl writes black into it for these three drawables and samples
+// the texture instead -- so this material does not declare it at all.
+//
+// # Its own texture, not the sprite sheet
+//
+// mbgl asks the image manager for the whole image and uploads it, rather than sampling an atlas
+// rectangle. The producer does the same, cutting each picture out of the sheet and sending it
+// under its own id, because the texture coordinates here run the full `0 .. 1` over the picture
+// and an atlas rectangle is `0 .. 1` of nothing.
+//
+// # No mipmaps
+//
+// mbgl asks for them, with anisotropy 16. Nothing generates them here, and at the sizes a puck is
+// drawn -- its own pixels, times an image size the style usually leaves at one -- the chain is
+// never sampled. A style that shrank an image far enough to want one would alias; the fix is a
+// mip level on the upload, and the ABI has nowhere to put one yet.
+material {
+    name : tessella_location_indicator_textured,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        { type : sampler2d, name : image }
+    ],
+    requires : [ position, custom0 ],
+    variables : [ puckUv ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        material.puckUv = vec4(getCustom0().xy, 0.0, 0.0);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = texture(materialParams_image, variable_puckUv.xy);
+    }
+}

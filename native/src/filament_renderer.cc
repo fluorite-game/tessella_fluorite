@@ -51,6 +51,8 @@ std::int32_t familyOf(const std::string& stem) {
     if (stem == "hillshade") return TSL_BUILTIN_HILLSHADE_SHADER;
     if (stem == "color_relief") return TSL_BUILTIN_COLOR_RELIEF_SHADER;
     if (stem == "location_indicator") return TSL_BUILTIN_LOCATION_INDICATOR_SHADER;
+    if (stem == "location_indicator_textured")
+        return TSL_BUILTIN_LOCATION_INDICATOR_TEXTURED_SHADER;
     return TSL_BUILTIN_NONE;
 }
 
@@ -70,6 +72,7 @@ constexpr std::uint32_t kDrawableSlot = 2;
 /// every drawable is skipped, and the layer simply is not in the frame.
 std::uint32_t drawableSlotFor(std::int32_t family) {
     return family == TSL_BUILTIN_LOCATION_INDICATOR_SHADER
+                   || family == TSL_BUILTIN_LOCATION_INDICATOR_TEXTURED_SHADER
                ? TSL_UBO_ID_LOCATION_INDICATOR_DRAWABLE_UBO
                : kDrawableSlot;
 }
@@ -122,9 +125,11 @@ std::size_t drawableStride(std::int32_t family) {
             // block's own size again.
             return sizeof(tsl_heatmap_drawable_ubo);
         case TSL_BUILTIN_LOCATION_INDICATOR_SHADER:
+        case TSL_BUILTIN_LOCATION_INDICATOR_TEXTURED_SHADER:
             // 80 as well: a matrix and the color. The color is per drawable because the two
             // drawables of a puck's circle are one shader over one vertex buffer and the color
-            // is what tells the disc from the ring around it.
+            // is what tells the disc from the ring around it. The textured half shares the block
+            // and ignores the color, sampling its picture instead.
             return sizeof(tsl_location_indicator_drawable_ubo);
         case TSL_BUILTIN_FILL_EXTRUSION_SHADER:
         case TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER:
@@ -3200,6 +3205,25 @@ void FilamentRenderer::issue(const Batch& batch) {
         } else if (bent) {
             instance->setParameter("matrix", transform);
             instance->setParameter("globeMatrix", globeMatrix_);
+        }
+
+        // A puck's three pictures. Its own texture each, not an atlas rectangle: the quad's
+        // texture coordinates run the full 0..1 over the picture. Outside the shared paint block
+        // for the reason the circle is -- a location indicator has nothing at `kPropsSlot`.
+        if (batch.builtinShader == TSL_BUILTIN_LOCATION_INDICATOR_TEXTURED_SHADER) {
+            const auto found = textures_.find(mesh->second.texture);
+            if (found == textures_.end()) {
+                missingAtlas_++;
+                continue;
+            }
+            // Clamped, which is mbgl's sampler. A repeating wrap on a quad whose coordinates end
+            // exactly at one samples the opposite edge along the seam, which on a puck with a
+            // transparent border is a hairline of the picture's far side around it.
+            instance->setParameter(
+                "image", found->second,
+                filament::TextureSampler(filament::TextureSampler::MinFilter::LINEAR,
+                                         filament::TextureSampler::MagFilter::LINEAR,
+                                         filament::TextureSampler::WrapMode::CLAMP_TO_EDGE));
         }
 
         // A puck's circle, which has no evaluated-paint block at all: its one color is in the
