@@ -49,6 +49,7 @@ std::int32_t familyOf(const std::string& stem) {
     if (stem == "symbol_icon") return TSL_BUILTIN_SYMBOL_ICON_SHADER;
     if (stem == "raster") return TSL_BUILTIN_RASTER_SHADER;
     if (stem == "hillshade") return TSL_BUILTIN_HILLSHADE_SHADER;
+    if (stem == "color_relief") return TSL_BUILTIN_COLOR_RELIEF_SHADER;
     return TSL_BUILTIN_NONE;
 }
 
@@ -86,6 +87,11 @@ std::size_t drawableStride(std::int32_t family) {
             // Also a matrix and nothing else. Its second per-drawable block -- the tile's
             // latitude range -- rides in the tile-props slot, at its own stride.
             return sizeof(tsl_hillshade_drawable_ubo);
+        case TSL_BUILTIN_COLOR_RELIEF_SHADER:
+            // And again. Its tile props carry the source's unpack vector and the ramp's size,
+            // which are the same for every drawable of the layer and still go per drawable,
+            // because that is the slot mbgl writes them in.
+            return sizeof(tsl_color_relief_drawable_ubo);
         case TSL_BUILTIN_SYMBOL_SDFSHADER:
         case TSL_BUILTIN_SYMBOL_ICON_SHADER:
         case TSL_BUILTIN_SYMBOL_TEXT_AND_ICON_SHADER:
@@ -149,6 +155,11 @@ constexpr std::uint8_t kAnchoredFromZoom = 10;
 
 /// A symbol's per-drawable pass flags, which are their own block rather than part of the paint.
 constexpr std::uint32_t kSymbolTilePropsSlot = 3;
+
+/// Four, which is where mbgl writes a color relief's tile props -- not three, which the symbol
+/// family holds. The two never collide because a layer is one family, and they are named apart so
+/// that reading one as the other is a compile error rather than a wrong unpack vector.
+constexpr std::uint32_t kColorReliefTilePropsSlot = 4;
 
 /// And a patterned fill's, which names the sprite rectangles for this tile.
 ///
@@ -1894,7 +1905,8 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
                            // second in silence -- a heatmap quad with no colour ramp was skipped
                            // entirely, and a raster cross-fade fell back to its first picture,
                            // which is what kept the gap from ever showing.
-                           textureFor(add), textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE)};
+                           textureFor(add), textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE),
+                           textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE)};
     meshes_[add.id].clipped = add.enableStencil;
     meshes_[add.id].colour = add.enableColor;
     meshes_[add.id].paintMask = colour != nullptr ? 1u : 0u;
@@ -2109,7 +2121,8 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
                            // second in silence -- a heatmap quad with no colour ramp was skipped
                            // entirely, and a raster cross-fade fell back to its first picture,
                            // which is what kept the gap from ever showing.
-                           textureFor(add), textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE)};
+                           textureFor(add), textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE),
+                           textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE)};
     meshes_[add.id].clipped = add.enableStencil;
     meshes_[add.id].colour = add.enableColor;
     meshes_[add.id].paintMask = colour != nullptr ? 1u : 0u;
@@ -2352,7 +2365,12 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
                            // colour ramp. Left at zero the ramp resolved to nothing and the
                            // whole second pass was skipped for want of a texture the producer
                            // had sent.
-                           textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE)};
+                           textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE),
+                           // And slot two, which only a color relief uses. Every positional
+                           // initialiser of this record carries it: a site left short does not
+                           // fail to compile, it value-initialises the fields after it -- so the
+                           // one that stopped at slot one would also have zeroed `filter`.
+                           textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE)};
     meshes_[add.id].filter = filterFor(add);
     meshes_[add.id].clipped = add.enableStencil;
     meshes_[add.id].colour = add.enableColor;
@@ -2713,6 +2731,9 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
         // ramp there, and a zero is the whole second pass skipped for want of a texture the
         // producer sent. The comment above is this one's, one field along and one family later.
         mesh.texture1 = textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE);
+        // And slot two, which only a color relief uses: its colors, beside the elevations that
+        // index them.
+        mesh.texture2 = textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE);
         mesh.layerIndex = add.layerIndex;
         mesh.zoom = add.tileID ? add.tileID->z : std::uint8_t{0};
         mesh.overscaledZoom = add.tileID ? add.tileID->overscaled_z : std::uint8_t{0};
@@ -2791,7 +2812,12 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
                            add.tileID ? add.tileID->overscaled_z : std::uint8_t{0},
                            add.tileID ? *add.tileID : TileID{},
                            textureFor(add),
-                           textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE)};
+                           textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE),
+                           // And slot two, which only a color relief uses. Every positional
+                           // initialiser of this record carries it: a site left short does not
+                           // fail to compile, it value-initialises the fields after it -- so the
+                           // one that stopped at slot one would also have zeroed `filter`.
+                           textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE)};
     meshes_[add.id].clipped = add.enableStencil;
     meshes_[add.id].colour = add.enableColor;
 }
@@ -3176,6 +3202,7 @@ void FilamentRenderer::issue(const Batch& batch) {
                                       && batch.builtinShader != TSL_BUILTIN_HEATMAP_SHADER
                                       && batch.builtinShader != TSL_BUILTIN_HEATMAP_TEXTURE_SHADER
                                       && batch.builtinShader != TSL_BUILTIN_HILLSHADE_SHADER
+                                      && batch.builtinShader != TSL_BUILTIN_COLOR_RELIEF_SHADER
                                       && !patterned;
             if (sharedColour) {
                 float colour[4] = {0, 0, 0, 0};
@@ -3568,6 +3595,77 @@ void FilamentRenderer::issue(const Batch& batch) {
                                        filament::TextureSampler(
                                            filament::TextureSampler::MinFilter::LINEAR,
                                            filament::TextureSampler::MagFilter::LINEAR));
+            }
+
+            // A color relief needs its placement, the source's unpack vector, and three
+            // textures: this tile's elevation and the layer's two stop tables.
+            if (batch.builtinShader == TSL_BUILTIN_COLOR_RELIEF_SHADER) {
+                tsl_color_relief_drawable_ubo block{};
+                if (at + sizeof block <= drawables->second.size()) {
+                    std::memcpy(&block, drawables->second.data() + at, sizeof block);
+                }
+                if (!useAnchored) {
+                    filament::math::mat4f placement;
+                    std::memcpy(&placement, block.matrix, sizeof block.matrix);
+                    instance->setParameter("matrix", placement);
+                }
+
+                tsl_color_relief_tile_props_ubo tile{};
+                if (const auto props = layer->second.find(kColorReliefTilePropsSlot);
+                    props != layer->second.end()) {
+                    const std::size_t tileAt =
+                        static_cast<std::size_t>(batch.uboIndexes[i]) * sizeof tile;
+                    if (tileAt + sizeof tile <= props->second.size()) {
+                        std::memcpy(&tile, props->second.data() + tileAt, sizeof tile);
+                    }
+                }
+                instance->setParameter(
+                    "unpack", filament::math::float4{tile.unpack[0], tile.unpack[1],
+                                                     tile.unpack[2], tile.unpack[3]});
+                instance->setParameter(
+                    "dimension",
+                    filament::math::float2{tile.dimension[0], tile.dimension[1]});
+                // One stop is a ramp with nothing to interpolate and a search that cannot
+                // terminate, so it is clamped rather than trusted.
+                instance->setParameter("stops",
+                                       tile.color_ramp_size > 1 ? tile.color_ramp_size : 1);
+
+                tsl_color_relief_evaluated_props_ubo paint{};
+                if (props->second.size() >= sizeof paint) {
+                    std::memcpy(&paint, props->second.data(), sizeof paint);
+                }
+                instance->setParameter("opacity", paint.opacity);
+
+                // Nearest on the stop tables: a texel is a stop, and interpolating between two
+                // of them would invent an elevation no style wrote.
+                const filament::TextureSampler stopSampler(
+                    filament::TextureSampler::MinFilter::NEAREST,
+                    filament::TextureSampler::MagFilter::NEAREST);
+                bool bound = true;
+                const std::uint64_t ids[3] = {mesh->second.texture, mesh->second.texture1,
+                                              mesh->second.texture2};
+                const char* names[3] = {"image", "elevationStops", "colorStops"};
+                for (int slot = 0; slot < 3; ++slot) {
+                    const auto found = textures_.find(ids[slot]);
+                    if (found == textures_.end()) {
+                        missingAtlas_++;
+                        if (std::getenv("TSF_MISSING_LOG")) {
+                            std::fprintf(stderr, "relief missing slot=%d id=%llu\n", slot,
+                                         (unsigned long long)ids[slot]);
+                        }
+                        bound = false;
+                        break;
+                    }
+                    instance->setParameter(
+                        names[slot], found->second,
+                        slot == 0 ? filament::TextureSampler(
+                                        filament::TextureSampler::MinFilter::LINEAR,
+                                        filament::TextureSampler::MagFilter::LINEAR)
+                                  : stopSampler);
+                }
+                if (!bound) {
+                    continue;
+                }
             }
 
             // A hillshade needs its placement, the tile's latitude range, and the light. The
