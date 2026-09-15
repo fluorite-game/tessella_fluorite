@@ -1,0 +1,109 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// A color relief, raised onto the terrain it colors.
+//
+// `color_relief.mat` with the quad's corners lifted to the ground's own height before the matrix
+// places them -- the same change `hillshade_terrain.mat` makes, and for the same reason: a layer
+// standing on the ground has to agree with the ground about where the ground is.
+//
+// This family is the one that already holds what it needs. Its `image` *is* the raw elevation,
+// because coloring a height is what a relief does, so the displacement reads the picture the
+// fragment stage was going to read anyway and no second sampler is bound.
+
+material {
+    name : tessella_color_relief_terrain,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        { type : mat4,      name : matrix },
+        // How the DEM packs elevation into its channels: three multipliers and a bias.
+        { type : float4,    name : unpack },
+        // The padded width of the DEM tile, which is its own width plus the border ring.
+        { type : float2,    name : dimension },
+        { type : int,       name : stops },
+        { type : float,     name : opacity },
+        { type : sampler2d, name : image },
+        { type : sampler2d, name : elevationStops },
+        { type : sampler2d, name : colorStops },
+        // How to read a height for the displacement: the sampling pair, the exaggeration and the
+        // skirt, from the block the ground itself reads. See `terrain.mat`.
+        { type : float4,    name : params }
+    ],
+    requires : [ position, custom0 ],
+    variables : [ reliefUv ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec2 position = getPosition().xy;
+        // Scaled and offset into the tile's own square inside the padded image: the border ring
+        // is one texel on each side, so the interior spans `1/stride` to `(dim + 1)/stride`.
+        vec2 epsilon = 1.0 / materialParams.dimension;
+        float scale = (materialParams.dimension.x - 2.0) / materialParams.dimension.x;
+        vec2 uv = (getCustom0().xy / 8192.0) * scale + epsilon;
+        material.reliefUv = vec4(uv, 0.0, 0.0);
+        // The ground's height here, sampled the way `terrain.mat` samples it rather than the way
+        // the fragment below reads this same picture. The two arithmetics are not the same: the
+        // relief maps the tile's interior edge to edge, while a displacement has to land on the
+        // *surface*, which places a DEM cell at its own center. Read the other way a relief would
+        // sit half a cell off the ground it colors.
+        //
+        // No second sampler: this family's `image` already is the raw elevation, which is what a
+        // relief colors. A hillshade needs one because its own picture is a slope field.
+        vec3 channels = texture(materialParams_image,
+                                position * materialParams.params.x + materialParams.params.y).rgb
+                      * 255.0;
+        float height = (channels.r * materialParams.unpack.r
+                      + channels.g * materialParams.unpack.g
+                      + channels.b * materialParams.unpack.b
+                      - materialParams.unpack.a) * materialParams.params.z;
+        material.worldPosition = materialParams.matrix * vec4(position, height, 1.0);
+    }
+}
+
+fragment {
+    // The stop at `index`, sampled at its texel's center so nearest filtering cannot round to the
+    // neighbour.
+    float elevationStop(int index) {
+        float x = (float(index) + 0.5) / float(materialParams.stops);
+        return texture(materialParams_elevationStops, vec2(x, 0.5)).r;
+    }
+
+    vec4 colorStop(int index) {
+        float x = (float(index) + 0.5) / float(materialParams.stops);
+        return texture(materialParams_colorStops, vec2(x, 0.5));
+    }
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // The elevation here, unpacked the way the DEM encodes it: the texel times 255, its alpha
+        // replaced by -1, dotted with the unpack vector.
+        vec4 data = texture(materialParams_image, variable_reliefUv.xy) * 255.0;
+        data.a = -1.0;
+        float elevation = dot(data, materialParams.unpack);
+
+        // The pair of stops that bracket it, by halving the range. A linear walk would be the
+        // same answer and would cost the whole table on every pixel of every frame.
+        int r = materialParams.stops - 1;
+        int l = 0;
+        while (r - l > 1) {
+            int m = (r + l) / 2;
+            if (elevation < elevationStop(m)) {
+                r = m;
+            } else {
+                l = m;
+            }
+        }
+
+        float left = elevationStop(l);
+        float right = elevationStop(r);
+        // Two stops at the same elevation is a ramp with a hard edge in it, and the division that
+        // would find where between them this pixel sits has nothing to divide by.
+        float span = right - left;
+        float t = abs(span) < 0.0001 ? 0.0 : clamp((elevation - left) / span, 0.0, 1.0);
+
+        material.baseColor = materialParams.opacity * mix(colorStop(l), colorStop(r), t);
+    }
+}

@@ -3377,16 +3377,22 @@ void FilamentRenderer::issue(const Batch& batch) {
             instance->setParameter("params",
                                    filament::math::float4{block.params[0], block.params[1],
                                                           block.params[2], block.params[3]});
-            const auto height = textures_.find(mesh->second.elevation);
-            if (height == textures_.end()) {
-                missingAtlas_++;
-                continue;
+            // The elevation, for a variant that needs one. Not every one does: a color relief's
+            // own picture *is* the raw elevation, because coloring a height is what it draws, so
+            // its variant reads that and the producer sends no second reference. Bound only when
+            // there is one, because Filament panics on a parameter a material does not declare.
+            if (mesh->second.elevation != 0) {
+                const auto height = textures_.find(mesh->second.elevation);
+                if (height == textures_.end()) {
+                    missingAtlas_++;
+                    continue;
+                }
+                instance->setParameter(
+                    "elevation", height->second,
+                    filament::TextureSampler(filament::TextureSampler::MinFilter::LINEAR,
+                                             filament::TextureSampler::MagFilter::LINEAR,
+                                             filament::TextureSampler::WrapMode::CLAMP_TO_EDGE));
             }
-            instance->setParameter(
-                "elevation", height->second,
-                filament::TextureSampler(filament::TextureSampler::MinFilter::LINEAR,
-                                         filament::TextureSampler::MagFilter::LINEAR,
-                                         filament::TextureSampler::WrapMode::CLAMP_TO_EDGE));
         }
 
         // A puck's three pictures. Its own texture each, not an atlas rectangle: the quad's
