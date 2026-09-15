@@ -857,9 +857,15 @@ void FilamentRenderer::onTexture(const TextureUpdate& update) {
     }
     filament::Texture::InternalFormat internal{};
     filament::Texture::Format format{};
+    // What a channel holds, which the layout does not imply -- mbgl's `setFormat` takes both. A
+    // color relief's elevation stops are RGBA and Float together, because a stop is meters above
+    // the sea and eight bits across that range is a forty-meter step.
+    const bool floats = update.channel_type == TSL_TEXTURE_CHANNEL_DATA_TYPE_FLOAT;
+    auto pixelType = floats ? filament::Texture::Type::FLOAT : filament::Texture::Type::UBYTE;
     switch (update.format) {
         case TSL_TEXTURE_PIXEL_TYPE_RGBA:
-            internal = filament::Texture::InternalFormat::RGBA8;
+            internal = floats ? filament::Texture::InternalFormat::RGBA32F
+                              : filament::Texture::InternalFormat::RGBA8;
             format = filament::Texture::Format::RGBA;
             break;
         case TSL_TEXTURE_PIXEL_TYPE_ALPHA:
@@ -957,7 +963,7 @@ void FilamentRenderer::onTexture(const TextureUpdate& update) {
         found->second->setImage(
             *engine_, 0, x, y, w, h,
             filament::Texture::PixelBufferDescriptor(
-                owned, bytes, format, filament::Texture::Type::UBYTE,
+                owned, bytes, format, pixelType,
                 [](void* buffer, std::size_t, void*) { std::free(buffer); }));
         textureUploads_++;
     };

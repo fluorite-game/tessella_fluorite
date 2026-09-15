@@ -207,12 +207,19 @@ struct TextureUpdate {
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     std::uint8_t format = 0;
+    /// What a channel holds, which the layout does not imply. Zero is `UnsignedByte`, which
+    /// every texture but a color relief's elevation stops is.
+    std::uint8_t channel_type = 0;
     std::vector<tsl_rect> rects;
     Bytes pixels;
 
-    /// Bytes one pixel of this texture occupies, from the header's own table.
+    /// Bytes one pixel of this texture occupies, from the header's own table and the channel
+    /// width the table does not know about.
     [[nodiscard]] std::uint32_t pixelSize() const noexcept {
-        return tsl_texture_pixel_size(static_cast<int>(format));
+        const std::uint32_t channels = tsl_texture_pixel_size(static_cast<int>(format));
+        return channel_type == TSL_TEXTURE_CHANNEL_DATA_TYPE_FLOAT ? channels * 4
+             : channel_type == TSL_TEXTURE_CHANNEL_DATA_TYPE_HALF_FLOAT ? channels * 2
+             : channels;
     }
 };
 

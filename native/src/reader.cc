@@ -319,6 +319,7 @@ void Reader::dispatch(const tsl_record_header& header,
         out.width = update.size.width;
         out.height = update.size.height;
         out.format = update.format;
+        out.channel_type = update.channel_type;
         // Zero rectangles means the whole texture, and a consumer reading that as "no damage"
         // uploads nothing and samples a blank atlas -- a map with no labels and no error.
         out.rects.assign(update.rects, update.rects + update.rect_count);
