@@ -71,16 +71,47 @@ vertex {
 
         // Split into a point and a direction (`w` of 0, so only the linear part applies) because
         // the projected direction is what says how much perspective squashed this edge.
+        vec4 placed = materialParams.matrix * vec4(centre, 0.0, 1.0);
         vec4 projectedExtrude = materialParams.matrix * vec4(dist / ratio, 0.0, 0.0);
-        vec4 clip = materialParams.matrix * vec4(centre, 0.0, 1.0) + projectedExtrude;
 
+        // How far that extrusion actually reaches on screen, and what it takes to make it reach
+        // `outset` pixels again.
+        //
+        // # Why the quad is widened rather than only the fade
+        //
+        // A fill outline is not a line. It is the fill's antialiasing -- `fill-antialias` is what
+        // turns it on -- and its job is about a pixel of fade at the polygon's edge whatever the
+        // camera is doing. mbgl draws it as a two-pixel GL line (`constexpr auto lineWidth = 2.0f`
+        // in `render_fill_layer.cpp`), which is two pixels on screen at any pitch.
+        //
+        // This is mbgl's own fallback for backends with no line width -- Metal and WebGPU set
+        // `MLN_TRIANGULATE_FILL_OUTLINES`, and Filament exposes none either -- and the fallback
+        // builds the outline out of the *line layer's* machinery, which extrudes in tile units.
+        // Tile units are right for a road: a road lies on the ground and should foreshorten as it
+        // recedes. Antialiasing does not lie on the ground. mbgl's `v_gamma_scale` widens the
+        // fade to compensate, but a fade cannot spread further than the fragments the quad
+        // generates, so once the quad squashes below two pixels the coverage goes with it:
+        // measured against the oracle at 0.96 of its outline coverage at pitch 0, 0.75 at 40 and
+        // 0.58 at 60, which is a polygon edge that aliases again exactly where a pitched map
+        // needs it not to.
+        //
+        // Widening the extrusion puts the quad back at two pixels on screen, which is what the
+        // GL path -- the one the oracle and every shipped GL and Vulkan mbgl uses -- has all
+        // along. It also makes the fragment's own arithmetic true: `dist = length(normal) * width2`
+        // reads the half-width as `outset` pixels, which it was not while the quad was squashed.
+        //
+        // The fade then needs no compensation, so what used to be `gammaScale` travels as 1.
+        //
+        // Clamped because the factor is unbounded: an edge seen exactly along the extrusion
+        // direction projects to nothing and would balloon the quad across the frame. Sixteen is
+        // past any pitch a camera is allowed and still finite.
         float unprojected = length(dist);
-        float projected = length(projectedExtrude.xy / clip.w * materialParams.unitsToPixels);
+        float projected = length(projectedExtrude.xy / placed.w * materialParams.unitsToPixels);
         // Guarded: a zero-length extrusion would make this 0/0 and NaN the whole ring away.
-        float gammaScale = unprojected / max(projected, 1e-6);
+        float widen = min(unprojected / max(projected, 1e-6), 16.0);
 
-        material.outlineEdge = vec4(normal, outset, gammaScale);
-        material.worldPosition = clip;
+        material.outlineEdge = vec4(normal, outset, 1.0);
+        material.worldPosition = placed + projectedExtrude * widen;
     }
 }
 

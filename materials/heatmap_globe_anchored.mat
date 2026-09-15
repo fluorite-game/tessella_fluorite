@@ -1,0 +1,118 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// A heatmap's kernels, bent onto a sphere by the anchored expansion -- plan.md §13.4's consumer half.
+//
+// `heatmap.mat` says what a kernel is and how far its quad reaches; none of that changes on a
+// sphere. The extrusion is in *tile units* and goes on before the placement, exactly as a
+// map-aligned circle's does, so the only thing a sphere changes is the placement in between --
+// which is what this file replaces.
+//
+// The second pass needs no globe variant and never will: its quad is screen-aligned, over an
+// ortho that takes no camera, so there is no placement in it to bend.
+//
+// Without this a globe drew no heatmap at all -- `materialFor` found nothing for the family and
+// skipped the drawable, which is the same way the circle family's absence showed.
+material {
+    name : tessella_heatmap_globe_anchored,
+    shadingModel : unlit,
+    blending : custom,
+    blendFunction : {
+        srcRGB : one,
+        srcA : one,
+        dstRGB : one,
+        dstA : one
+    },
+    culling : none,
+    depthWrite : false,
+    depthCulling : false,
+    constants : [
+        { name : weightFromAttribute, type : bool, default : false },
+        { name : radiusFromAttribute, type : bool, default : false }
+    ],
+    parameters : [
+        // `globe_ubo::GlobeBendUbo`, in declaration order, and the tile center it expands about.
+        { type : float2, name : bendCenter },
+        { type : float4, name : bendAnchor },
+        { type : float4, name : bendU },
+        { type : float4, name : bendV },
+        { type : float4, name : bendUU },
+        { type : float4, name : bendVV },
+        { type : float4, name : bendUV },
+        // Tile units per pixel, which is what turns a radius in pixels into an extrusion. A
+        // scalar rather than a pair: a heatmap has no pitch alignment to choose between.
+        { type : float, name : extrudeScale },
+        { type : float, name : weight },
+        { type : float, name : radius },
+        { type : float, name : intensity },
+        { type : float, name : weightT },
+        { type : float, name : radiusT }
+    ],
+    requires : [ position, custom0, custom1 ],
+    variables : [ heatmapExtrude ]
+}
+
+vertex {
+#include "heatmap_paint.glsl"
+
+    // Effective zero in the kernel texture. mbgl's comment calls it empirically chosen to
+    // minimize artifacts where kernels overlap, which is the case a heatmap is made of.
+    const float ZERO = 1.0 / 255.0 / 16.0;
+    // 1 / sqrt(2 * PI).
+    const float GAUSS_COEF = 0.3989422804014327;
+
+    // The expansion at a tile-local point, which is what replaces the placement matrix.
+    vec4 bend(vec2 tileLocal) {
+        vec2 d = tileLocal - materialParams.bendCenter;
+        return materialParams.bendAnchor
+             + materialParams.bendU * d.x
+             + materialParams.bendV * d.y
+             + 0.5 * (materialParams.bendUU * (d.x * d.x)
+                    + materialParams.bendVV * (d.y * d.y))
+             + materialParams.bendUV * (d.x * d.y);
+    }
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        // The corner sign rides in the low bit of each coordinate, the same trick the circle
+        // and line vertices use: the point is doubled and zero or one added.
+        vec2 pos = getPosition().xy;
+        vec2 unscaledExtrude = mod(pos, 2.0) * 2.0 - 1.0;
+        vec2 centre = floor(pos * 0.5);
+
+        float weight = resolveHeatmapWeight();
+        float radius = resolveHeatmapRadius();
+
+        // How far out the quad has to reach for the kernel to have fallen to ZERO by its edge.
+        // Solving `weight * intensity * GAUSS_COEF * exp(-0.5 * 9 * S^2) == ZERO` for S. The
+        // maxes are mbgl's and are load-bearing: a weight of zero makes the log undefined.
+        float S = sqrt(-2.0 * log(ZERO / (max(weight, ZERO)
+                                          * max(materialParams.intensity, ZERO)
+                                          * GAUSS_COEF))) / 3.0;
+
+        // In units of radius, so the fragment shader can measure its own distance from the
+        // point without knowing what the radius was.
+        vec2 extrude = S * unscaledExtrude;
+        material.heatmapExtrude = vec4(extrude, weight, 0.0);
+        material.worldPosition =
+            bend(centre + extrude * radius * materialParams.extrudeScale);
+    }
+}
+
+fragment {
+    const float GAUSS_COEF = 0.3989422804014327;
+
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 extrude = variable_heatmapExtrude.xy;
+        float weight = variable_heatmapExtrude.z;
+
+        // A Gaussian over the distance from the point, in units of radius. The 3.0 is the same
+        // three the vertex divided by: the kernel is cut off at three standard deviations.
+        float d = -0.5 * 3.0 * 3.0 * dot(extrude, extrude);
+        float value = weight * materialParams.intensity * GAUSS_COEF * exp(d);
+
+        // Density in red and nothing meaningful in the rest, which is mbgl's
+        // `vec4(val, 1.0, 1.0, 1.0)`. The second pass reads `.r`.
+        material.baseColor = vec4(value, 1.0, 1.0, 1.0);
+    }
+}
