@@ -1,0 +1,112 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// A raster tile, draped on the terrain under it.
+//
+// `raster.mat` with the quad's corners lifted to the ground's height -- the change every terrain
+// variant makes. What is new here is *whose* ground: a hillshade and a color relief draw from the
+// DEM and read their own tile, while imagery is a different source at a different zoom and reads
+// a square of the coarser DEM tile above it. The producer works out which square and folds it
+// into the sampling pair, so this material cannot tell the two cases apart and does not need to.
+//
+// This is the first family raised from a DEM that is not its own, which is what the rest of them
+// -- fills, lines, labels -- will need too.
+
+material {
+    name : tessella_raster_terrain,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        { type : mat4,      name : matrix },
+        { type : float4,    name : spinWeights },
+        { type : float2,    name : tlParent },
+        { type : float,     name : scaleParent },
+        { type : float,     name : bufferScale },
+        { type : float,     name : fadeT },
+        { type : float,     name : opacity },
+        { type : float,     name : brightnessLow },
+        { type : float,     name : brightnessHigh },
+        { type : float,     name : saturationFactor },
+        { type : float,     name : contrastFactor },
+        { type : sampler2d, name : image0 },
+        { type : sampler2d, name : image1 },
+        // How to read a height, from the block the ground itself reads. The elevation is a
+        // second texture here: imagery is not a DEM, so unlike a color relief this family has
+        // nothing of its own to sample.
+        { type : sampler2d, name : elevation },
+        { type : float4,    name : unpack },
+        { type : float4,    name : params },
+        { type : float4,    name : skirt }
+    ],
+    requires : [ position, custom0 ],
+    variables : [ rasterUv ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec2 position = getPosition().xy;
+        // The ground's height under this corner, read the way `terrain.mat` reads it. The uv pair
+        // is the *covering* DEM's: imagery is on its own source's tile, which is one square of a
+        // coarser DEM tile rather than the whole of one, and the producer folded that into these
+        // two offsets.
+        vec3 channels = texture(materialParams_elevation,
+                                position * materialParams.params.x + materialParams.params.yz).rgb
+                      * 255.0;
+        float height = (channels.r * materialParams.unpack.r
+                      + channels.g * materialParams.unpack.g
+                      + channels.b * materialParams.unpack.b
+                      - materialParams.unpack.a) * materialParams.params.w;
+        // The texture coordinates are int16 over 8192 rather than normalised floats, which is what
+        // gives a raster tile enough precision to be sampled at a fraction of a texel. 8192 is the
+        // same EXTENT the position coordinates use, so the two scale together.
+        vec2 texel = getCustom0().xy;
+
+        vec2 position0 = (((texel / 8192.0) - 0.5) / materialParams.bufferScale) + 0.5;
+        vec2 position1 = (position0 * materialParams.scaleParent) + materialParams.tlParent;
+        material.rasterUv = vec4(position0, position1);
+
+        material.worldPosition = materialParams.matrix * vec4(position, height, 1.0);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // Un-premultiplied before mixing: the two pictures are blended against each other, not
+        // composited, so they have to be in the same space first.
+        vec4 color0 = texture(materialParams_image0, variable_rasterUv.xy);
+        vec4 color1 = texture(materialParams_image1, variable_rasterUv.zw);
+        if (color0.a > 0.0) {
+            color0.rgb = color0.rgb / color0.a;
+        }
+        if (color1.a > 0.0) {
+            color1.rgb = color1.rgb / color1.a;
+        }
+        vec4 color = mix(color0, color1, materialParams.fadeT);
+        color.a *= materialParams.opacity;
+        vec3 rgb = color.rgb;
+
+        // Spin, as a rotation of the channels against each other.
+        rgb = vec3(dot(rgb, materialParams.spinWeights.xyz),
+                   dot(rgb, materialParams.spinWeights.zxy),
+                   dot(rgb, materialParams.spinWeights.yzx));
+
+        // Saturation, toward or away from the pixel's own grey.
+        float average = (color.r + color.g + color.b) / 3.0;
+        rgb += (average - rgb) * materialParams.saturationFactor;
+
+        // Contrast, about the middle.
+        rgb = (rgb - 0.5) * materialParams.contrastFactor + 0.5;
+
+        // Brightness, as an interpolation between the two levels the style names. mbgl passes
+        // `low` into the vector it calls high and vice versa, and that is copied rather than
+        // corrected: the two are the ends of a mix and swapping them is what inverts the ramp.
+        vec3 high = vec3(materialParams.brightnessLow);
+        vec3 low = vec3(materialParams.brightnessHigh);
+        vec3 adjusted = mix(high, low, rgb);
+
+        // Premultiplied on the way out, which is the blending this is configured for.
+        material.baseColor = vec4(adjusted * color.a, color.a);
+    }
+}
