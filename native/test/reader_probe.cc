@@ -49,6 +49,14 @@ public:
         if (add.builtinShader == 0 || add.vertexCount == 0) {
             joined_badly++;
         }
+        // The topology byte was padding through rev 3, so a producer that forgot to fill it
+        // reads as triangles and is indistinguishable from one that meant it -- except on the
+        // two families that have always drawn lines, where a zero is the mistake made visible.
+        const bool outline = add.builtinShader == TSL_BUILTIN_FILL_OUTLINE_SHADER
+                          || add.builtinShader == TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER;
+        if (outline != (add.topology == TSL_TOPOLOGY_LINES)) {
+            topology_disagrees++;
+        }
     }
 
     void onDrawableRemove(const tsf::DrawableRemove& gone) override {
@@ -157,6 +165,9 @@ public:
     std::uint64_t frames_begun = 0, frames_ended = 0, lastFrameNo = 0;
     std::uint64_t drawables = 0, vertices = 0, indices = 0, tiled = 0;
     std::uint64_t unresolved_indexes = 0, joined_badly = 0;
+    /// A drawable whose topology byte and whose family do not tell the same story, on the
+    /// families where the family is still the authority.
+    std::uint64_t topology_disagrees = 0;
     std::uint64_t removes = 0, releases = 0;
     std::uint64_t ubos = 0, ubo_bytes = 0, frame_wide_ubos = 0;
     std::uint64_t textures = 0, texture_bytes = 0, texture_bad = 0, rects = 0, whole_texture = 0;
@@ -221,6 +232,7 @@ int main(int argc, char** argv) {
     std::printf("tiled %llu\n", (unsigned long long)sink.tiled);
     std::printf("unresolved_indexes %llu\n", (unsigned long long)sink.unresolved_indexes);
     std::printf("joined_badly %llu\n", (unsigned long long)sink.joined_badly);
+    std::printf("topology_disagrees %llu\n", (unsigned long long)sink.topology_disagrees);
     std::printf("removes %llu\n", (unsigned long long)sink.removes);
     std::printf("batches %llu\n", (unsigned long long)sink.batch_count);
     std::printf("batched_geometries %llu\n", (unsigned long long)sink.batched_geometries);
