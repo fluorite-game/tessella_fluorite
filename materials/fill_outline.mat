@@ -56,7 +56,7 @@ fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
 
-        // How far this pixel's centre is from the line, in pixels. Along a rasterised line the
+        // How far this pixel's center is from the line, in pixels. Along a rasterised line the
         // interpolated position is the exact geometric point, so the difference is the
         // perpendicular distance and the fade is one pixel wide however the line is angled.
         float dist = length(variable_outlinePos.xy - gl_FragCoord.xy);

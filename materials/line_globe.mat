@@ -98,8 +98,8 @@ vertex {
         float antialiasing = 1.0 / max(materialParams.pixelRatio, 1e-6) / 2.0;
 
         vec2 posNormal = getPosition().xy;
-        vec2 centre = floor(posNormal * 0.5);
-        vec2 normal = posNormal - 2.0 * centre;
+        vec2 center = floor(posNormal * 0.5);
+        vec2 normal = posNormal - 2.0 * center;
         normal.y = normal.y * 2.0 - 1.0;
 
         // a_data arrives as four unsigned bytes; the first two are the extrusion, biased by 128.
@@ -113,7 +113,7 @@ vertex {
         float halfwidth = resolveLineWidth() * 0.5;
         float lineOffset = -1.0 * resolveLineOffset();
 
-        // The quad reaches `outset` from the centre and the fill starts at `inset`. With no gap
+        // The quad reaches `outset` from the center and the fill starts at `inset`. With no gap
         // the inset is zero and the line is solid; with one the two edges are drawn and the middle
         // left open, which is how a road casing is a casing rather than a slab.
         float inset = gapwidth + (gapwidth > 0.0 ? antialiasing : 0.0);
@@ -134,7 +134,7 @@ vertex {
         // Bent twice: the centreline point this vertex sits on, and the same point pushed
         // sideways by the extrusion. Their difference is the projected extrusion, which on the
         // plane is `matrix * vec4(dist, 0, 0)` -- the linear part this bend does not have.
-        vec2 at = centre + offset2 / ratio;
+        vec2 at = center + offset2 / ratio;
         vec4 placed = bend(at);
         vec4 clip = bend(at + dist / ratio);
         vec4 projectedExtrude = clip - placed;
@@ -163,7 +163,7 @@ fragment {
         float inset = variable_lineEdge.w;
         float gammaScale = variable_lineGamma.x;
 
-        // How far this pixel is from the centre of the line, in pixels.
+        // How far this pixel is from the center of the line, in pixels.
         float dist = length(normal) * outset;
 
         // The fade: in across the inner edge for a line with a gap, out across the outer one.

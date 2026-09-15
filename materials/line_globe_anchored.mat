@@ -2,7 +2,7 @@
 //
 // The line family.
 //
-// A line arrives as a strip of quads that carry their own extrusion: each vertex holds the centre
+// A line arrives as a strip of quads that carry their own extrusion: each vertex holds the center
 // position with the normal packed into its low bit, and a byte pair saying which way and how far
 // to push. The shader does the pushing, in tile units, scaled by the drawable's `ratio` -- which
 // is what makes a road hold its pixel width as the camera zooms rather than growing with the tile.
@@ -12,7 +12,7 @@
 // the coverage out across that margin in the fragment shader, which is resolution-independent and
 // costs no bandwidth. `normal` interpolates from +1 at one edge of the strip through 0 at the
 // centreline to -1 at the other, so its length scaled by `outset` is the fragment's distance from
-// the centre in pixels -- and that distance against the two edges is the whole of the coverage.
+// the center in pixels -- and that distance against the two edges is the whole of the coverage.
 //
 // Dash patterns and the round/square caps are still not here; a solid line of the right width in
 // the right place with the right edge is what this draws.
@@ -24,7 +24,7 @@
 // is the whole trick, and the direct globe bend cannot do it: it takes tile-local coordinates
 // through trig to a sphere position and has no linear part to extrude along.
 //
-// The expansion does. Its first derivatives are the Jacobian of the bend at the tile's centre, in
+// The expansion does. Its first derivatives are the Jacobian of the bend at the tile's center, in
 // clip space, which is exactly what `matrix * vec4(direction, 0, 0)` produces on a plane. So the
 // two lines below are the same arithmetic with the Jacobian in place of the matrix -- and the
 // Jacobian is carried to the vertex rather than left at the anchor, because a tile is wide enough
@@ -44,7 +44,7 @@ material {
         { name : widthFromAttribute,    type : bool, default : false }
     ],
     parameters : [
-        // `globe_ubo::GlobeBendUbo`, in declaration order, and the tile centre it expands about.
+        // `globe_ubo::GlobeBendUbo`, in declaration order, and the tile center it expands about.
         { type : float2, name : bendCenter },
         { type : float4, name : bendAnchor },
         { type : float4, name : bendU },
@@ -90,8 +90,8 @@ vertex {
         float antialiasing = 1.0 / max(materialParams.pixelRatio, 1e-6) / 2.0;
 
         vec2 posNormal = getPosition().xy;
-        vec2 centre = floor(posNormal * 0.5);
-        vec2 normal = posNormal - 2.0 * centre;
+        vec2 center = floor(posNormal * 0.5);
+        vec2 normal = posNormal - 2.0 * center;
         normal.y = normal.y * 2.0 - 1.0;
 
         // a_data arrives as four unsigned bytes; the first two are the extrusion, biased by 128.
@@ -105,7 +105,7 @@ vertex {
         float halfwidth = resolveLineWidth() * 0.5;
         float lineOffset = -1.0 * resolveLineOffset();
 
-        // The quad reaches `outset` from the centre and the fill starts at `inset`. With no gap
+        // The quad reaches `outset` from the center and the fill starts at `inset`. With no gap
         // the inset is zero and the line is solid; with one the two edges are drawn and the middle
         // left open, which is how a road casing is a casing rather than a slab.
         float inset = gapwidth + (gapwidth > 0.0 ? antialiasing : 0.0);
@@ -131,9 +131,9 @@ vertex {
         // Split into a point and a direction (`w` of 0, so only the linear part applies) because
         // the projected direction is what says how much perspective squashed this edge. The two
         // are summed, which for a linear map is the same as transforming the sum.
-        // The centre of this vertex's line, as an offset from the tile centre the bend expands
+        // The center of this vertex's line, as an offset from the tile center the bend expands
         // about.
-        vec2 d = centre + offset2 / ratio - materialParams.bendCenter;
+        vec2 d = center + offset2 / ratio - materialParams.bendCenter;
         vec4 placed = materialParams.bendAnchor
                     + materialParams.bendU * d.x
                     + materialParams.bendV * d.y
@@ -175,7 +175,7 @@ fragment {
         float inset = variable_lineEdge.w;
         float gammaScale = variable_lineGamma.x;
 
-        // How far this pixel is from the centre of the line, in pixels.
+        // How far this pixel is from the center of the line, in pixels.
         float dist = length(normal) * outset;
 
         // The fade: in across the inner edge for a line with a gap, out across the outer one.

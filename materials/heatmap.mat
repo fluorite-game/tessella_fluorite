@@ -60,7 +60,7 @@ vertex {
         // and line vertices use: the point is doubled and zero or one added.
         vec2 pos = getPosition().xy;
         vec2 unscaledExtrude = mod(pos, 2.0) * 2.0 - 1.0;
-        vec2 centre = floor(pos * 0.5);
+        vec2 center = floor(pos * 0.5);
 
         float weight = resolveHeatmapWeight();
         float radius = resolveHeatmapRadius();
@@ -77,7 +77,7 @@ vertex {
         vec2 extrude = S * unscaledExtrude;
         material.heatmapExtrude = vec4(extrude, weight, 0.0);
         material.worldPosition = materialParams.matrix
-            * vec4(centre + extrude * radius * materialParams.extrudeScale, 0.0, 1.0);
+            * vec4(center + extrude * radius * materialParams.extrudeScale, 0.0, 1.0);
     }
 }
 

@@ -62,8 +62,8 @@ vertex {
         float antialiasing = 1.0 / max(materialParams.pixelRatio, 1e-6) / 2.0;
 
         vec2 posNormal = getPosition().xy;
-        vec2 centre = floor(posNormal * 0.5);
-        vec2 normal = posNormal - 2.0 * centre;
+        vec2 center = floor(posNormal * 0.5);
+        vec2 normal = posNormal - 2.0 * center;
         normal.y = normal.y * 2.0 - 1.0;
 
         vec2 extrude = getCustom0().xy - 128.0;
@@ -74,12 +74,12 @@ vertex {
         vec2 dist = outset * extrude / EXTRUDE_SCALE;
         float ratio = max(materialParams.ratio, 1e-6);
 
-        vec4 placed = bend(centre);
+        vec4 placed = bend(center);
         // The bend is not linear, so the extrusion is measured by bending the extruded point and
         // differencing -- and then applied in clip space, where scaling it is a multiply rather
         // than a second bend. Over a sub-pixel-to-a-few-pixel offset the two agree, and the
         // second bend is four transcendentals a vertex.
-        vec4 projectedExtrude = bend(centre + dist / ratio) - placed;
+        vec4 projectedExtrude = bend(center + dist / ratio) - placed;
 
         // How far that extrusion actually reaches on screen, and what it takes to make it reach
         // `outset` pixels again.

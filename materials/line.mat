@@ -2,7 +2,7 @@
 //
 // The line family.
 //
-// A line arrives as a strip of quads that carry their own extrusion: each vertex holds the centre
+// A line arrives as a strip of quads that carry their own extrusion: each vertex holds the center
 // position with the normal packed into its low bit, and a byte pair saying which way and how far
 // to push. The shader does the pushing, in tile units, scaled by the drawable's `ratio` -- which
 // is what makes a road hold its pixel width as the camera zooms rather than growing with the tile.
@@ -12,7 +12,7 @@
 // the coverage out across that margin in the fragment shader, which is resolution-independent and
 // costs no bandwidth. `normal` interpolates from +1 at one edge of the strip through 0 at the
 // centreline to -1 at the other, so its length scaled by `outset` is the fragment's distance from
-// the centre in pixels -- and that distance against the two edges is the whole of the coverage.
+// the center in pixels -- and that distance against the two edges is the whole of the coverage.
 //
 // Dash patterns and the round/square caps are still not here; a solid line of the right width in
 // the right place with the right edge is what this draws.
@@ -74,8 +74,8 @@ vertex {
         float antialiasing = 1.0 / max(materialParams.pixelRatio, 1e-6) / 2.0;
 
         vec2 posNormal = getPosition().xy;
-        vec2 centre = floor(posNormal * 0.5);
-        vec2 normal = posNormal - 2.0 * centre;
+        vec2 center = floor(posNormal * 0.5);
+        vec2 normal = posNormal - 2.0 * center;
         normal.y = normal.y * 2.0 - 1.0;
 
         // a_data arrives as four unsigned bytes; the first two are the extrusion, biased by 128.
@@ -89,7 +89,7 @@ vertex {
         float halfwidth = resolveLineWidth() * 0.5;
         float lineOffset = -1.0 * resolveLineOffset();
 
-        // The quad reaches `outset` from the centre and the fill starts at `inset`. With no gap
+        // The quad reaches `outset` from the center and the fill starts at `inset`. With no gap
         // the inset is zero and the line is solid; with one the two edges are drawn and the middle
         // left open, which is how a road casing is a casing rather than a slab.
         float inset = gapwidth + (gapwidth > 0.0 ? antialiasing : 0.0);
@@ -116,7 +116,7 @@ vertex {
         // the projected direction is what says how much perspective squashed this edge. The two
         // are summed, which for a linear map is the same as transforming the sum.
         vec4 projectedExtrude = materialParams.matrix * vec4(dist / ratio, 0.0, 0.0);
-        vec4 clip = materialParams.matrix * vec4(centre + offset2 / ratio, 0.0, 1.0)
+        vec4 clip = materialParams.matrix * vec4(center + offset2 / ratio, 0.0, 1.0)
                   + projectedExtrude;
 
         float unprojected = length(dist);
@@ -143,7 +143,7 @@ fragment {
         float inset = variable_lineEdge.w;
         float gammaScale = variable_lineGamma.x;
 
-        // How far this pixel is from the centre of the line, in pixels.
+        // How far this pixel is from the center of the line, in pixels.
         float dist = length(normal) * outset;
 
         // The fade: in across the inner edge for a line with a gap, out across the outer one.

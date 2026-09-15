@@ -22,3 +22,7 @@ runtime rather than linked, so every platform variant has to be in the file.
 
 The families here are the ones a real basemap asks for. The comment at the top of each file says
 what it draws and where its arithmetic comes from.
+
+The heatmap's two globe variants are the exception and are written down as one: they compile and
+the loader picks them up, and nothing has yet drawn a heatmap on a globe to say whether they are
+right. Every other family's globe variant has been looked at against a rendered frame.

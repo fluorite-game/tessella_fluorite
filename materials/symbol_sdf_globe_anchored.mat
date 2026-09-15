@@ -31,7 +31,7 @@ material {
         { name : haloBlurFromAttribute,  type : bool, default : false }
     ],
     parameters : [
-        // `globe_ubo::GlobeBendUbo`, and the tile centre it expands about. This replaces the
+        // `globe_ubo::GlobeBendUbo`, and the tile center it expands about. This replaces the
         // tile-to-clip matrix: only the *anchor* is bent, because the glyph quad is built in
         // screen pixels around that point and is the same size wherever its tile sits.
         { type : float2,    name : bendCenter },

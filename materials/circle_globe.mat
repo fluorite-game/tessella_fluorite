@@ -89,11 +89,11 @@ vertex {
 
     void materialVertex(inout MaterialVertexInputs material) {
         // The corner sign rides in the low bit of each coordinate, the same trick the line vertex
-        // uses: the point is doubled and zero or one added. So the centre is the halved position
+        // uses: the point is doubled and zero or one added. So the center is the halved position
         // and the extrusion is what is left, mapped from {0,1} back to {-1,+1}.
         vec2 pos = getPosition().xy;
         vec2 extrude = mod(pos, 2.0) * 2.0 - 1.0;
-        vec2 centre = floor(pos * 0.5);
+        vec2 center = floor(pos * 0.5);
 
         float radius = resolveCircleRadius();
         float strokeWidth = resolveCircleStrokeWidth();
@@ -101,21 +101,21 @@ vertex {
         vec4 clip;
         if (materialParams.pitchWithMap >= 0.5) {
             // Lying on the ground: the extrusion is in tile units and goes on before the matrix.
-            vec2 corner = centre;
+            vec2 corner = center;
             if (materialParams.scaleWithMap >= 0.5) {
                 corner += extrude * reach * materialParams.extrudeScale;
             } else {
                 // Held at a constant pixel size while lying flat, which needs the perspective
                 // divide the matrix is about to do -- so it is measured first and multiplied in.
-                vec4 projected = bend(centre);
+                vec4 projected = bend(center);
                 corner += extrude * reach * materialParams.extrudeScale
                         * (projected.w / max(materialParams.cameraToCenterDistance, 1e-6));
             }
             clip = bend(corner);
         } else {
-            // Standing up on the screen: the matrix places the centre and the extrusion is added
+            // Standing up on the screen: the matrix places the center and the extrusion is added
             // in clip space afterwards, scaled by w so it survives the divide as a pixel size.
-            clip = bend(centre);
+            clip = bend(center);
             if (materialParams.scaleWithMap >= 0.5) {
                 clip.xy += extrude * reach * materialParams.extrudeScale
                          * materialParams.cameraToCenterDistance;

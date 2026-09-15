@@ -6,7 +6,7 @@
 // file adds is plan.md §18 item 6's trick, the same one `line_globe_anchored.mat` uses: the flat
 // material places a vertex with one matrix and extrudes it sideways with the *same* matrix
 // applied to a direction, and the direct globe bend has no linear part to extrude along. The
-// expansion does -- its first derivatives are the Jacobian of the bend at the tile's centre, in
+// expansion does -- its first derivatives are the Jacobian of the bend at the tile's center, in
 // clip space, which is what `matrix * vec4(direction, 0, 0)` produces on a plane.
 material {
     name : tessella_fill_outline_triangulated_globe_anchored,
@@ -14,7 +14,7 @@ material {
     blending : transparent,
     culling : none,
     parameters : [
-        // `globe_ubo::GlobeBendUbo`, in declaration order, and the tile centre it expands about.
+        // `globe_ubo::GlobeBendUbo`, in declaration order, and the tile center it expands about.
         { type : float2, name : bendCenter },
         { type : float4, name : bendAnchor },
         { type : float4, name : bendU },
@@ -39,8 +39,8 @@ vertex {
         float antialiasing = 1.0 / max(materialParams.pixelRatio, 1e-6) / 2.0;
 
         vec2 posNormal = getPosition().xy;
-        vec2 centre = floor(posNormal * 0.5);
-        vec2 normal = posNormal - 2.0 * centre;
+        vec2 center = floor(posNormal * 0.5);
+        vec2 normal = posNormal - 2.0 * center;
         normal.y = normal.y * 2.0 - 1.0;
 
         vec2 extrude = getCustom0().xy - 128.0;
@@ -51,8 +51,8 @@ vertex {
         vec2 dist = outset * extrude / EXTRUDE_SCALE;
         float ratio = max(materialParams.ratio, 1e-6);
 
-        // This vertex's ring point, as an offset from the tile centre the bend expands about.
-        vec2 d = centre - materialParams.bendCenter;
+        // This vertex's ring point, as an offset from the tile center the bend expands about.
+        vec2 d = center - materialParams.bendCenter;
         vec4 placed = materialParams.bendAnchor
                     + materialParams.bendU * d.x
                     + materialParams.bendV * d.y

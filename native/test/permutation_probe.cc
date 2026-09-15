@@ -206,8 +206,8 @@ int main(int argc, char** argv) {
         }
         engine->flushAndWait();
 
-        const std::size_t centre = ((H / 2) * W + W / 2) * 4;
-        const std::uint8_t r = pixels[centre], g = pixels[centre + 1], b = pixels[centre + 2];
+        const std::size_t center = ((H / 2) * W + W / 2) * 4;
+        const std::uint8_t r = pixels[center], g = pixels[center + 1], b = pixels[center + 2];
         const char* seen = (r > 128 && g < 128)   ? "red"
                            : (g > 128 && r < 128) ? "green"
                            : (r < 40 && g < 40 && b < 40) ? "blank"

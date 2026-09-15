@@ -6,7 +6,7 @@
 // runs no MSAA, so the only thing softening a polygon's boundary is the fade in this fragment.
 // mbgl gives that fade room by drawing the outline **two pixels wide** -- `constexpr auto
 // lineWidth = 2.0f` in `render_fill_layer.cpp` -- and a one-pixel line generates no fragment
-// further than half a pixel from its centre, so half the fade has nowhere to land.
+// further than half a pixel from its center, so half the fade has nowhere to land.
 //
 // Filament exposes no line width, in any public header. mbgl met the same wall on Metal and
 // WebGPU and answered it with `MLN_TRIANGULATE_FILL_OUTLINES`: generate the ring as the extruded
@@ -52,8 +52,8 @@ vertex {
         float antialiasing = 1.0 / max(materialParams.pixelRatio, 1e-6) / 2.0;
 
         vec2 posNormal = getPosition().xy;
-        vec2 centre = floor(posNormal * 0.5);
-        vec2 normal = posNormal - 2.0 * centre;
+        vec2 center = floor(posNormal * 0.5);
+        vec2 normal = posNormal - 2.0 * center;
         normal.y = normal.y * 2.0 - 1.0;
 
         // a_data arrives as four unsigned bytes; the first two are the extrusion, biased by 128.
@@ -71,7 +71,7 @@ vertex {
 
         // Split into a point and a direction (`w` of 0, so only the linear part applies) because
         // the projected direction is what says how much perspective squashed this edge.
-        vec4 placed = materialParams.matrix * vec4(centre, 0.0, 1.0);
+        vec4 placed = materialParams.matrix * vec4(center, 0.0, 1.0);
         vec4 projectedExtrude = materialParams.matrix * vec4(dist / ratio, 0.0, 0.0);
 
         // How far that extrusion actually reaches on screen, and what it takes to make it reach
@@ -123,7 +123,7 @@ fragment {
         float width2 = variable_outlineEdge.z;
         float gammaScale = variable_outlineEdge.w;
 
-        // How far this pixel is from the centre of the ring, in pixels, and the fade across the
+        // How far this pixel is from the center of the ring, in pixels, and the fade across the
         // outer edge. `dist + blur2` is the inner edge of a line with no gap, which never bites.
         float dist = length(normal) * width2;
         float blur2 = (1.0 / max(materialParams.pixelRatio, 1e-6)) * gammaScale;

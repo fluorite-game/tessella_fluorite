@@ -213,9 +213,9 @@ int main(int argc, char** argv) {
                 }
                 engine->flushAndWait();
 
-                const std::size_t centre = ((H / 2) * W + W / 2) * 4;
-                const std::uint8_t r = pixels[centre], g = pixels[centre + 1],
-                                   b = pixels[centre + 2];
+                const std::size_t center = ((H / 2) * W + W / 2) * 4;
+                const std::uint8_t r = pixels[center], g = pixels[center + 1],
+                                   b = pixels[center + 2];
                 seen[order] = r > 128 && b < 128   ? "near(red)"
                               : b > 128 && r < 128 ? "far(blue)"
                               : (r < 40 && g < 40 && b < 40) ? "blank"
@@ -326,8 +326,8 @@ int main(int argc, char** argv) {
             }
             engine->flushAndWait();
 
-            const std::size_t centre = ((H / 2) * W + W / 2) * 4;
-            const std::uint8_t r = pixels[centre], g = pixels[centre + 1], b = pixels[centre + 2];
+            const std::size_t center = ((H / 2) * W + W / 2) * 4;
+            const std::uint8_t r = pixels[center], g = pixels[center + 1], b = pixels[center + 2];
             seen[order] = r > 128 && b < 128        ? "near(red)"
                           : b > 128 && r < 128      ? "far(blue)"
                           : g > 128                 ? "bg(green)"
@@ -356,7 +356,7 @@ int main(int argc, char** argv) {
     // answers is whether that is Filament's behaviour or our two passes disagreeing about depth.
     // `offset` is the depth difference between the two passes: zero is the same surface twice,
     // and anything else stands in for a per-sub-layer depth nudge.
-    std::printf("\n%-22s %-12s %s\n", "two-pass", "centre", "verdict");
+    std::printf("\n%-22s %-12s %s\n", "two-pass", "center", "verdict");
     for (float offset : {0.0f, 1e-6f, 1e-5f, 1e-4f}) {
         auto* sceneObj = engine->createScene();
         view->setScene(sceneObj);
@@ -406,8 +406,8 @@ int main(int argc, char** argv) {
             renderer->endFrame();
         }
         engine->flushAndWait();
-        const std::size_t centre = ((H / 2) * W + W / 2) * 4;
-        const bool drew = pixels[centre] > 128;
+        const std::size_t center = ((H / 2) * W + W / 2) * 4;
+        const bool drew = pixels[center] > 128;
         std::printf("depth+read, offset %-7.0e %-12s %s\n", offset,
                     drew ? "red" : "blank", drew ? "colour survives" : "<== colour lost");
         for (auto entity : entities) {

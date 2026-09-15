@@ -1307,7 +1307,7 @@ void FilamentRenderer::writeMasks() {
         // road, which is what left a clean gap across Seattle's street grid along a tile row.
         //
         // Bounded by the crossover exactly as the drawables are, and for the same reason: the
-        // expansion is about a tile's centre and a tile below it subtends too much sphere for a
+        // expansion is about a tile's center and a tile below it subtends too much sphere for a
         // quadratic. A mask on an invalid expansion cuts the fill it exists to admit -- at z1 it
         // took fourteen thousand pixels of ocean out of the planet in straight-edged wedges, which
         // reads as land. The drawables were bounded and this was not, so the two disagreed at
@@ -1331,7 +1331,7 @@ void FilamentRenderer::writeMasks() {
         // project onto the same disc, so a far-side tile's mask lands on the same pixels as a
         // near-side one. Untested, REPLACE let whichever was drawn last own the pixel -- and in the
         // middle of the disc that was the far side, so every near-side fill failed its own
-        // reference and the water vanished from the centre outward, leaving a ring of ocean at the
+        // reference and the water vanished from the center outward, leaving a ring of ocean at the
         // limb and background everywhere else. Never writes depth either way; the shell is the only
         // writer, and a mask that wrote would hide the fill it exists to admit.
         instance->setDepthCulling(bent);
@@ -2999,7 +2999,7 @@ void FilamentRenderer::issue(const Batch& batch) {
         auto anchoredMaterial = anchoredMaterials_.end();
         static const bool noAnchored = std::getenv("TSF_NO_ANCHORED") != nullptr;
         // The threshold binds even for a family that has no direct package. A quadratic about a
-        // tile's centre is only as good as the arc that tile subtends, and a z0 tile subtends the
+        // tile's center is only as good as the arc that tile subtends, and a z0 tile subtends the
         // whole sphere -- so the expansion there is not a worse approximation, it is a wrong one,
         // and geometry drawn through it lands anywhere. Removing `fill_outline_globe.filamat` to
         // see what its anchored twin did alone showed it: coastlines smeared across the entire
