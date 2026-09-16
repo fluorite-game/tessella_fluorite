@@ -1,0 +1,41 @@
+From: ZedingZhang <me@zedingzhang.com>
+Subject: [PATCH] Fix Vulkan depth target format queries
+
+Upstream google/filament PR #10424, for issue #10418, rebased onto the 1.75.0
+tree this build links. Not yet merged upstream; carried here until it is.
+
+VulkanDriver::isRenderTargetFormatSupported tested COLOR_ATTACHMENT_BIT, which
+no depth or stencil format ever carries, so every one of them answered
+"unsupported" however the device was built. The caller that picks a
+depth/stencil format has no other way to ask, so it allocated
+DEPTH32F_STENCIL8 regardless: on a device without it -- the Raspberry Pi 5's
+V3D reports optimalTilingFeatures 0 for VK_FORMAT_D32_SFLOAT_S8_UINT -- the
+first attachment view over that image segfaults inside vkCreateImageView.
+
+The query now asks for DEPTH_STENCIL_ATTACHMENT_BIT for depth and stencil
+formats, and STENCIL8 joins the formats that are not mipmappable.
+
+Harmless on a desktop GPU that supports DEPTH32F_STENCIL8, which is why the
+parity probe never showed it; it is the Pi that crashes.
+--- a/filament/backend/src/vulkan/VulkanDriver.cpp
++++ b/filament/backend/src/vulkan/VulkanDriver.cpp
+@@ -1840,6 +1840,7 @@
+ 
+ bool VulkanDriver::isTextureFormatMipmappable(TextureFormat format) {
+     switch (format) {
++        case TextureFormat::STENCIL8:
+         case TextureFormat::DEPTH16:
+         case TextureFormat::DEPTH24:
+         case TextureFormat::DEPTH32F:
+@@ -1868,7 +1869,10 @@
+     }
+     VkFormatProperties info;
+     vkGetPhysicalDeviceFormatProperties(mPlatform->getPhysicalDevice(), vkformat, &info);
+-    return (info.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0;
++    VkFormatFeatureFlags const requiredFeature = isDepthFormat(format) || isStencilFormat(format)
++            ? VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
++            : VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
++    return (info.optimalTilingFeatures & requiredFeature) != 0;
+ }
+ 
+ bool VulkanDriver::isFrameBufferFetchSupported() {
