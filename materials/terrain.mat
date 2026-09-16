@@ -53,27 +53,19 @@ material {
 }
 
 vertex {
+#include "terrain_height.glsl"
     void materialVertex(inout MaterialVertexInputs material) {
         // Tile units on x and y; the skirt flag on z.
         // The flag arrives beside the position rather than as a third component: Filament
         // draws nothing from a `Short3` attribute. See `encode_terrain`.
         vec3 vertex = vec3(getPosition().xy, getCustom0().x);
 
-        // One multiply-add an axis: the producer folded the DEM's width, its border pixel and the
-        // half texel that centers a cell into these two numbers. See `terrain_ubo`.
-        vec2 uv = vertex.xy * materialParams.params.x + materialParams.params.yz;
-        vec4 texel = texture(materialParams_elevation, uv);
-
-        // The encoding's own dot product, the way `Dem::elevation_exact` reads it: the channels
-        // come back normalized, so they are scaled to bytes first.
-        vec3 channels = texel.rgb * 255.0;
-        float meters = channels.r * materialParams.unpack.r
-                     + channels.g * materialParams.unpack.g
-                     + channels.b * materialParams.unpack.b
-                     - materialParams.unpack.a;
-
-        float height = meters * materialParams.params.w;
+        // The height the whole surface is built from, and the one every raised family reads --
+        // this is the definition `terrain_height.glsl` carries and the rest of them include.
+        float height = terrainHeight(vertex.xy);
         // The skirt drops, and only the skirt: `vertex.z` is one there and zero everywhere else.
+        // It is subtracted here rather than in the include because the ground is the one thing
+        // that has one: a layer standing on the ground is a surface on a surface.
         height -= vertex.z * materialParams.skirt.x;
 
         material.worldPosition = materialParams.matrix * vec4(vertex.xy, height, 1.0);

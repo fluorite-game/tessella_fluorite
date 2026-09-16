@@ -1,0 +1,83 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The fill-outline family, on the terrain its fill stands on.
+//
+// `fill_outline.mat` with the ring lifted to the ground's height. The fade this pass draws is
+// measured in screen pixels and is unchanged by the lift: the screen position comes from the
+// raised clip position, so the distance it measures is the distance on the raised edge.
+//
+// It has to read the *same* height as the triangles it edges, which is what the shared include
+// is for -- an outline half a meter off its fill peels away from it on any slope. The producer
+// sends both drawables the same block, at each one's own sub-layer, so the depth offset that
+// sorts them against each other survives the lift.
+//
+// See `fill_terrain.mat` for why a raised family places itself.
+material {
+    name : tessella_fill_outline_terrain,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    constants : [
+        // The permutation, as mbgl's `HAS_UNIFORM_u_*` defines but resolved when the material is
+        // built rather than when it is compiled. False is the uniform form, so a package built
+        // without specializing is the constant-paint one.
+        { name : colorFromAttribute,   type : bool, default : false },
+        { name : opacityFromAttribute, type : bool, default : false }
+    ],
+    parameters : [
+        { type : float4, name : color },
+        { type : float,  name : opacity },
+        // The frame's zoom-mix factors for the two data-driven properties, from `FillDrawableUBO`.
+        { type : float,  name : colorT },
+        { type : float,  name : opacityT },
+        // Tile-local to clip, the same matrix the renderable would otherwise carry.
+        { type : mat4,   name : matrix },
+        // The viewport in pixels, which turns a clip position into the one `gl_FragCoord`
+        // measures in. mbgl's `paintParams.world_size`.
+        { type : float2, name : worldSize },
+        // The raise block, sent to every drawable the producer marked raised. The elevation is a
+        // second texture: this family is on a vector tile and has no DEM of its own.
+        { type : sampler2d, name : elevation },
+        { type : float4,    name : unpack },
+        { type : float4,    name : params },
+        // Unread here -- only the ground has a skirt -- and declared because the one raise path
+        // sets it for every variant, and Filament panics on a parameter a material lacks.
+        { type : float4,    name : skirt }
+    ],
+    requires : [ position, custom0, custom1 ],
+    variables : [ paint, outlinePos ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // How far this pixel's center is from the line, in pixels. Along a rasterized line the
+        // interpolated position is the exact geometric point, so the difference is the
+        // perpendicular distance and the fade is one pixel wide however the line is angled.
+        float dist = length(variable_outlinePos.xy - gl_FragCoord.xy);
+        float alpha = 1.0 - smoothstep(0.0, 1.0, dist);
+        material.baseColor = variable_paint * alpha;
+    }
+}
+
+vertex {
+#include "terrain_height.glsl"
+#include "fill_paint.glsl"
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        // The layer's paint, or this feature's. `requires` names both attributes whichever it
+        // is, because the list is baked into the package and Filament refuses a primitive whose
+        // vertex buffer does not declare what its material requires; the consumer points the
+        // slots a constant-paint drawable does not fill at one shared zero buffer.
+        material.paint = resolveFillPaint();
+
+        vec2 position = getPosition().xy;
+        vec4 clip =
+            materialParams.matrix * vec4(position, terrainHeight(position), 1.0);
+        // Clip to the pixel grid `gl_FragCoord` is in: NDC to 0..1, then to the viewport.
+        material.outlinePos = vec4(
+            (clip.xy / clip.w + 1.0) / 2.0 * materialParams.worldSize, 0.0, 0.0);
+        material.worldPosition = clip;
+    }
+}

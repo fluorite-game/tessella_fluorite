@@ -3478,6 +3478,14 @@ void FilamentRenderer::issue(const Batch& batch) {
                 continue;
             }
             std::memcpy(&block, elevation->second.data() + raiseAt, sizeof block);
+            raisedDrawn_++;
+            // The placement, which the renderable no longer carries: every terrain variant
+            // writes `worldPosition` itself and needs the tile-to-clip matrix to write it with.
+            // The producer builds this one at the drawable's own sub-layer, so a fill's outline
+            // keeps the depth offset that sorts it over the triangles it edges.
+            filament::math::mat4f placement;
+            std::memcpy(&placement, block.matrix, sizeof block.matrix);
+            instance->setParameter("matrix", placement);
             instance->setParameter("unpack",
                                    filament::math::float4{block.unpack[0], block.unpack[1],
                                                           block.unpack[2], block.unpack[3]});
@@ -4827,7 +4835,12 @@ void FilamentRenderer::issue(const Batch& batch) {
         // else lets Filament apply the transform, which is cheaper and needs no vertex hook.
         // A bent drawable always places itself: its matrix reaches normalized Mercator, which is
         // not a space Filament's transform could take it the rest of the way from.
-        const bool placesItself = bent || patternPlaces(batch.builtinShader) ||
+        // A raised one does too, for the same shape of reason: its height comes out of a texture
+        // read in the vertex stage, so the matrix has to be inside the shader to receive it. The
+        // flat material of a family like the fill has no matrix parameter at all -- this is a
+        // property of the variant, not of the family, which is why it sits beside `bent` rather
+        // than in `patternPlaces`.
+        const bool placesItself = bent || raised || patternPlaces(batch.builtinShader) ||
                                   batch.builtinShader == TSL_BUILTIN_RASTER_SHADER ||
                                   batch.builtinShader == TSL_BUILTIN_SYMBOL_ICON_SHADER ||
                                   batch.builtinShader == TSL_BUILTIN_SYMBOL_SDFSHADER ||

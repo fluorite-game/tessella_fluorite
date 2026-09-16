@@ -225,6 +225,10 @@ public:
 
     /// Drawables that took the anchored bend rather than the direct one.
     [[nodiscard]] std::uint64_t anchoredDrawn() const noexcept { return anchoredDrawn_; }
+    /// Drawables raised onto the terrain -- marked `ON_TERRAIN` by the producer *and* belonging
+    /// to a family that has a variant to draw them with. The gap between this and the number the
+    /// producer marked is the list of families still to be given one.
+    [[nodiscard]] std::uint64_t raisedDrawn() const noexcept { return raisedDrawn_; }
 
     /// Buckets whose indices had to be widened to `u32` because the producer split them.
     ///
@@ -479,6 +483,7 @@ private:
     std::unordered_map<std::int32_t, filament::Material*> anchoredMaterials_;
     /// How many drawables took the anchored path this frame, for the counters.
     std::uint64_t anchoredDrawn_ = 0;
+    std::uint64_t raisedDrawn_ = 0;
     /// The same families bent onto a sphere, loaded from `<stem>_globe.filamat`.
     ///
     /// A second map rather than a variant inside the first: the two differ in what a vertex *is*
