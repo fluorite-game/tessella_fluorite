@@ -1848,7 +1848,9 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
     // The colour, replicated the same way and copied rather than decoded: the bytes are mbgl's
     // packed pair and the shader unpacks them, so the wall never needs to know what is in them.
     std::vector<std::uint8_t> colours;
-    std::vector<std::uint16_t> indexes;
+    // Wide while building: four corners a wall, so a building-dense tile passes 65535 corners
+    // well before its outline runs out -- 16384 walls. Narrowed on upload when it fits.
+    std::vector<std::uint32_t> indexes;
     vertices.reserve(instanceCount * templateCount * 3);
     normals.reserve(instanceCount * templateCount * 2);
     extents.reserve(instanceCount * templateCount * 4);
@@ -1933,10 +1935,10 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
                 ? colour->data.data + i * colour->desc.stride + colour->desc.offset
                 : nullptr;
 
-        const auto corner = static_cast<std::uint16_t>(vertices.size() / 3);
-        if (vertices.size() / 3 + templateCount > std::numeric_limits<std::uint16_t>::max()) {
-            break;
-        }
+        // No cap here. There was one, at 16-bit indexes, and it stopped the walk in silence: every
+        // wall past the 16384th stood nowhere, and a dense downtown tile showed its roofs lying on
+        // the ground beside a neighbor whose walls all stood.
+        const auto corner = static_cast<std::uint32_t>(vertices.size() / 3);
         for (std::size_t k = 0; k < templateCount; k++) {
             std::int16_t sx = 0, sy = 0;
             const std::uint8_t* at = templateAttr.data.data + k * templateAttr.desc.stride;
@@ -1960,7 +1962,7 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
             }
         }
         for (std::size_t k = 0; k < templateIndexCount; k++) {
-            indexes.push_back(static_cast<std::uint16_t>(corner + templateIndexes[k]));
+            indexes.push_back(corner + templateIndexes[k]);
         }
     }
     if (indexes.empty()) {
@@ -2029,9 +2031,12 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
     }
 
     const auto indexCount = static_cast<std::uint32_t>(indexes.size());
+    // Half the bytes when every corner fits in sixteen bits, which is most tiles.
+    const bool narrow = vertexCount <= std::size_t{std::numeric_limits<std::uint16_t>::max()} + 1;
     auto* built_indexes = filament::IndexBuffer::Builder()
                               .indexCount(indexCount)
-                              .bufferType(filament::IndexBuffer::IndexType::USHORT)
+                              .bufferType(narrow ? filament::IndexBuffer::IndexType::USHORT
+                                                 : filament::IndexBuffer::IndexType::UINT)
                               .build(*engine_);
     if (built_indexes == nullptr) {
         for (auto* object : owned) {
@@ -2040,7 +2045,8 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
         engine_->destroy(built);
         return false;
     }
-    const std::size_t indexBytes = indexes.size() * sizeof(std::uint16_t);
+    const std::size_t indexBytes =
+        indexes.size() * (narrow ? sizeof(std::uint16_t) : sizeof(std::uint32_t));
     auto* ownedIndexes = static_cast<std::uint8_t*>(std::malloc(indexBytes));
     if (ownedIndexes == nullptr) {
         for (auto* object : owned) {
@@ -2050,7 +2056,14 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
         engine_->destroy(built);
         return false;
     }
-    std::memcpy(ownedIndexes, indexes.data(), indexBytes);
+    if (narrow) {
+        for (std::size_t k = 0; k < indexes.size(); k++) {
+            const auto index = static_cast<std::uint16_t>(indexes[k]);
+            std::memcpy(ownedIndexes + k * sizeof index, &index, sizeof index);
+        }
+    } else {
+        std::memcpy(ownedIndexes, indexes.data(), indexBytes);
+    }
     built_indexes->setBuffer(*engine_,
                              filament::IndexBuffer::BufferDescriptor(
                                  ownedIndexes, indexBytes,
