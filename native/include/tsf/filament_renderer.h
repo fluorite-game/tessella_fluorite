@@ -374,12 +374,21 @@ private:
     /// is left owning only what the child does not cover.
     void writeMasks();
 
-    /// The stencil reference a tile's geometry tests against, or zero if it has no mask.
-    [[nodiscard]] std::uint8_t referenceFor(const TileID& tile) const;
+    /// What a tile's geometry tests the stencil against: a value, and the bits it compares.
+    struct StencilRef {
+        std::uint8_t value = 0;
+        std::uint8_t mask = 0xFF;
+    };
+
+    /// The stencil reference a tile's geometry tests against; a value of zero means it has no mask.
+    [[nodiscard]] StencilRef referenceFor(const TileID& tile) const;
 
     /// The mask set the producer named, newest wins, keyed by tile.
     std::map<TileID, filament::math::mat4f> masks_;
-    std::map<TileID, std::uint8_t> references_;
+    /// Which tiles each layer group asked to be clipped against. A finer tile clears its
+    /// ancestors' bits only where the same group holds both -- see `writeMasks`.
+    std::map<std::int32_t, std::set<TileID>> maskGroups_;
+    std::map<TileID, StencilRef> references_;
     filament::Material* maskMaterial_ = nullptr;
     std::vector<filament::MaterialInstance*> maskInstances_;
     filament::VertexBuffer* maskVertices_ = nullptr;
