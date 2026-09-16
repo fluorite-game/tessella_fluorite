@@ -397,6 +397,20 @@ private:
     /// This frame's bend coefficients, by tile, harvested from the queued batches before the
     /// masks are written. A mask's own record carries only a placement matrix.
     std::map<TileID, std::array<filament::math::float4, 6>> tileBends_;
+    /// The raised mask, for a tile whose drawables stand on the terrain.
+    ///
+    /// A flat mask is the tile's square at height zero, which is not where a raised tile is: the
+    /// stencil then admits a drawable only where its raised self overlaps its flat footprint, and
+    /// the ground shows through the rest.
+    filament::Material* maskTerrainMaterial_ = nullptr;
+    /// How a tile's drawables are raised, harvested before the masks are written so its mask can
+    /// be raised the same way -- the counterpart of `tileBends_`.
+    struct TileTerrain {
+        std::uint64_t elevation = 0;
+        filament::math::float4 unpack{};
+        filament::math::float4 params{};
+    };
+    std::map<TileID, TileTerrain> tileTerrain_;
     struct MaskGrid {
         filament::VertexBuffer* vertices = nullptr;
         filament::IndexBuffer* indices = nullptr;
