@@ -6,9 +6,11 @@
 // places them -- the same change `hillshade_terrain.mat` makes, and for the same reason: a layer
 // standing on the ground has to agree with the ground about where the ground is.
 //
-// This family is the one that already holds what it needs. Its `image` *is* the raw elevation,
-// because coloring a height is what a relief does, so the displacement reads the picture the
-// fragment stage was going to read anyway and no second sampler is bound.
+// Its `image` is the raw elevation, because coloring a height is what a relief does, and it is
+// still what the fragment stage colors by. It is not what the vertex stage raises by. The image is
+// this tile's own, at the zoom a relief is shaded at; the ground is covered a level coarser, and
+// every layer on it has to stand on the one height field the ground is drawn from. So the height
+// comes from the ground's elevation, read the way every other raised family reads it.
 
 material {
     name : tessella_color_relief_terrain,
@@ -26,8 +28,9 @@ material {
         { type : sampler2d, name : image },
         { type : sampler2d, name : elevationStops },
         { type : sampler2d, name : colorStops },
-        // How to read a height for the displacement: the sampling pair, the exaggeration and the
-        // skirt, from the block the ground itself reads. See `terrain.mat`.
+        // The ground's elevation, and how to read a height from it: the sampling pair and the
+        // exaggeration, from the block the ground itself reads. See `terrain.mat`.
+        { type : sampler2d, name : elevation },
         { type : float4,    name : params },
         // The skirt, in meters, and three spare. Only the ground reads it.
         { type : float4,    name : skirt }
@@ -37,6 +40,8 @@ material {
 }
 
 vertex {
+#include "terrain_height.glsl"
+
     void materialVertex(inout MaterialVertexInputs material) {
         vec2 position = getPosition().xy;
         // Scaled and offset into the tile's own square inside the padded image: the border ring
@@ -45,21 +50,10 @@ vertex {
         float scale = (materialParams.dimension.x - 2.0) / materialParams.dimension.x;
         vec2 uv = (getCustom0().xy / 8192.0) * scale + epsilon;
         material.reliefUv = vec4(uv, 0.0, 0.0);
-        // The ground's height here, sampled the way `terrain.mat` samples it rather than the way
-        // the fragment below reads this same picture. The two arithmetics are not the same: the
-        // relief maps the tile's interior edge to edge, while a displacement has to land on the
-        // *surface*, which places a DEM cell at its own center. Read the other way a relief would
-        // sit half a cell off the ground it colors.
-        //
-        // No second sampler: this family's `image` already is the raw elevation, which is what a
-        // relief colors. A hillshade needs one because its own picture is a slope field.
-        vec3 channels = texture(materialParams_image,
-                                position * materialParams.params.x + materialParams.params.yz).rgb
-                      * 255.0;
-        float height = (channels.r * materialParams.unpack.r
-                      + channels.g * materialParams.unpack.g
-                      + channels.b * materialParams.unpack.b
-                      - materialParams.unpack.a) * materialParams.params.w;
+        // The ground's height, as every raised family reads it. The relief's own picture maps
+        // the tile's interior edge to edge for the fragment above; a displacement has to land on
+        // the surface, and the surface is the ground's.
+        float height = terrainHeight(position);
         material.worldPosition = materialParams.matrix * vec4(position, height, 1.0);
     }
 }

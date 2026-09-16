@@ -1484,10 +1484,10 @@ void FilamentRenderer::writeMasks() {
         instance->setStencilOpDepthStencilPass(filament::MaterialInstance::StencilOperation::REPLACE);
 
         // The bend, from the same data the geometry it clips is drawn through.
-        // A raised mask on the grid its drawables are split on, which is the terrain mesh's own:
-        // `tessella_layout::terrain::MESH_SIZE`, and what `Map::surface` hands every tile of a
-        // terrain style. Same grid, same height read, so the mask's edge is the same chord as
-        // theirs.
+        // A raised mask on the terrain mesh's own grid, `tessella_layout::terrain::MESH_SIZE`.
+        // Layers on it are split at most this finely and coarser where the ground is smooth --
+        // `Relief::cells_within` coarsens only while a cell's chord stays within half a pixel of
+        // the surface -- so the mask's edge is within that half pixel of theirs.
         constexpr std::uint32_t kTerrainMaskCells = 128;
         const bool gridded = bent || raisedMask;
         const MaskGrid grid = bent         ? maskGrid(kGlobeMaskCells)
@@ -3495,22 +3495,22 @@ void FilamentRenderer::issue(const Batch& batch) {
             instance->setParameter("skirt",
                                    filament::math::float4{block.skirt[0], block.skirt[1],
                                                           block.skirt[2], block.skirt[3]});
-            // The elevation, for a variant that needs one. Not every one does: a color relief's
-            // own picture *is* the raw elevation, because coloring a height is what it draws, so
-            // its variant reads that and the producer sends no second reference. Bound only when
-            // there is one, because Filament panics on a parameter a material does not declare.
-            if (mesh->second.elevation != 0) {
-                const auto height = textures_.find(mesh->second.elevation);
-                if (height == textures_.end()) {
-                    missingAtlas_++;
-                    continue;
-                }
-                instance->setParameter(
-                    "elevation", height->second,
-                    filament::TextureSampler(filament::TextureSampler::MinFilter::LINEAR,
-                                             filament::TextureSampler::MagFilter::LINEAR,
-                                             filament::TextureSampler::WrapMode::CLAMP_TO_EDGE));
+            // The ground's elevation, which every raised family reads its height from -- a color
+            // relief included, whose own picture is the DEM at the zoom it is shaded at rather
+            // than the ground's. Without one there is no height to raise by, so the drawable is
+            // counted and not drawn rather than drawn from an unbound sampler.
+            const auto height = mesh->second.elevation == 0
+                                    ? textures_.end()
+                                    : textures_.find(mesh->second.elevation);
+            if (height == textures_.end()) {
+                missingAtlas_++;
+                continue;
             }
+            instance->setParameter(
+                "elevation", height->second,
+                filament::TextureSampler(filament::TextureSampler::MinFilter::LINEAR,
+                                         filament::TextureSampler::MagFilter::LINEAR,
+                                         filament::TextureSampler::WrapMode::CLAMP_TO_EDGE));
         }
 
         // A puck's three pictures. Its own texture each, not an atlas rectangle: the quad's
