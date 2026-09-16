@@ -1,0 +1,75 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The fill family, standing on the terrain under it.
+//
+// `fill.mat` with the polygon's vertices lifted to the ground's height. This is the first family
+// raised from a DEM whose tile is not its own *and* whose flat material never had a matrix:
+// a plain fill lets Filament apply the renderable's transform and writes no world position at
+// all. A raised one cannot -- the height comes out of a texture read in the vertex stage, so the
+// matrix has to be inside the shader to receive it -- which is why this declares one and the
+// consumer gives a raised drawable the identity transform, the way it does a bent one.
+//
+// # Why the polygon has enough vertices to follow a hill
+//
+// Earcut gives a fill triangles as large as the polygon allows: one triangle can span a whole
+// tile, and three corners raised onto a ridge leave everything between them cutting through it.
+// What saves this is the subdivision already built for the globe -- `tessella_layout::subdivide`
+// against a grid, T-junction free -- which a terrain style drives at the DEM's own resolution.
+// The same mechanism, for the same reason, against a different surface.
+material {
+    name : tessella_fill_terrain,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    constants : [
+        // The permutation, as mbgl's `HAS_UNIFORM_u_*` defines but resolved when the material is
+        // built rather than when it is compiled. False is the uniform form, so a package built
+        // without specializing is the constant-paint one.
+        { name : colorFromAttribute,   type : bool, default : false },
+        { name : opacityFromAttribute, type : bool, default : false }
+    ],
+    parameters : [
+        { type : float4,    name : color },
+        { type : float,     name : opacity },
+        // The frame's zoom-mix factors for the two data-driven properties, from `FillDrawableUBO`.
+        { type : float,     name : colorT },
+        { type : float,     name : opacityT },
+        // Tile-local to clip, which the flat material does not carry. At this drawable's own
+        // sub-layer, so the depth offset that sorts a fill against its outline is in it.
+        { type : mat4,      name : matrix },
+        // The raise block, which the consumer sends to every drawable it marked raised. The
+        // elevation is a second texture: a fill is on a vector tile and has no DEM of its own.
+        { type : sampler2d, name : elevation },
+        { type : float4,    name : unpack },
+        { type : float4,    name : params },
+        // Unread here -- only the ground has a skirt -- and declared because the one raise path
+        // sets it for every variant, and Filament panics on a parameter a material lacks.
+        { type : float4,    name : skirt }
+    ],
+    requires : [ position, custom0, custom1 ],
+    variables : [ paint ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = variable_paint;
+    }
+}
+
+vertex {
+#include "fill_paint.glsl"
+#include "terrain_height.glsl"
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        // The layer's paint, or this feature's. `requires` names both attributes whichever it
+        // is, because the list is baked into the package and Filament refuses a primitive whose
+        // vertex buffer does not declare what its material requires; the consumer points the
+        // slots a constant-paint drawable does not fill at one shared zero buffer.
+        material.paint = resolveFillPaint();
+
+        vec2 position = getPosition().xy;
+        material.worldPosition =
+            materialParams.matrix * vec4(position, terrainHeight(position), 1.0);
+    }
+}

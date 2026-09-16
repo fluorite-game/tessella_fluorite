@@ -1,0 +1,143 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The triangulated fill-outline family, on the terrain its fill stands on.
+//
+// `fill_outline_triangulated.mat` with the ring lifted to the ground's height. The widening is
+// left exactly where it is: the quad is extruded in tile units *before* the matrix, along a
+// normal lying in the tile plane, so it widens along the ground rather than into it, and lifting
+// the center carries the extruded pair with it.
+//
+// The screen-space correction below is unaffected for the same reason. It measures how much
+// perspective squashed a direction in the tile plane, and that direction has not changed -- only
+// the point it is taken from has moved up.
+material {
+    name : tessella_fill_outline_triangulated_terrain,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        // Tile-local to clip. Applied here rather than by the renderable's transform, because
+        // the extrusion happens in tile units *before* the tile-to-clip step.
+        { type : mat4,   name : matrix },
+        // The layer's `outline_color` and `opacity`, both constant on this path.
+        { type : float4, name : color },
+        { type : float,  name : opacity },
+        // Screen pixels per tile unit, inverted -- `FillOutlineTriangulatedDrawableUBO::ratio`.
+        { type : float,  name : ratio },
+        // The view's device pixel ratio. Sets how wide the feather is in device pixels: a denser
+        // display needs a narrower one, which is why mbgl divides by it rather than fixing 1px.
+        { type : float,  name : pixelRatio },
+        // Clip-space to pixels, `{width/2, -height/2}`. Only used to measure how much perspective
+        // stretched the extrusion, so the feather stays one pixel wide on a pitched map.
+        { type : float2, name : unitsToPixels },
+        // The raise block, sent to every drawable the producer marked raised. The elevation is a
+        // second texture: this family is on a vector tile and has no DEM of its own.
+        { type : sampler2d, name : elevation },
+        { type : float4,    name : unpack },
+        { type : float4,    name : params },
+        // Unread here -- only the ground has a skirt -- and declared because the one raise path
+        // sets it for every variant, and Filament panics on a parameter a material lacks.
+        { type : float4,    name : skirt }
+    ],
+    requires : [ position, custom0 ],
+    // normal.xy, the half-width the quad reaches in pixels, and the perspective correction.
+    variables : [ outlineEdge ]
+}
+
+vertex {
+#include "terrain_height.glsl"
+    void materialVertex(inout MaterialVertexInputs material) {
+        // mbgl's `LINE_NORMAL_SCALE`: the byte pair encodes a unit vector over 63.
+        const float EXTRUDE_SCALE = 63.0;
+
+        // The distance the edge fades out over. Half a device pixel each side.
+        float antialiasing = 1.0 / max(materialParams.pixelRatio, 1e-6) / 2.0;
+
+        vec2 posNormal = getPosition().xy;
+        vec2 center = floor(posNormal * 0.5);
+        vec2 normal = posNormal - 2.0 * center;
+        normal.y = normal.y * 2.0 - 1.0;
+
+        // a_data arrives as four unsigned bytes; the first two are the extrusion, biased by 128.
+        // Raw bytes, not normalized: the vertex buffer declares UBYTE4 without a normalize flag.
+        vec2 extrude = getCustom0().xy - 128.0;
+
+        // One pixel wide, which is mbgl's `const float width = 1.0` here -- the outline has no
+        // width property of its own. The feather is added outside it, so the quad is two pixels
+        // across and the fade has the room the line-primitive path lacked.
+        const float halfwidth = 0.5;
+        float outset = halfwidth + antialiasing;
+
+        vec2 dist = outset * extrude / EXTRUDE_SCALE;
+        float ratio = max(materialParams.ratio, 1e-6);
+
+        // Split into a point and a direction (`w` of 0, so only the linear part applies) because
+        // the projected direction is what says how much perspective squashed this edge.
+        // Raised at the polyline's center rather than at either extruded corner. A two-pixel
+        // ribbon spans a fraction of a DEM cell at any zoom this path is taken at, so the two
+        // corners would read the same texel anyway -- and reading once keeps the ribbon flat
+        // across its width instead of letting a texel boundary crease it.
+        vec4 placed = materialParams.matrix * vec4(center, terrainHeight(center), 1.0);
+        // The extrusion stays a direction in the tile plane, with no height in it: widening a
+        // ribbon along the ground is what makes it lie on the ground.
+        vec4 projectedExtrude = materialParams.matrix * vec4(dist / ratio, 0.0, 0.0);
+
+        // How far that extrusion actually reaches on screen, and what it takes to make it reach
+        // `outset` pixels again.
+        //
+        // # Why the quad is widened rather than only the fade
+        //
+        // A fill outline is not a line. It is the fill's antialiasing -- `fill-antialias` is what
+        // turns it on -- and its job is about a pixel of fade at the polygon's edge whatever the
+        // camera is doing. mbgl draws it as a two-pixel GL line (`constexpr auto lineWidth = 2.0f`
+        // in `render_fill_layer.cpp`), which is two pixels on screen at any pitch.
+        //
+        // This is mbgl's own fallback for backends with no line width -- Metal and WebGPU set
+        // `MLN_TRIANGULATE_FILL_OUTLINES`, and Filament exposes none either -- and the fallback
+        // builds the outline out of the *line layer's* machinery, which extrudes in tile units.
+        // Tile units are right for a road: a road lies on the ground and should foreshorten as it
+        // recedes. Antialiasing does not lie on the ground. mbgl's `v_gamma_scale` widens the
+        // fade to compensate, but a fade cannot spread further than the fragments the quad
+        // generates, so once the quad squashes below two pixels the coverage goes with it:
+        // measured against the oracle at 0.96 of its outline coverage at pitch 0, 0.75 at 40 and
+        // 0.58 at 60, which is a polygon edge that aliases again exactly where a pitched map
+        // needs it not to.
+        //
+        // Widening the extrusion puts the quad back at two pixels on screen, which is what the
+        // GL path -- the one the oracle and every shipped GL and Vulkan mbgl uses -- has all
+        // along. It also makes the fragment's own arithmetic true: `dist = length(normal) * width2`
+        // reads the half-width as `outset` pixels, which it was not while the quad was squashed.
+        //
+        // The fade then needs no compensation, so what used to be `gammaScale` travels as 1.
+        //
+        // Clamped because the factor is unbounded: an edge seen exactly along the extrusion
+        // direction projects to nothing and would balloon the quad across the frame. Sixteen is
+        // past any pitch a camera is allowed and still finite.
+        float unprojected = length(dist);
+        float projected = length(projectedExtrude.xy / placed.w * materialParams.unitsToPixels);
+        // Guarded: a zero-length extrusion would make this 0/0 and NaN the whole ring away.
+        float widen = min(unprojected / max(projected, 1e-6), 16.0);
+
+        material.outlineEdge = vec4(normal, outset, 1.0);
+        material.worldPosition = placed + projectedExtrude * widen;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 normal = variable_outlineEdge.xy;
+        float width2 = variable_outlineEdge.z;
+        float gammaScale = variable_outlineEdge.w;
+
+        // How far this pixel is from the center of the ring, in pixels, and the fade across the
+        // outer edge. `dist + blur2` is the inner edge of a line with no gap, which never bites.
+        float dist = length(normal) * width2;
+        float blur2 = (1.0 / max(materialParams.pixelRatio, 1e-6)) * gammaScale;
+        float alpha = clamp(min(dist + blur2, width2 - dist) / blur2, 0.0, 1.0);
+
+        // Premultiplied, matching the blending Filament is configured for.
+        material.baseColor = materialParams.color * (alpha * materialParams.opacity);
+    }
+}

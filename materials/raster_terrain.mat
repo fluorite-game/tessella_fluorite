@@ -43,20 +43,14 @@ material {
 }
 
 vertex {
+#include "terrain_height.glsl"
     void materialVertex(inout MaterialVertexInputs material) {
         vec2 position = getPosition().xy;
-        // The ground's height under this corner, read the way `terrain.mat` reads it. The uv pair
-        // is the *covering* DEM's: imagery is on its own source's tile, which is one square of a
-        // coarser DEM tile rather than the whole of one, and the producer folded that into these
-        // two offsets.
-        vec3 channels = texture(materialParams_elevation,
-                                position * materialParams.params.x + materialParams.params.yz).rgb
-                      * 255.0;
-        float height = (channels.r * materialParams.unpack.r
-                      + channels.g * materialParams.unpack.g
-                      + channels.b * materialParams.unpack.b
-                      - materialParams.unpack.a) * materialParams.params.w;
-        // The texture coordinates are int16 over 8192 rather than normalised floats, which is what
+        // The ground's height under this corner. The uv pair the include uses is the *covering*
+        // DEM's: imagery is on its own source's tile, which is one square of a coarser DEM tile
+        // rather than the whole of one, and the producer folded that into the offsets.
+        float height = terrainHeight(position);
+        // The texture coordinates are int16 over 8192 rather than normalized floats, which is what
         // gives a raster tile enough precision to be sampled at a fraction of a texel. 8192 is the
         // same EXTENT the position coordinates use, so the two scale together.
         vec2 texel = getCustom0().xy;
@@ -92,7 +86,7 @@ fragment {
                    dot(rgb, materialParams.spinWeights.zxy),
                    dot(rgb, materialParams.spinWeights.yzx));
 
-        // Saturation, toward or away from the pixel's own grey.
+        // Saturation, toward or away from the pixel's own gray.
         float average = (color.r + color.g + color.b) / 3.0;
         rgb += (average - rgb) * materialParams.saturationFactor;
 

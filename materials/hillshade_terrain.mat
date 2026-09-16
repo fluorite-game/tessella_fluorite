@@ -50,19 +50,12 @@ material {
 }
 
 vertex {
+#include "terrain_height.glsl"
     void materialVertex(inout MaterialVertexInputs material) {
         vec2 position = getPosition().xy;
-        // The ground's height at this corner, read the way `terrain.mat` reads it: the encoding's
-        // dot product over channels scaled back to bytes, times the style's exaggeration. No
-        // skirt -- this is a quad on the surface rather than the surface -- so `params.w` is
-        // unread here.
-        vec3 channels = texture(materialParams_elevation,
-                                position * materialParams.params.x + materialParams.params.yz).rgb
-                      * 255.0;
-        float height = (channels.r * materialParams.unpack.r
-                      + channels.g * materialParams.unpack.g
-                      + channels.b * materialParams.unpack.b
-                      - materialParams.unpack.a) * materialParams.params.w;
+        // The ground's height at this corner. No skirt: this is a quad on the surface rather
+        // than the surface.
+        float height = terrainHeight(position);
         // int16 over 8192, the same EXTENT the positions use, which is what gives the quad enough
         // precision to sample at a fraction of a texel.
         material.hillshadeUv = vec4(getCustom0().xy / 8192.0, 0.0, 0.0);
