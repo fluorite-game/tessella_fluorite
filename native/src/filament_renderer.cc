@@ -916,6 +916,19 @@ FilamentRenderer::FilamentRenderer(filament::Engine* engine,
         }
     }
 
+    // And the mask raised onto the terrain, for tiles whose drawables are. See `mask_terrain.mat`.
+    const auto terrainMaskPath = std::filesystem::path(materialDir) / "mask_terrain.filamat";
+    if (std::filesystem::exists(terrainMaskPath, ec)) {
+        std::ifstream file(terrainMaskPath, std::ios::binary);
+        const std::vector<std::uint8_t> package((std::istreambuf_iterator<char>(file)),
+                                                std::istreambuf_iterator<char>());
+        if (!package.empty()) {
+            maskTerrainMaterial_ = filament::Material::Builder()
+                                       .package(package.data(), package.size())
+                                       .build(*engine_);
+        }
+    }
+
     // The mask material is not a family: it draws the clip quads and writes only the stencil.
     const auto maskPath = std::filesystem::path(materialDir) / "mask.filamat";
     if (std::filesystem::exists(maskPath, ec)) {
@@ -1437,8 +1450,17 @@ void FilamentRenderer::writeMasks() {
         const bool anchoredMask = bent && maskAnchoredMaterial_ != nullptr
                                   && bendFor != tileBends_.end()
                                   && tile.z >= kAnchoredFromZoom;
+        // Raised where the tile's drawables are, and with the texture they read -- a mask with no
+        // elevation to sample cannot follow them, and stays flat rather than guessing.
+        const auto raisedFor = bent ? tileTerrain_.end() : tileTerrain_.find(tile);
+        const auto raisedHeight = raisedFor == tileTerrain_.end()
+                                      ? textures_.end()
+                                      : textures_.find(raisedFor->second.elevation);
+        const bool raisedMask = maskTerrainMaterial_ != nullptr && raisedHeight != textures_.end();
         auto* instance = (anchoredMask ? maskAnchoredMaterial_
-                                       : (bent ? maskGlobeMaterial_ : maskMaterial_))
+                          : bent       ? maskGlobeMaterial_
+                          : raisedMask ? maskTerrainMaterial_
+                                       : maskMaterial_)
                              ->createInstance();
         maskInstances_.push_back(instance);
         instance->setColorWrite(std::getenv("TSF_SHOW_MASKS") != nullptr);
@@ -1462,7 +1484,15 @@ void FilamentRenderer::writeMasks() {
         instance->setStencilOpDepthStencilPass(filament::MaterialInstance::StencilOperation::REPLACE);
 
         // The bend, from the same data the geometry it clips is drawn through.
-        const MaskGrid grid = bent ? maskGrid(kGlobeMaskCells) : MaskGrid{};
+        // A raised mask on the grid its drawables are split on, which is the terrain mesh's own:
+        // `tessella_layout::terrain::MESH_SIZE`, and what `Map::surface` hands every tile of a
+        // terrain style. Same grid, same height read, so the mask's edge is the same chord as
+        // theirs.
+        constexpr std::uint32_t kTerrainMaskCells = 128;
+        const bool gridded = bent || raisedMask;
+        const MaskGrid grid = bent         ? maskGrid(kGlobeMaskCells)
+                              : raisedMask ? maskGrid(kTerrainMaskCells)
+                                           : MaskGrid{};
         if (anchoredMask) {
             const auto& rows = bendFor->second;
             instance->setParameter("bendCenter",
@@ -1476,6 +1506,15 @@ void FilamentRenderer::writeMasks() {
         } else if (bent) {
             instance->setParameter("matrix", matrix);
             instance->setParameter("globeMatrix", globeMatrix_);
+        } else if (raisedMask) {
+            instance->setParameter("matrix", matrix);
+            instance->setParameter("unpack", raisedFor->second.unpack);
+            instance->setParameter("params", raisedFor->second.params);
+            instance->setParameter(
+                "elevation", raisedHeight->second,
+                filament::TextureSampler(filament::TextureSampler::MinFilter::LINEAR,
+                                         filament::TextureSampler::MagFilter::LINEAR,
+                                         filament::TextureSampler::WrapMode::CLAMP_TO_EDGE));
         }
 
         filament::RenderableManager::Builder builder(1);
@@ -1489,8 +1528,8 @@ void FilamentRenderer::writeMasks() {
             .priority(static_cast<std::uint8_t>(band + 1))
             .material(0, instance)
             .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
-                      bent ? grid.vertices : maskVertices_, bent ? grid.indices : maskIndices_, 0,
-                      bent ? grid.index_count : 6);
+                      gridded ? grid.vertices : maskVertices_,
+                      gridded ? grid.indices : maskIndices_, 0, gridded ? grid.index_count : 6);
         utils::Entity entity = utils::EntityManager::get().create();
         // A mask that failed to build is an entity with no renderable on it: adding it to the
         // scene draws nothing and leaves a destroy to do at teardown. Returned instead, and the
@@ -1502,9 +1541,10 @@ void FilamentRenderer::writeMasks() {
         }
         auto& transforms = engine_->getTransformManager();
         // A bent mask places itself through the material, as every bent drawable does: its matrix
-        // reaches normalized Mercator, which Filament's transform could not take it on from.
+        // reaches normalized Mercator, which Filament's transform could not take it on from. A
+        // raised one does too, because the height is read in the vertex stage.
         transforms.setTransform(transforms.getInstance(entity),
-                                bent ? filament::math::mat4f() : matrix);
+                                gridded ? filament::math::mat4f() : matrix);
         scene_->addEntity(entity);
         entities_.push_back(entity);
         masked_++;
@@ -1564,6 +1604,10 @@ FilamentRenderer::~FilamentRenderer() {
     if (maskGlobeMaterial_ != nullptr) {
         engine_->destroy(maskGlobeMaterial_);
         maskGlobeMaterial_ = nullptr;
+    }
+    if (maskTerrainMaterial_ != nullptr) {
+        engine_->destroy(maskTerrainMaterial_);
+        maskTerrainMaterial_ = nullptr;
     }
     for (auto& [cells, grid] : maskGrids_) {
         engine_->destroy(grid.vertices);
@@ -3007,6 +3051,64 @@ void FilamentRenderer::endFrame(std::uint64_t) {
             std::array<filament::math::float4, 6> copy{};
             std::copy(rows, rows + 6, copy.begin());
             tileBends_[mesh->second.tile] = copy;
+        }
+    }
+
+    // And which tiles are raised, from the same queued batches for the same reason: a raised
+    // drawable is clipped by its tile's mask, so the mask has to be raised the way it is. Every
+    // drawable on a tile is raised from the same ground, so any one of them says how.
+    tileTerrain_.clear();
+    if (projection_ != TSL_PROJECTION_MODE_GLOBE) {
+        for (const Batch& batch : pending_) {
+            const bool ground = batch.builtinShader == TSL_BUILTIN_TERRAIN_SHADER;
+            // Raised exactly as `issue` decides it: marked by the producer and a family with a
+            // variant to draw it. A flat drawable keeps a flat mask.
+            if (!ground
+                && !(batch.onTerrain && terrainMaterials_.count(batch.builtinShader) != 0)) {
+                continue;
+            }
+            const auto layer = uniforms_.find(
+                uniformKey(batch.view, static_cast<std::int32_t>(batch.layerIndex)));
+            if (layer == uniforms_.end()) {
+                continue;
+            }
+            const auto blocks = layer->second.find(TSL_UBO_ID_TERRAIN_DRAWABLE_UBO);
+            if (blocks == layer->second.end()) {
+                continue;
+            }
+            for (std::size_t i = 0; i < batch.geometries.size() && i < batch.uboIndexes.size();
+                 i++) {
+                const auto mesh = meshes_.find(batch.geometries[i]);
+                if (mesh == meshes_.end()) {
+                    continue;
+                }
+                const std::size_t at = static_cast<std::size_t>(batch.uboIndexes[i])
+                                       * TSL_STRIDE_TERRAIN_DRAWABLE_UBO;
+                if (at + TSL_STRIDE_TERRAIN_DRAWABLE_UBO > blocks->second.size()) {
+                    continue;
+                }
+                // The ground samples its own picture at slot zero; a layer on it, the ground's at
+                // the elevation slot.
+                const std::uint64_t elevation =
+                    ground ? mesh->second.texture : mesh->second.elevation;
+                if (elevation == 0) {
+                    continue;
+                }
+                struct Block {
+                    float matrix[16];
+                    float unpack[4];
+                    float color[4];
+                    float params[4];
+                    float skirt[4];
+                } block{};
+                static_assert(sizeof(Block) == TSL_STRIDE_TERRAIN_DRAWABLE_UBO,
+                              "the harvested block disagrees with the stride the producer emits");
+                std::memcpy(&block, blocks->second.data() + at, sizeof block);
+                tileTerrain_[mesh->second.tile] = TileTerrain{
+                    elevation,
+                    {block.unpack[0], block.unpack[1], block.unpack[2], block.unpack[3]},
+                    {block.params[0], block.params[1], block.params[2], block.params[3]}};
+            }
         }
     }
 
@@ -4648,7 +4750,10 @@ void FilamentRenderer::issue(const Batch& batch) {
                              static_cast<unsigned>(mesh->second.tile.y), boundable ? 1 : 0, l, b,
                              r, t, width_, height_);
             }
-            if (clipped && boundable && r > l && t > b && !noScissor) {
+            // Not for a raised drawable. The box is its tile's square at height zero, and a raised
+            // tile is not there, so it cut every drawable on the terrain back to its flat
+            // footprint. The raised mask clips the overhang exactly, which is the box's whole job.
+            if (clipped && boundable && r > l && t > b && !noScissor && !raised) {
                 instance->setScissor(
                     static_cast<std::uint32_t>(l), static_cast<std::uint32_t>(b),
                     static_cast<std::uint32_t>(r - l), static_cast<std::uint32_t>(t - b));

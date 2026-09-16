@@ -1,0 +1,54 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The clip mask, raised onto the terrain under its tile.
+//
+// `mask.mat`'s quad, lifted the way everything it clips is lifted. A mask drawn flat is the
+// tile's square at height zero, and a raised tile is not there: every drawable standing on the
+// ground was clipped back to where its tile would sit on a flat map, and the ground showed through
+// the difference -- a gap at every tile boundary that widened with the exaggeration, and the whole
+// of a layer raised from a coarser DEM cut away.
+//
+// Drawn on the grid the drawables are split on, with the same height read, so its edge is the
+// same chord their edges are. A mask on a coarser grid bulges past them or falls short, and cuts
+// a sliver off every tile.
+material {
+    name : tessella_mask_terrain,
+    shadingModel : unlit,
+    blending : opaque,
+    culling : none,
+    parameters : [
+        { type : float4,    name : color },
+        { type : float,     name : opacity },
+        // Tile-local to clip, the stencil record's own -- no layer bias, which a mask does not
+        // take part in.
+        { type : mat4,      name : matrix },
+        // The raise block of the tile's drawables, and the elevation they sample.
+        { type : sampler2d, name : elevation },
+        { type : float4,    name : unpack },
+        { type : float4,    name : params }
+    ],
+    requires : [ position ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec2 position = getPosition().xy;
+        // `terrain.mat`'s read: the encoding's dot product over channels scaled back to bytes,
+        // times the exaggeration. No skirt -- the mask covers the surface, not the seam under it.
+        vec3 channels = texture(materialParams_elevation,
+                                position * materialParams.params.x + materialParams.params.yz).rgb
+                      * 255.0;
+        float height = (channels.r * materialParams.unpack.r
+                      + channels.g * materialParams.unpack.g
+                      + channels.b * materialParams.unpack.b
+                      - materialParams.unpack.a) * materialParams.params.w;
+        material.worldPosition = materialParams.matrix * vec4(position, height, 1.0);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = vec4(0.0);
+    }
+}
