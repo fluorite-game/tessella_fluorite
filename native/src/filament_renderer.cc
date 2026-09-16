@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tsf/filament_renderer.h>
+#include <tsf/stencil_partition.h>
 
 #include <tessella_capture_abi.h>
 
@@ -20,6 +21,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <tuple>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -1177,12 +1179,13 @@ void FilamentRenderer::onStencilTiles(const StencilTiles& tiles) {
         filament::math::mat4f matrix;
         std::memcpy(&matrix, tile.matrix, sizeof matrix);
         masks_[id] = matrix;
+        maskGroups_[tiles.layerIndex].insert(id);
     }
 }
 
-std::uint8_t FilamentRenderer::referenceFor(const TileID& tile) const {
+FilamentRenderer::StencilRef FilamentRenderer::referenceFor(const TileID& tile) const {
     const auto found = references_.find(tile);
-    return found == references_.end() ? 0 : found->second;
+    return found == references_.end() ? StencilRef{} : found->second;
 }
 
 /// One subdivided unit quad, for a mask bent onto a sphere.
@@ -1413,13 +1416,25 @@ void FilamentRenderer::writeMasks() {
     // everywhere. Per tile it does the work it exists for: a tile's geometry runs well past its
     // own edge into the buffer that hides seams, and the mask is what stops that overhang painting
     // over the neighbour it overlaps.
-    std::uint8_t next = 1;
+    //
+    // Which bits each tile's mask writes and its geometry compares is `partitionStencil`'s to
+    // decide: a field of the byte per canonical zoom, so layer groups drawn at different zooms can
+    // clip in the one buffer this pass paints. See `tsf/stencil_partition.h`.
+    std::set<TileID> named;
     for (const auto& [tile, matrix] : masks_) {
-        if (next == 255) {
-            break;
+        named.insert(tile);
+    }
+    const StencilPartition partition = partitionStencil(named, maskGroups_);
+
+    for (const auto& [tile, matrix] : masks_) {
+        const auto assigned = partition.tiles.find(tile);
+        // Only the fallback leaves a tile out, past the 254th, and its geometry goes unclipped.
+        if (assigned == partition.tiles.end()) {
+            continue;
         }
-        const std::uint8_t reference = next++;
-        references_[tile] = reference;
+        const std::uint8_t reference = assigned->second.value;
+        const std::uint8_t writeMask = assigned->second.writeMask;
+        references_[tile] = StencilRef{reference, assigned->second.readMask};
         const auto band = static_cast<std::uint8_t>(
             std::min<int>(3, static_cast<int>(tile.overscaled_z) - coarsest));
 
@@ -1458,6 +1473,7 @@ void FilamentRenderer::writeMasks() {
         instance->setDepthCulling(bent);
         instance->setStencilWrite(true);
         instance->setStencilReferenceValue(reference);
+        instance->setStencilWriteMask(writeMask);
         instance->setStencilCompareFunction(filament::MaterialInstance::StencilCompareFunc::A);
         instance->setStencilOpDepthStencilPass(filament::MaterialInstance::StencilOperation::REPLACE);
 
@@ -1637,6 +1653,7 @@ void FilamentRenderer::beginFrame(std::uint64_t) {
     // and against which uniforms is the frame's own answer.
     clearScene();
     masks_.clear();
+    maskGroups_.clear();
     pending_.clear();
     renderables_ = 0;
     primitives_ = 0;
@@ -4458,13 +4475,16 @@ void FilamentRenderer::issue(const Batch& batch) {
         // paint the part outside the tile, which leaves depth with no colour -- a hole rather
         // than a slice. That asymmetry is why the prepass looked broken when it was first drawn.
         const bool clipped = mesh->second.clipped && !resolvesInDepth(batch.builtinShader);
-        const std::uint8_t reference = clipped ? referenceFor(mesh->second.tile) : 0;
+        const StencilRef stencil = clipped ? referenceFor(mesh->second.tile) : StencilRef{};
+        const std::uint8_t reference = stencil.value;
         if (clipped && reference == 0) {
             unmasked_++;
         }
         if (reference != 0 && !noStencil) {
             instance->setStencilWrite(false);
             instance->setStencilReferenceValue(impossibleRef ? 200 : reference);
+            // Only this tile's zoom's bits: the rest of the byte belongs to other zooms' masks.
+            instance->setStencilReadMask(impossibleRef ? 0xFF : stencil.mask);
             instance->setStencilCompareFunction(filament::MaterialInstance::StencilCompareFunc::E);
         }
 
