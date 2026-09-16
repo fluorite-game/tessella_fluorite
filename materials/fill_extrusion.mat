@@ -45,6 +45,9 @@ material {
         { type : mat4,   name : matrix },
         { type : float4, name : color },
         { type : float,  name : opacity },
+        // The layer's base and height, for a vertex whose own are NaN.
+        { type : float,  name : base },
+        { type : float,  name : height },
 
         { type : float3, name : lightColor },
         // Direction the light arrives from, already in the space the normal is in.
@@ -80,8 +83,21 @@ vertex {
         // single float reads zero into `y`, and its factor is zero too, so the mix reduces to
         // `x`. Reading `x` alone drew `["interpolate", ["linear"], ["zoom"], 15, 0, 16, ...]` at
         // its lower stop -- no height at all between 15 and 16.
-        float base = max(mix(getCustom1().x, getCustom1().y, materialParams.baseT), 0.0);
-        float height = max(mix(getCustom2().x, getCustom2().y, materialParams.heightT), 0.0);
+        //
+        // NaN marks a property the layer did not drive, as the walls mark theirs: the paint block
+        // is the source then, read per frame. The consumer used to copy that block into the
+        // vertices at upload, which froze a camera-driven constant at the zoom the tile arrived
+        // at, and laid every roof of a tile that arrived before the block on the ground.
+        vec4 lowerBase = getCustom1();
+        vec4 lowerHeight = getCustom2();
+        float base = max(lowerBase.x != lowerBase.x
+                             ? materialParams.base
+                             : mix(lowerBase.x, lowerBase.y, materialParams.baseT),
+                         0.0);
+        float height = max(lowerHeight.x != lowerHeight.x
+                               ? materialParams.height
+                               : mix(lowerHeight.x, lowerHeight.y, materialParams.heightT),
+                           0.0);
         float z = t > 0.0 ? height : base;
 
         // The fraction the position was packed with, seven bits an axis. Integer tile units make
