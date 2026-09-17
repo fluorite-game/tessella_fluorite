@@ -2166,24 +2166,15 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
             as_floats[i] = value;
         }
     };
-    // The layer's own evaluated value, which is what the shader would have read as a uniform.
-    float constantBase = 0.0f;
-    float constantHeight = 0.0f;
-    if (const auto layer = uniforms_.find(uniformKey(add.view, add.layerIndex));
-        layer != uniforms_.end()) {
-        if (const auto props = layer->second.find(kPropsSlot);
-            props != layer->second.end() && props->second.size() >= sizeof(tsl_fill_extrusion_props_ubo)) {
-            tsl_fill_extrusion_props_ubo paint{};
-            std::memcpy(&paint, props->second.data(), sizeof paint);
-            constantBase = paint.base;
-            constantHeight = paint.height;
-        }
-    }
+    // NaN for a property the layer did not drive, which sends the material to the paint block,
+    // as the walls do. Not the block's value copied in here: that is the value when the tile
+    // arrived, which is zero for a tile that arrives before the layer's first paint and stale
+    // for a height that follows the camera.
     if (base == nullptr) {
-        constantPair(baseFill, constantBase);
+        constantPair(baseFill, std::numeric_limits<float>::quiet_NaN());
     }
     if (height == nullptr) {
-        constantPair(heightFill, constantHeight);
+        constantPair(heightFill, std::numeric_limits<float>::quiet_NaN());
     }
 
     auto* shared = zeroPaint(count);
@@ -4465,18 +4456,10 @@ void FilamentRenderer::issue(const Batch& batch) {
                 if (props->second.size() >= sizeof paint) {
                     std::memcpy(&paint, props->second.data(), sizeof paint);
                 }
-                if (batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER) {
-                    // Nothing: the roof reads base and height per vertex. The zoom-mix factors in
-                    // the drawable block are for a height that interpolates across zooms, which
-                    // arrives as a `FLOAT2` pair; this reads the single-component form and would
-                    // need both to serve that case.
-                } else {
-                    // The walls still take theirs as uniforms: `encode_extrusion_walls` does not
-                    // put the data-driven attributes on the wire, so there is nothing per instance
-                    // to read and this is the layer's evaluated value or nothing.
-                    instance->setParameter("base", paint.base);
-                    instance->setParameter("height", paint.height);
-                }
+                // The layer's evaluated base and height, which roofs and walls both read where
+                // their per-vertex value is NaN -- a property the layer does not drive.
+                instance->setParameter("base", paint.base);
+                instance->setParameter("height", paint.height);
                 instance->setParameter("lightIntensity", paint.light_intensity);
                 instance->setParameter("verticalGradient", paint.vertical_gradient);
                 instance->setParameter(
