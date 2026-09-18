@@ -491,6 +491,9 @@ private:
         std::uint64_t elevation = 0;
         filament::math::float4 unpack{};
         filament::math::float4 params{};
+        /// The ground under the camera's center, in meters. The raised mask subtracts it exactly
+        /// as the drawables it clips do, or it stands at a height they left.
+        float center = 0.0f;
     };
     std::map<TileID, TileTerrain> tileTerrain_;
     struct MaskGrid {

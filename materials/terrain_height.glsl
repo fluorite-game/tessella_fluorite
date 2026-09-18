@@ -28,5 +28,13 @@ float terrainHeight(vec2 position) {
                  + channels.g * materialParams.unpack.g
                  + channels.b * materialParams.unpack.b
                  - materialParams.unpack.a;
-    return meters * materialParams.params.w;
+    // Relative to the ground under the camera's center, which `skirt.y` carries. The camera sits
+    // a fixed distance above the *plane*, and a height in meters reaches the screen multiplied by
+    // pixels-per-meter -- which doubles every zoom level. Measured from sea level the ground
+    // climbs towards a camera that does not climb with it and eventually passes it, and a camera
+    // underground draws the background. Measured from the center's own ground it cannot.
+    //
+    // Subtracted before the exaggeration rather than after: the exaggeration stretches the relief
+    // about the center, so a flat exaggeration of anything leaves the center where it is.
+    return (meters - materialParams.skirt.y) * materialParams.params.w;
 }
