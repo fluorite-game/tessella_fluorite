@@ -765,13 +765,15 @@ struct Slab {
     const std::uint8_t* data;
     /// How many to copy, padded to what the widest attribute on it reads.
     std::size_t bytes;
+    /// Which published run they are, for deciding whether two drawables share a GPU copy.
+    tsl_slab_ref ref{};
 };
 
 class Slabs {
 public:
     /// The index for a slab, allocated on first sight.
     std::uint8_t of(const std::uint8_t* data, std::size_t bytes, std::uint32_t vertices,
-                    std::uint32_t stride, std::size_t declaredBytes) {
+                    std::uint32_t stride, std::size_t declaredBytes, const tsl_slab_ref& ref) {
         const std::size_t span =
             vertices == 0 ? bytes
                           : static_cast<std::size_t>(vertices - 1) * stride
@@ -782,14 +784,14 @@ public:
                 return static_cast<std::uint8_t>(i);
             }
         }
-        entries_.push_back({data, std::max(bytes, span)});
+        entries_.push_back({data, std::max(bytes, span), ref});
         return static_cast<std::uint8_t>(entries_.size() - 1);
     }
 
     /// The index for the shared zero buffer, which carries no bytes of its own.
     std::uint8_t zero() {
         if (!zero_) {
-            entries_.push_back({nullptr, 0});
+            entries_.push_back({nullptr, 0, {}});
             zero_ = true;
             zeroAt_ = static_cast<std::uint8_t>(entries_.size() - 1);
         }
@@ -1575,11 +1577,23 @@ FilamentRenderer::~FilamentRenderer() {
     instances_.clear();
     for (auto& [id, mesh] : meshes_) {
         engine_->destroy(mesh.vertices);
-        engine_->destroy(mesh.indices);
+        // A shared upload belongs to the cache below, and several meshes point at each one:
+        // destroyed here it would go once per mesh that named it.
+        if (!mesh.sharedIndices.has_value()) {
+            engine_->destroy(mesh.indices);
+        }
         for (auto* object : mesh.ownedBuffers) {
             engine_->destroy(object);
         }
     }
+    for (auto& [key, held] : sharedVertexBuffers_) {
+        engine_->destroy(held.object);
+    }
+    sharedVertexBuffers_.clear();
+    for (auto& [key, held] : sharedIndexBuffers_) {
+        engine_->destroy(held.object);
+    }
+    sharedIndexBuffers_.clear();
     // Before the materials the permutations were specialized from -- Filament refuses to destroy
     // a material an instance still points at, and an instance was made against the permutation.
     for (auto& [key, material] : permuted_) {
@@ -2425,10 +2439,12 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
     // Nine attributes over four indexes, where Filament admits eight.
     Slabs slabs;
     const auto fixed = slabs.of(posOffset->data.data, posOffset->data.size, count,
-                                posOffset->desc.stride, 0);
+                                posOffset->desc.stride, 0, posOffset->desc.source);
     const auto placedAt =
+        // Built here rather than published, so it names no slab and is never shared: a
+        // symbol's placed positions carry the camera and belong to this drawable alone.
         slabs.of(reinterpret_cast<const std::uint8_t*>(placed.data()),
-                 placed.size() * sizeof(float), count, sizeof(float) * 4, sizeof(float) * 4);
+                 placed.size() * sizeof(float), count, sizeof(float) * 4, sizeof(float) * 4, {});
     std::vector<std::uint8_t> at(paintCount, 0);
     for (std::size_t i = 0; i < paintCount; i++) {
         const PaintSlot& slot = paintSlots[i];
@@ -2438,7 +2454,7 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
         supplied[i] = present ? attribute : nullptr;
         if (present) {
             at[i] = slabs.of(attribute->data.data, attribute->data.size, count,
-                             attribute->desc.stride, slot.declaredBytes);
+                             attribute->desc.stride, slot.declaredBytes, attribute->desc.source);
             paintMask |= 1u << slot.bit;
         } else {
             at[i] = slabs.zero();
@@ -2453,12 +2469,13 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
                    filament::VertexBuffer::AttributeType::SHORT4, posOffset->desc.offset,
                    posOffset->desc.stride)
         .attribute(filament::VertexAttribute::CUSTOM0,
-                   slabs.of(data->data.data, data->data.size, count, data->desc.stride, 0),
+                   slabs.of(data->data.data, data->data.size, count, data->desc.stride, 0,
+                            data->desc.source),
                    filament::VertexBuffer::AttributeType::USHORT4, data->desc.offset,
                    data->desc.stride)
         .attribute(filament::VertexAttribute::CUSTOM1,
                    slabs.of(pixelOffset->data.data, pixelOffset->data.size, count,
-                            pixelOffset->desc.stride, 0),
+                            pixelOffset->desc.stride, 0, pixelOffset->desc.source),
                    filament::VertexBuffer::AttributeType::SHORT4, pixelOffset->desc.offset,
                    pixelOffset->desc.stride)
         .attribute(filament::VertexAttribute::CUSTOM2, placedAt,
@@ -2482,9 +2499,13 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
         return false;
     }
     std::vector<filament::BufferObject*> owned;
-    if (!uploadSlabs(slabs, count, *vertices, owned)) {
+    std::vector<SlabKey> sharedKeys;
+    if (!uploadSlabs(slabs, count, *vertices, owned, sharedKeys)) {
         for (auto* object : owned) {
             engine_->destroy(object);
+        }
+        for (const SlabKey& key : sharedKeys) {
+            releaseVertices(key);
         }
         engine_->destroy(vertices);
         return false;
@@ -2503,6 +2524,9 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
         for (auto* object : owned) {
             engine_->destroy(object);
         }
+        for (const SlabKey& key : sharedKeys) {
+            releaseVertices(key);
+        }
         engine_->destroy(vertices);
         return false;
     }
@@ -2510,6 +2534,9 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
     if (ownedIndexes == nullptr) {
         for (auto* object : owned) {
             engine_->destroy(object);
+        }
+        for (const SlabKey& key : sharedKeys) {
+            releaseVertices(key);
         }
         engine_->destroy(indices);
         engine_->destroy(vertices);
@@ -2544,6 +2571,12 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
     meshes_[add.id].colour = add.enableColor;
     meshes_[add.id].paintMask = paintMask;
     meshes_[add.id].ownedBuffers = std::move(owned);
+    // The shares this mesh took, so retiring it gives them back. Left off, a symbol's published
+    // slabs would be uploaded once and then held for the life of the process: the count never
+    // reaches zero, so the copy is never destroyed and the run never leaves the cache -- and a
+    // slot the producer later hands out again would be answered with the bytes that used to be
+    // there.
+    meshes_[add.id].sharedBuffers = std::move(sharedKeys);
     return true;
 }
 
@@ -2604,9 +2637,97 @@ filament::Material* FilamentRenderer::materialFor(std::int32_t family, std::uint
     return built != nullptr ? built : (base == table.end() ? nullptr : base->second);
 }
 
+filament::BufferObject* FilamentRenderer::shareVertices(const SlabKey& key,
+                                                       const std::uint8_t* data) {
+    auto& held = sharedVertexBuffers_[key];
+    if (held.object != nullptr) {
+        held.users++;
+        sharedUploads_++;
+        sharedBytes_ += key.bytes;
+        return held.object;
+    }
+    auto* object = filament::BufferObject::Builder()
+                       .size(static_cast<std::uint32_t>(key.bytes))
+                       .bindingType(filament::BufferObject::BindingType::VERTEX)
+                       .build(*engine_);
+    // Zeroed rather than merely allocated: `bytes` may exceed what the producer sent, and the
+    // tail is what a wide read past the last vertex lands in.
+    auto* copy = object == nullptr ? nullptr : static_cast<std::uint8_t*>(std::calloc(key.bytes, 1));
+    if (copy == nullptr) {
+        if (object != nullptr) {
+            engine_->destroy(object);
+        }
+        sharedVertexBuffers_.erase(key);
+        return nullptr;
+    }
+    std::memcpy(copy, data, key.bytes);
+    object->setBuffer(*engine_,
+                      filament::BufferObject::BufferDescriptor(
+                          copy, key.bytes, [](void* buffer, std::size_t, void*) {
+                              std::free(buffer);
+                          }));
+    held.object = object;
+    held.users = 1;
+    return object;
+}
+
+void FilamentRenderer::releaseVertices(const SlabKey& key) {
+    const auto found = sharedVertexBuffers_.find(key);
+    if (found == sharedVertexBuffers_.end()) {
+        return;
+    }
+    if (--found->second.users == 0) {
+        engine_->destroy(found->second.object);
+        sharedVertexBuffers_.erase(found);
+    }
+}
+
+filament::IndexBuffer* FilamentRenderer::shareIndices(const SlabKey& key,
+                                                     const std::uint8_t* data,
+                                                     std::uint32_t count) {
+    auto& held = sharedIndexBuffers_[key];
+    if (held.object != nullptr) {
+        held.users++;
+        sharedUploads_++;
+        sharedBytes_ += key.bytes;
+        return held.object;
+    }
+    auto* buffer = filament::IndexBuffer::Builder()
+                       .indexCount(count)
+                       .bufferType(filament::IndexBuffer::IndexType::USHORT)
+                       .build(*engine_);
+    auto* owned = buffer == nullptr ? nullptr : static_cast<std::uint8_t*>(std::malloc(key.bytes));
+    if (owned == nullptr) {
+        if (buffer != nullptr) {
+            engine_->destroy(buffer);
+        }
+        sharedIndexBuffers_.erase(key);
+        return nullptr;
+    }
+    std::memcpy(owned, data, key.bytes);
+    buffer->setBuffer(*engine_, filament::IndexBuffer::BufferDescriptor(
+                                    owned, key.bytes,
+                                    [](void* b, std::size_t, void*) { std::free(b); }));
+    held.object = buffer;
+    held.users = 1;
+    return buffer;
+}
+
+void FilamentRenderer::releaseIndices(const SlabKey& key) {
+    const auto found = sharedIndexBuffers_.find(key);
+    if (found == sharedIndexBuffers_.end()) {
+        return;
+    }
+    if (--found->second.users == 0) {
+        engine_->destroy(found->second.object);
+        sharedIndexBuffers_.erase(found);
+    }
+}
+
 bool FilamentRenderer::uploadSlabs(const Slabs& slabs, std::uint32_t vertices,
                                    filament::VertexBuffer& into,
-                                   std::vector<filament::BufferObject*>& owned) {
+                                   std::vector<filament::BufferObject*>& owned,
+                                   std::vector<SlabKey>& sharedKeys) {
     filament::BufferObject* shared = nullptr;
     for (std::size_t i = 0; i < slabs.entries().size(); i++) {
         const Slab& slab = slabs.entries()[i];
@@ -2618,6 +2739,20 @@ bool FilamentRenderer::uploadSlabs(const Slabs& slabs, std::uint32_t vertices,
                 }
             }
             into.setBufferObjectAt(*engine_, static_cast<std::uint8_t>(i), shared);
+            continue;
+        }
+        // Published bytes are uploaded once and shared by every drawable that names them: a
+        // terrain's ground is the same mesh on every tile, and a whole-tile raster quad the same
+        // quad. A run the producer did not publish -- a symbol's placed positions, built here --
+        // has no reference and belongs to this drawable alone.
+        const SlabKey key{slab.ref.slab, slab.ref.offset, slab.bytes};
+        if (slab.ref.length != 0) {
+            auto* object = shareVertices(key, slab.data);
+            if (object == nullptr) {
+                return false;
+            }
+            into.setBufferObjectAt(*engine_, static_cast<std::uint8_t>(i), object);
+            sharedKeys.push_back(key);
             continue;
         }
         auto* object = filament::BufferObject::Builder()
@@ -2684,28 +2819,20 @@ filament::BufferObject* FilamentRenderer::zeroPaint(std::size_t vertices) {
     return zeroPaint_;
 }
 
-filament::IndexBuffer* FilamentRenderer::uploadIndices(const DrawableAdd& add) {
+filament::IndexBuffer* FilamentRenderer::uploadIndices(const DrawableAdd& add,
+                                                      std::optional<SlabKey>& sharedKey) {
     const auto count = static_cast<std::uint32_t>(add.indexes.size / sizeof(std::uint16_t));
     const auto* source = reinterpret_cast<const std::uint16_t*>(add.indexes.data);
     const bool split = std::any_of(add.segments.begin(), add.segments.end(),
                                    [](const tsl_segment& s) { return s.vertex_offset != 0; });
     if (!split) {
-        auto* buffer = filament::IndexBuffer::Builder()
-                           .indexCount(count)
-                           .bufferType(filament::IndexBuffer::IndexType::USHORT)
-                           .build(*engine_);
-        if (buffer == nullptr) {
-            return nullptr;
+        // The slab's own bytes, so every drawable naming them draws from one upload -- a terrain
+        // mesh's hundred thousand indices are the same hundred thousand on every tile.
+        const SlabKey key{add.indexesRef.slab, add.indexesRef.offset, add.indexes.size};
+        auto* buffer = shareIndices(key, add.indexes.data, count);
+        if (buffer != nullptr) {
+            sharedKey = key;
         }
-        auto* owned = static_cast<std::uint8_t*>(std::malloc(add.indexes.size));
-        if (owned == nullptr) {
-            engine_->destroy(buffer);
-            return nullptr;
-        }
-        std::memcpy(owned, add.indexes.data, add.indexes.size);
-        buffer->setBuffer(*engine_, filament::IndexBuffer::BufferDescriptor(
-                                        owned, add.indexes.size,
-                                        [](void* b, std::size_t, void*) { std::free(b); }));
         return buffer;
     }
 
@@ -2827,7 +2954,8 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
             supplied[i] = present ? attribute : nullptr;
             if (present) {
                 at[i] = slabs.of(attribute->data.data, attribute->data.size, add.vertexCount,
-                                 attribute->desc.stride, slot.declaredBytes);
+                                 attribute->desc.stride, slot.declaredBytes,
+                                 attribute->desc.source);
                 if (slot.bit >= 0) {
                     paintMask |= 1u << slot.bit;
                 }
@@ -2877,11 +3005,16 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
         }
 
         std::vector<filament::BufferObject*> owned;
-        const bool ok = uploadSlabs(slabs, add.vertexCount, *vertices, owned);
-        auto* indices = ok ? uploadIndices(add) : nullptr;
+        std::vector<SlabKey> sharedKeys;
+        std::optional<SlabKey> sharedIndices;
+        const bool ok = uploadSlabs(slabs, add.vertexCount, *vertices, owned, sharedKeys);
+        auto* indices = ok ? uploadIndices(add, sharedIndices) : nullptr;
         if (indices == nullptr) {
             for (auto* object : owned) {
                 engine_->destroy(object);
+            }
+            for (const SlabKey& key : sharedKeys) {
+                releaseVertices(key);
             }
             engine_->destroy(vertices);
             return;
@@ -2913,6 +3046,8 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
         mesh.colour = add.enableColor;
         mesh.clipped = add.enableStencil;
         mesh.paintMask = paintMask;
+        mesh.sharedBuffers = std::move(sharedKeys);
+        mesh.sharedIndices = sharedIndices;
         mesh.ownedBuffers = std::move(owned);
         meshes_[add.id] = std::move(mesh);
         return;
@@ -2972,7 +3107,8 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
     }
 
     const std::uint32_t indexCount = static_cast<std::uint32_t>(add.indexes.size / sizeof(std::uint16_t));
-    auto* indices = uploadIndices(add);
+    std::optional<SlabKey> sharedIndices;
+    auto* indices = uploadIndices(add, sharedIndices);
     if (indices == nullptr) {
         engine_->destroy(vertices);
         return;
@@ -2991,6 +3127,9 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
                            // one that stopped at slot one would also have zeroed `filter`.
                            textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE),
                            textureFor(add, kTerrainElevationSlot)};
+    // After the positional initializer, like every other field past the textures: this record
+    // is built by position and a field inserted among them takes the next one's value.
+    meshes_[add.id].sharedIndices = sharedIndices;
     meshes_[add.id].clipped = add.enableStencil;
     meshes_[add.id].colour = add.enableColor;
 }
@@ -3001,11 +3140,20 @@ void FilamentRenderer::onRetire(std::uint64_t id) {
         return;
     }
     engine_->destroy(found->second.vertices);
-    engine_->destroy(found->second.indices);
+    // Counted rather than destroyed where the upload is shared: another tile may still be drawing
+    // from it, and the last one to let go is what destroys it.
+    if (found->second.sharedIndices.has_value()) {
+        releaseIndices(*found->second.sharedIndices);
+    } else {
+        engine_->destroy(found->second.indices);
+    }
     // After the vertex buffer, which holds a reference to each of them. The shared zero buffer is
     // not in this list and outlives the mesh.
     for (auto* object : found->second.ownedBuffers) {
         engine_->destroy(object);
+    }
+    for (const SlabKey& key : found->second.sharedBuffers) {
+        releaseVertices(key);
     }
     meshes_.erase(found);
 }

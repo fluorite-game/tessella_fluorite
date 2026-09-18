@@ -101,6 +101,7 @@ void Reader::join(const Geometry& held, const tsl_view_use& use, FrameSink& sink
         out.enableDepth = (use.draw_flags & TSL_DRAW_FLAG_ENABLE_DEPTH) != 0;
         out.enableColor = (use.draw_flags & TSL_DRAW_FLAG_ENABLE_COLOR) != 0;
         out.indexes = resolve(held.record.indexes);
+        out.indexesRef = held.record.indexes;
         out.announcedAt = held.announcedAt;
 
         // The attribute descriptors live in the *add's* payload, which the ring has since

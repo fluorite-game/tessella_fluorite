@@ -294,6 +294,9 @@ int main(int argc, char** argv) {
     std::printf("scissored %llu\n", (unsigned long long)map->renderer().scissored());
     std::printf("unplaced %llu\n", (unsigned long long)map->renderer().unplaced());
     std::printf("wall_triangles %llu\n", (unsigned long long)map->renderer().walls());
+    std::printf("shared_uploads %llu\n", (unsigned long long)map->renderer().sharedUploads());
+    std::printf("shared_bytes %llu\n", (unsigned long long)map->renderer().sharedBytes());
+    std::printf("shared_geometries %zu\n", map->renderer().sharedGeometries());
     std::printf("textures %zu\n", map->renderer().textures());
     std::printf("texture_uploads %llu\n", (unsigned long long)map->renderer().textureUploads());
     std::printf("texture_skipped %llu\n", (unsigned long long)map->renderer().textureSkipped());

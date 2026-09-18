@@ -156,6 +156,12 @@ struct DrawableAdd {
 
     /// The index buffer, borrowed. `uint16` elements, as every shader here declares.
     Bytes indexes;
+    /// Where those bytes live, as the producer names them.
+    ///
+    /// Beside the resolved span rather than instead of it: the span is what is read, and this is
+    /// what says whether two drawables read the *same* bytes. A pointer cannot answer that across
+    /// frames, because compaction moves a slab within the region.
+    tsl_slab_ref indexesRef{};
     std::vector<tsl_segment> segments;
 
     /// Slot to texture id and sampler, for the slots this drawable's shader declares.
