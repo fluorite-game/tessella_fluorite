@@ -3121,15 +3121,6 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
     if (usable.empty()) {
         return;
     }
-    if (std::getenv("TSF_ATTR_LOG") && add.vertexCount > 1000) {
-        std::fprintf(stderr, "attrs shader=%d count=%zu:", add.builtinShader, usable.size());
-        for (const Attribute* a : usable) {
-            std::fprintf(stderr, " [id=%u off=%u stride=%u dt=%u bytes=%zu]", a->desc.attr_id,
-                         a->desc.offset, a->desc.stride, a->desc.data_type, a->data.size);
-        }
-        std::fprintf(stderr, "\n");
-    }
-
     filament::VertexBuffer::Builder builder;
     builder.vertexCount(static_cast<std::uint32_t>(add.vertexCount))
         .bufferCount(static_cast<std::uint8_t>(usable.size()));
