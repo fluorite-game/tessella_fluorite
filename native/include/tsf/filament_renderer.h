@@ -494,6 +494,8 @@ private:
         /// The ground under the camera's center, in meters. The raised mask subtracts it exactly
         /// as the drawables it clips do, or it stands at a height they left.
         float center = 0.0f;
+        /// How far the mask's own curtain hangs, which is the ground's skirt.
+        float skirt = 0.0f;
     };
     std::map<TileID, TileTerrain> tileTerrain_;
     struct MaskGrid {

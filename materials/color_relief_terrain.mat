@@ -35,7 +35,7 @@ material {
         // The skirt, in meters, and three spare. Only the ground reads it.
         { type : float4,    name : skirt }
     ],
-    requires : [ position, custom0 ],
+    requires : [ position, custom0, custom1 ],
     variables : [ reliefUv ]
 }
 
@@ -54,6 +54,12 @@ vertex {
         // the tile's interior edge to edge for the fragment above; a displacement has to land on
         // the surface, and the surface is the ground's.
         float height = terrainHeight(position);
+        // The curtain, as the ground has one: a flagged vertex takes the surface's height and
+        // then drops by the same skirt. Two tiles agree on a shared edge's world position and
+        // reach it through different matrices, so the two land a fraction of a pixel apart and
+        // the boundary pixels are claimed by neither -- on the ground that is a crack, and on a
+        // picture drawn over the ground it is the ground showing through. See `add_skirt`.
+        height -= getCustom1().x * materialParams.skirt.z;
         material.worldPosition = materialParams.matrix * vec4(position, height, 1.0);
     }
 }
