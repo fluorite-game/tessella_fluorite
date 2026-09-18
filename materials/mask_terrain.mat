@@ -28,9 +28,11 @@ material {
         { type : float4,    name : params },
         // The ground under the camera's center, in meters -- see `terrain_height.glsl`. The mask
         // has to stand where the surface stands, so it takes the same shift.
-        { type : float,     name : center }
+        { type : float,     name : center },
+        // How far the curtain hangs, in meters. See the note on the skirt in `terrain.mat`.
+        { type : float,     name : skirt }
     ],
-    requires : [ position ]
+    requires : [ position, custom0 ]
 }
 
 vertex {
@@ -46,6 +48,9 @@ vertex {
                       + channels.b * materialParams.unpack.b
                       - materialParams.unpack.a
                       - materialParams.center) * materialParams.params.w;
+        // And the curtain, which is the whole reason the grid carries a flag: a mask cut to the
+        // surface clips the skirt of every drawable it admits, and the seam stays open.
+        height -= getCustom0().x * materialParams.skirt;
         material.worldPosition = materialParams.matrix * vec4(position, height, 1.0);
     }
 }

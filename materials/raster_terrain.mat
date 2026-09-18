@@ -38,7 +38,7 @@ material {
         { type : float4,    name : params },
         { type : float4,    name : skirt }
     ],
-    requires : [ position, custom0 ],
+    requires : [ position, custom0, custom1 ],
     variables : [ rasterUv ]
 }
 
@@ -50,6 +50,12 @@ vertex {
         // DEM's: imagery is on its own source's tile, which is one square of a coarser DEM tile
         // rather than the whole of one, and the producer folded that into the offsets.
         float height = terrainHeight(position);
+        // The curtain, as the ground has one: a flagged vertex takes the surface's height and
+        // then drops by the same skirt. Two tiles agree on a shared edge's world position and
+        // reach it through different matrices, so the two land a fraction of a pixel apart and
+        // the boundary pixels are claimed by neither -- on the ground that is a crack, and on a
+        // picture drawn over the ground it is the ground showing through. See `add_skirt`.
+        height -= getCustom1().x * materialParams.skirt.z;
         // The texture coordinates are int16 over 8192 rather than normalized floats, which is what
         // gives a raster tile enough precision to be sampled at a fraction of a texel. 8192 is the
         // same EXTENT the position coordinates use, so the two scale together.

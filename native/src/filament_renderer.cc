@@ -1224,6 +1224,8 @@ FilamentRenderer::MaskGrid FilamentRenderer::maskGrid(const std::uint32_t cells)
             };
             points.push_back(at(column));
             points.push_back(at(row));
+            points.push_back(0);
+            points.push_back(0);
         }
     }
     std::vector<std::uint16_t> indices;
@@ -1241,14 +1243,65 @@ FilamentRenderer::MaskGrid FilamentRenderer::maskGrid(const std::uint32_t cells)
         }
     }
 
+    // The curtain, as the ground's mesh has one and as a raised raster now does. A mask is what
+    // admits a tile's drawables, so it has to reach wherever they draw: a skirt clipped to the
+    // surface the mask covers is a skirt that never draws, and the seam it exists to fill stays
+    // open. Four strips from the grid's edge, flagged, dropped in the shader by the same length.
+    {
+        const auto vertexAt = [&](std::uint32_t row, std::uint32_t column) {
+            return static_cast<std::uint16_t>(row * side + column);
+        };
+        const std::uint16_t first = static_cast<std::uint16_t>(points.size() / 4);
+        std::vector<std::vector<std::uint16_t>> edges;
+        std::vector<std::uint16_t> top;
+        std::vector<std::uint16_t> right;
+        std::vector<std::uint16_t> bottom;
+        std::vector<std::uint16_t> left;
+        for (std::uint32_t n = 0; n < side; ++n) {
+            top.push_back(vertexAt(0, n));
+            right.push_back(vertexAt(n, cells));
+            bottom.push_back(vertexAt(cells, n));
+            left.push_back(vertexAt(n, 0));
+        }
+        edges.push_back(top);
+        edges.push_back(right);
+        edges.push_back(bottom);
+        edges.push_back(left);
+        std::uint16_t next = first;
+        for (const std::vector<std::uint16_t>& edge : edges) {
+            const std::uint16_t start = next;
+            for (const std::uint16_t index : edge) {
+                points.push_back(points[static_cast<std::size_t>(index) * 4]);
+                points.push_back(points[static_cast<std::size_t>(index) * 4 + 1]);
+                points.push_back(1);
+                points.push_back(0);
+                ++next;
+            }
+            for (std::size_t step = 0; step + 1 < edge.size(); ++step) {
+                const std::uint16_t a = edge[step];
+                const std::uint16_t b = edge[step + 1];
+                const auto c = static_cast<std::uint16_t>(start + step);
+                const auto d = static_cast<std::uint16_t>(start + step + 1);
+                for (const std::uint16_t index : {a, b, d, a, d, c}) {
+                    indices.push_back(index);
+                }
+            }
+        }
+    }
+
     MaskGrid grid{};
     grid.index_count = static_cast<std::uint32_t>(indices.size());
     grid.vertices = filament::VertexBuffer::Builder()
-                        .vertexCount(static_cast<std::uint32_t>(points.size() / 2))
+                        .vertexCount(static_cast<std::uint32_t>(points.size() / 4))
                         .bufferCount(1)
                         .attribute(filament::VertexAttribute::POSITION, 0,
                                    filament::VertexBuffer::AttributeType::SHORT2, 0,
-                                   sizeof(std::int16_t) * 2)
+                                   sizeof(std::int16_t) * 4)
+                        // The skirt flag beside it. A flat mask declares no such attribute and
+                        // its curtain is a row of zero-area triangles on the tile's own edge.
+                        .attribute(filament::VertexAttribute::CUSTOM0, 0,
+                                   filament::VertexBuffer::AttributeType::SHORT2,
+                                   sizeof(std::int16_t) * 2, sizeof(std::int16_t) * 4)
                         .build(*engine_);
     const std::size_t vertexBytes = points.size() * sizeof(std::int16_t);
     auto* vertexCopy = new std::int16_t[points.size()];
@@ -1529,6 +1582,7 @@ void FilamentRenderer::writeMasks() {
             instance->setParameter("unpack", raisedFor->second.unpack);
             instance->setParameter("params", raisedFor->second.params);
             instance->setParameter("center", raisedFor->second.center);
+            instance->setParameter("skirt", raisedFor->second.skirt);
             instance->setParameter(
                 "elevation", raisedHeight->second,
                 filament::TextureSampler(filament::TextureSampler::MinFilter::LINEAR,
@@ -3067,6 +3121,14 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
     if (usable.empty()) {
         return;
     }
+    if (std::getenv("TSF_ATTR_LOG") && add.vertexCount > 1000) {
+        std::fprintf(stderr, "attrs shader=%d count=%zu:", add.builtinShader, usable.size());
+        for (const Attribute* a : usable) {
+            std::fprintf(stderr, " [id=%u off=%u stride=%u dt=%u bytes=%zu]", a->desc.attr_id,
+                         a->desc.offset, a->desc.stride, a->desc.data_type, a->data.size);
+        }
+        std::fprintf(stderr, "\n");
+    }
 
     filament::VertexBuffer::Builder builder;
     builder.vertexCount(static_cast<std::uint32_t>(add.vertexCount))
@@ -3279,7 +3341,10 @@ void FilamentRenderer::endFrame(std::uint64_t) {
                     {block.unpack[0], block.unpack[1], block.unpack[2], block.unpack[3]},
                     {block.params[0], block.params[1], block.params[2], block.params[3]},
                     // Slot one of the skirt vector, beside the skirt itself.
-                    block.skirt[1]};
+                    block.skirt[1],
+                    // The seam, not the ground's skirt: a mask admits the pictures drawn on the
+                    // ground and has to reach as far as their curtains, which is two pixels.
+                    block.skirt[2]};
             }
         }
     }
