@@ -146,6 +146,19 @@ public:
     /// the point of it. Answers false with `TESSELLA_NOT_RESOLVED` before then.
     bool setGeojsonData(std::string_view source, std::string_view geojson);
 
+    /// Adds an image the style's `icon-image` and `*-pattern` can name.
+    ///
+    /// GL JS's `map.addImage(id, image)`. The picture joins the style's own sheet, under a name
+    /// any layer can ask for, and a style with no sprite at all can still have images this way.
+    /// `sdf` says the picture is a signed distance field, which is what lets `icon-color`
+    /// recolour it.
+    ///
+    /// Distinct from `addAnnotationImage`, which adds an image an *annotation* names. After the
+    /// style has resolved; an icon is laid out against the sheet per frame, so an image that
+    /// arrives late costs a relayout and no tile is rebuilt.
+    bool addImage(std::string_view id, std::string_view image, double pixelRatio = 1.0,
+                  bool sdf = false);
+
     /// Adds an encoded image a symbol annotation's `icon` can name.
     ///
     /// `default_marker` is the id an annotation with no icon asks for. Before the first `tick`,

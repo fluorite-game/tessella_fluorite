@@ -134,6 +134,13 @@ bool Host::setGeojsonData(std::string_view source, std::string_view geojson) {
     return last_ == TESSELLA_OK;
 }
 
+bool Host::addImage(std::string_view id, std::string_view image, double pixelRatio, bool sdf) {
+    last_ = tessella_add_image(map_, reinterpret_cast<const std::uint8_t*>(id.data()), id.size(),
+                               reinterpret_cast<const std::uint8_t*>(image.data()), image.size(),
+                               pixelRatio, sdf);
+    return last_ == TESSELLA_OK;
+}
+
 bool Host::addAnnotationImage(std::string_view id, std::string_view image, double pixelRatio,
                               bool sdf) {
     last_ = tessella_add_annotation_image(

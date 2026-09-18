@@ -103,6 +103,10 @@ class MapView {
   /// `Host::setGeojsonData`; after the style has resolved.
   bool setGeojsonData(std::string_view source, std::string_view geojson);
 
+  /// `Host::addImage`; after the style has resolved.
+  bool addImage(std::string_view id, std::string_view image, double pixelRatio = 1.0,
+                bool sdf = false);
+
   /// Adds an encoded image a symbol annotation's `icon` can name. See
   /// `Host::addAnnotationImage`; before the first `tick`.
   bool addAnnotationImage(std::string_view id, std::string_view image, double pixelRatio = 1.0,
