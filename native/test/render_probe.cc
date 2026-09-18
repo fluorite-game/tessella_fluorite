@@ -23,12 +23,14 @@
 #include <backend/PixelBufferDescriptor.h>
 #include <utils/EntityManager.h>
 
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -55,6 +57,79 @@ void pause_ms(long ms) {
     nanosleep(&req, nullptr);
 }
 
+/// One JSON value, from `at`, as the bytes it occupies.
+///
+/// Enough of a reader to take the operations apart and no more: what is inside a `setData`
+/// document is the producer's to parse, and this hands it over exactly as written. Strings are
+/// walked rather than scanned for a closing quote, because a URL with an escaped character in it
+/// would otherwise end the value early.
+std::string_view json_value(std::string_view text, std::size_t& at) {
+    while (at < text.size() && std::isspace(static_cast<unsigned char>(text[at]))) {
+        at++;
+    }
+    const std::size_t start = at;
+    if (at >= text.size()) {
+        return {};
+    }
+    if (text[at] == '"') {
+        for (at++; at < text.size(); at++) {
+            if (text[at] == '\\') {
+                at++;
+            } else if (text[at] == '"') {
+                at++;
+                break;
+            }
+        }
+    } else if (text[at] == '{' || text[at] == '[') {
+        int depth = 0;
+        bool quoted = false;
+        for (; at < text.size(); at++) {
+            const char c = text[at];
+            if (quoted) {
+                if (c == '\\') {
+                    at++;
+                } else if (c == '"') {
+                    quoted = false;
+                }
+                continue;
+            }
+            if (c == '"') {
+                quoted = true;
+            } else if (c == '{' || c == '[') {
+                depth++;
+            } else if (c == '}' || c == ']') {
+                depth--;
+                if (depth == 0) {
+                    at++;
+                    break;
+                }
+            }
+        }
+    } else {
+        while (at < text.size() && text[at] != ',' && text[at] != ']' && text[at] != '}'
+               && !std::isspace(static_cast<unsigned char>(text[at]))) {
+            at++;
+        }
+    }
+    return text.substr(start, at - start);
+}
+
+/// Steps past whatever separates two values.
+void json_gap(std::string_view text, std::size_t& at) {
+    while (at < text.size()
+           && (std::isspace(static_cast<unsigned char>(text[at])) || text[at] == ',')) {
+        at++;
+    }
+}
+
+/// A quoted string's contents, for the two places an operation carries a name.
+std::string_view unquoted(std::string_view value) {
+    if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+        return value.substr(1, value.size() - 2);
+    }
+    return value;
+}
+
 std::string slurp(const char* path) {
     std::FILE* file = std::fopen(path, "rb");
     if (file == nullptr) {
@@ -68,6 +143,100 @@ std::string slurp(const char* path) {
     }
     std::fclose(file);
     return out;
+}
+
+/// The camera a script may move, so each operation changes one property and keeps the rest.
+struct Camera {
+    double lat;
+    double lon;
+    double zoom;
+    double bearing;
+    double pitch;
+};
+
+/// Replays `--script`'s operations, which are the render tests' own.
+///
+/// The same file the oracle reads, byte for byte, because a harness that lowered it into
+/// something else would be free to lower it differently for each renderer -- and two renderers
+/// handed different instructions is the one failure a parity number cannot show.
+///
+/// `["setData", id, <document>|<url>]` and the four camera properties. A URL is refused here
+/// rather than fetched: the probe has no file source of its own, and a fixture that wants one is
+/// a fixture whose document belongs in the script.
+bool apply_script(tsf::MapView& map, Camera& camera, const char* path) {
+    const std::string text = slurp(path);
+    if (text.empty()) {
+        std::fprintf(stderr, "probe: cannot read %s\n", path);
+        return false;
+    }
+    std::string_view rest{text};
+    std::size_t at = 0;
+    const std::string_view all = json_value(rest, at);
+    if (all.size() < 2 || all.front() != '[') {
+        std::fprintf(stderr, "probe: %s is not an array of operations\n", path);
+        return false;
+    }
+    std::string_view inner = all.substr(1, all.size() - 2);
+    std::size_t step = 0;
+    for (json_gap(inner, step); step < inner.size(); json_gap(inner, step)) {
+        const std::string_view operation = json_value(inner, step);
+        if (operation.size() < 2 || operation.front() != '[') {
+            std::fprintf(stderr, "probe: an operation is an array with its name first\n");
+            return false;
+        }
+        std::string_view body = operation.substr(1, operation.size() - 2);
+        std::size_t field = 0;
+        json_gap(body, field);
+        const std::string_view name = unquoted(json_value(body, field));
+        const auto next = [&]() {
+            json_gap(body, field);
+            return json_value(body, field);
+        };
+        if (name == "setData") {
+            const std::string source{unquoted(next())};
+            const std::string_view document = next();
+            if (document.empty() || document.front() == '"') {
+                std::fprintf(stderr, "probe: setData by URL is not read here, %s\n", path);
+                return false;
+            }
+            if (!map.setGeojsonData(source, document)) {
+                std::fprintf(stderr, "probe: setData %s refused (%d)\n", source.c_str(),
+                             (int)map.lastResult());
+                return false;
+            }
+            continue;
+        }
+        const std::string value{next()};
+        if (name == "setCenter") {
+            // `[lon, lat]`, which is the render tests' order and GeoJSON's.
+            std::size_t pair = 0;
+            std::string_view center{value};
+            const std::string_view whole = json_value(center, pair);
+            std::string_view coordinates = whole.substr(1, whole.size() - 2);
+            std::size_t part = 0;
+            json_gap(coordinates, part);
+            camera.lon = std::atof(std::string{json_value(coordinates, part)}.c_str());
+            json_gap(coordinates, part);
+            camera.lat = std::atof(std::string{json_value(coordinates, part)}.c_str());
+        } else if (name == "setZoom") {
+            camera.zoom = std::atof(value.c_str());
+        } else if (name == "setBearing") {
+            camera.bearing = std::atof(value.c_str());
+        } else if (name == "setPitch") {
+            camera.pitch = std::atof(value.c_str());
+        } else {
+            // Named rather than ignored, as the oracle names it: a frame missing whatever the
+            // operation asked for would still be measured.
+            std::fprintf(stderr, "probe: this probe does not do %.*s yet\n", (int)name.size(),
+                         name.data());
+            return false;
+        }
+        if (!map.setCamera(camera.lat, camera.lon, camera.zoom, camera.bearing, camera.pitch)) {
+            std::fprintf(stderr, "probe: camera refused (%d)\n", (int)map.lastResult());
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -107,6 +276,17 @@ int main(int argc, char** argv) {
     //   TSF_ANNOTATION_IMAGES  `id=file.png`, comma separated
     const char* annotations = std::getenv("TSF_ANNOTATIONS");
     const char* annotationImages = std::getenv("TSF_ANNOTATION_IMAGES");
+
+    // What a consumer does between the style loading and the frame settling, which no stylesheet
+    // can say: the oracle takes the same file as `--script`, in the render tests' own vocabulary.
+    //
+    //   TSF_SCRIPT  operations to replay once the map has settled, by path
+    const char* script = std::getenv("TSF_SCRIPT");
+    if (script != nullptr && *script == '\0') {
+        // An empty variable is still a variable. A harness that exports one unconditionally means
+        // "no script" by it, and reading it as a path would fail every run that has none.
+        script = nullptr;
+    }
 
     auto* engine = filament::Engine::Builder()
                        .backend(filament::Engine::Backend::VULKAN)
@@ -235,7 +415,12 @@ int main(int argc, char** argv) {
     std::uint64_t held = 0;
     int quiet = 0;
     int settled = 0;
-    for (; settled < 6000 && quiet < quietTicks; settled++) {
+    // Run twice where there is a script: once for the map the style describes, and once for the
+    // map after the operations. That is the oracle's order -- it renders, applies, and renders
+    // again -- and it is the only order that means anything, because an operation names what the
+    // style holds and the style is what the first frame loads.
+    const auto settle = [&]() {
+    for (held = 0, quiet = 0, settled = 0; settled < 6000 && quiet < quietTicks; settled++) {
         map->tick();
         // Both conditions, and the second is the one that was missing. A silence only means the
         // producer emitted nothing, which a source *blocked* on a fetch satisfies exactly as well
@@ -256,6 +441,15 @@ int main(int argc, char** argv) {
             quiet = 0;
         }
         pause_ms(tick_ms());
+    }
+    };
+    settle();
+    if (script != nullptr) {
+        Camera camera{lat, lon, zoom, bearing, pitch};
+        if (!apply_script(*map, camera, script)) {
+            return 1;
+        }
+        settle();
     }
     std::printf("quiescent %d\n", quiet >= quietTicks ? 1 : 0);
     std::printf("settle_ticks %d\n", settled);

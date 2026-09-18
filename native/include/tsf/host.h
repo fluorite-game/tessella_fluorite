@@ -136,6 +136,16 @@ public:
     /// first tick starts and which happens once.
     bool setAnnotations(std::string_view geojson);
 
+    /// Replaces a GeoJSON source's data, by the id the style gives it.
+    ///
+    /// GL JS's `map.getSource(id).setData(...)`. The source's options stay the style's --
+    /// clustering, its radius and its maximum zoom -- because they describe the source rather
+    /// than the data, and every tile of that source is built again for the next frame.
+    ///
+    /// After the style has resolved, unlike `setAnnotations`: being callable on a running map is
+    /// the point of it. Answers false with `TESSELLA_NOT_RESOLVED` before then.
+    bool setGeojsonData(std::string_view source, std::string_view geojson);
+
     /// Adds an encoded image a symbol annotation's `icon` can name.
     ///
     /// `default_marker` is the id an annotation with no icon asks for. Before the first `tick`,
