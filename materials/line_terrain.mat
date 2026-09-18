@@ -1,0 +1,171 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The line family.
+//
+// A line arrives as a strip of quads that carry their own extrusion: each vertex holds the center
+// position with the normal packed into its low bit, and a byte pair saying which way and how far
+// to push. The shader does the pushing, in tile units, scaled by the drawable's `ratio` -- which
+// is what makes a road hold its pixel width as the camera zooms rather than growing with the tile.
+//
+// Mirrors mbgl's `line.vertex.glsl` and `line.fragment.glsl`, including the edge feather. mbgl
+// does not anti-alias lines with MSAA; it widens the quad by half a pixel on each side and fades
+// the coverage out across that margin in the fragment shader, which is resolution-independent and
+// costs no bandwidth. `normal` interpolates from +1 at one edge of the strip through 0 at the
+// centreline to -1 at the other, so its length scaled by `outset` is the fragment's distance from
+// the center in pixels -- and that distance against the two edges is the whole of the coverage.
+//
+// Dash patterns and the round/square caps are still not here; a solid line of the right width in
+// the right place with the right edge is what this draws.
+material {
+    name : tessella_line_terrain,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    constants : [
+        // The permutation, as mbgl's `HAS_UNIFORM_u_*` defines but resolved when the material is
+        // built. False is the uniform form, so a package built without specializing is the
+        // constant-paint one.
+        { name : colorFromAttribute,    type : bool, default : false },
+        { name : blurFromAttribute,     type : bool, default : false },
+        { name : opacityFromAttribute,  type : bool, default : false },
+        { name : gapWidthFromAttribute, type : bool, default : false },
+        { name : offsetFromAttribute,   type : bool, default : false },
+        { name : widthFromAttribute,    type : bool, default : false }
+    ],
+    parameters : [
+        { type : mat4,   name : matrix },
+        // The raise block, as every terrain variant takes it. See `symbol_sdf_terrain.mat`.
+        { type : float4, name : unpack },
+        { type : float4, name : params },
+        { type : float4, name : skirt },
+        { type : sampler2d, name : elevation },
+        { type : float4, name : color },
+        { type : float,  name : opacity },
+        { type : float,  name : width },
+        { type : float,  name : gapwidth },
+        { type : float,  name : offset },
+        { type : float,  name : blur },
+        { type : float,  name : ratio },
+        // The view's device pixel ratio. Sets how wide the feather is in device pixels: a denser
+        // display needs a narrower one, which is why mbgl divides by it rather than fixing 1px.
+        { type : float,  name : pixelRatio },
+        // Clip-space to pixels, `{width/2, -height/2}`. Only used to measure how much perspective
+        // stretched the extrusion, so the feather stays one pixel wide on a pitched map where the
+        // far edge of a road is compressed.
+        { type : float2, name : unitsToPixels },
+        // The frame's zoom-mix factors, from `LineDrawableUBO`.
+        { type : float,  name : colorT },
+        { type : float,  name : blurT },
+        { type : float,  name : opacityT },
+        { type : float,  name : gapWidthT },
+        { type : float,  name : offsetT },
+        { type : float,  name : widthT }
+    ],
+    requires : [ position, custom0, custom1, custom2, custom3, custom4, custom5,
+                 custom6 ],
+    // `linePaint` is the colour with the opacity already in it: both are per feature, so every
+    // vertex of a segment carries the same pair and the product interpolates like either factor.
+    variables : [ lineEdge, lineGamma, linePaint ]
+}
+
+vertex {
+#include "line_paint.glsl"
+
+#include "terrain_height.glsl"
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        // EXTRUDE_SCALE is mbgl's: the byte pair encodes a unit vector over 63.
+        const float EXTRUDE_SCALE = 63.0;
+
+        // The distance the edge fades out over. Half a device pixel each side.
+        float antialiasing = 1.0 / max(materialParams.pixelRatio, 1e-6) / 2.0;
+
+        vec2 posNormal = getPosition().xy;
+        vec2 center = floor(posNormal * 0.5);
+        vec2 normal = posNormal - 2.0 * center;
+        normal.y = normal.y * 2.0 - 1.0;
+
+        // a_data arrives as four unsigned bytes; the first two are the extrusion, biased by 128.
+        // Raw bytes, not normalised: the vertex buffer declares UBYTE4 without a normalize
+        // flag, so the shader sees 0..255 rather than 0..1.
+        vec4 data = getCustom0();
+        vec2 extrude = data.xy - 128.0;
+        float direction = mod(data.z, 4.0) - 1.0;
+
+        float gapwidth = resolveLineGapWidth() * 0.5;
+        float halfwidth = resolveLineWidth() * 0.5;
+        float lineOffset = -1.0 * resolveLineOffset();
+
+        // The quad reaches `outset` from the center and the fill starts at `inset`. With no gap
+        // the inset is zero and the line is solid; with one the two edges are drawn and the middle
+        // left open, which is how a road casing is a casing rather than a slab.
+        float inset = gapwidth + (gapwidth > 0.0 ? antialiasing : 0.0);
+        float outset = gapwidth + halfwidth * (gapwidth > 0.0 ? 2.0 : 1.0)
+                     + (halfwidth == 0.0 ? 0.0 : antialiasing);
+
+        // Scale the extrusion down to a normal and back up by this vertex's line width.
+        vec2 dist = outset * extrude / EXTRUDE_SCALE;
+
+        // A line drawn to the side of the real one. The vector points along the extrude, rotated
+        // where a round end point's extrude points somewhere else.
+        float u = 0.5 * direction;
+        float t = 1.0 - abs(u);
+        vec2 offset2 = lineOffset * extrude / EXTRUDE_SCALE * normal.y * mat2(t, -u, u, t);
+
+        float ratio = max(materialParams.ratio, 1e-6);
+
+        // The matrix is applied here rather than by the renderable's transform, because the
+        // extrusion has to happen in tile units *before* the tile-to-clip step. `worldPosition` is
+        // already past that transform in the object domain, so a line's renderable is given the
+        // identity and does the whole placement itself.
+        //
+        // Split into a point and a direction (`w` of 0, so only the linear part applies) because
+        // the projected direction is what says how much perspective squashed this edge. The two
+        // are summed, which for a linear map is the same as transforming the sum.
+        // The ground under the *centerline*, not under the extruded corner. Both sides of the
+        // quad take the same height, which keeps the ribbon planar across its width: sampling
+        // per corner would twist a wide road wherever the slope runs across it rather than along
+        // it. The producer cuts the polyline on the same grid a fill's rings are cut on, so the
+        // chord between two of these reads is short enough to stay on the surface.
+        float groundHeight = terrainHeight(center);
+        vec4 projectedExtrude = materialParams.matrix * vec4(dist / ratio, 0.0, 0.0);
+        vec4 clip = materialParams.matrix * vec4(center + offset2 / ratio, groundHeight, 1.0)
+                  + projectedExtrude;
+
+        float unprojected = length(dist);
+        float projected = length(projectedExtrude.xy / clip.w * materialParams.unitsToPixels);
+        // Guarded: a zero-length extrusion would make this 0/0 and NaN a whole line away. Line
+        // vertices sit on the edges so it should not arise, but one NaN here is a missing road.
+        float gammaScale = unprojected / max(projected, 1e-6);
+
+        material.lineEdge = vec4(normal, outset, inset);
+        // The blur rides beside the gamma scale rather than in a variable of its own: Filament
+        // allows four, and a circle needs all four, so a family that can spare a component does.
+        material.lineGamma = vec4(gammaScale, resolveLineBlur(), 0.0, 0.0);
+        material.linePaint = resolveLineColor() * resolveLineOpacity();
+        material.worldPosition = clip;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 normal = variable_lineEdge.xy;
+        float outset = variable_lineEdge.z;
+        float inset = variable_lineEdge.w;
+        float gammaScale = variable_lineGamma.x;
+
+        // How far this pixel is from the center of the line, in pixels.
+        float dist = length(normal) * outset;
+
+        // The fade: in across the inner edge for a line with a gap, out across the outer one.
+        float blur2 = (variable_lineGamma.y + 1.0 / max(materialParams.pixelRatio, 1e-6))
+                    * gammaScale;
+        float alpha = clamp(min(dist - (inset - blur2), outset - dist) / blur2, 0.0, 1.0);
+
+        // Premultiplied, matching the blending Filament is configured for: the colour is scaled by
+        // the coverage as well as the opacity, so a half-covered edge contributes half of both.
+        material.baseColor = variable_linePaint * alpha;
+    }
+}
