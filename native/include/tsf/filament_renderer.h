@@ -21,7 +21,9 @@
 #include <cstdint>
 #include <string>
 #include <map>
+#include <optional>
 #include <set>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -251,6 +253,16 @@ public:
     /// How many wall triangles were built from instances.
     [[nodiscard]] std::uint64_t walls() const noexcept { return walls_; }
 
+    /// Vertex and index uploads a drawable took a share of rather than making, and the bytes
+    /// they would have cost. Cumulative over the renderer's life, not per frame: what they
+    /// measure is GPU memory not spent, which is a property of what is held, not of a frame.
+    [[nodiscard]] std::uint64_t sharedUploads() const noexcept { return sharedUploads_; }
+    [[nodiscard]] std::uint64_t sharedBytes() const noexcept { return sharedBytes_; }
+    /// Distinct slab runs with a GPU copy, vertices and indices together.
+    [[nodiscard]] std::size_t sharedGeometries() const noexcept {
+        return sharedVertexBuffers_.size() + sharedIndexBuffers_.size();
+    }
+
     /// Textures held, and how many pixel uploads they have taken.
     [[nodiscard]] std::size_t textures() const noexcept { return textures_.size(); }
     [[nodiscard]] std::uint64_t textureUploads() const noexcept { return textureUploads_; }
@@ -280,11 +292,64 @@ private:
 
     /// Fills a vertex buffer's slabs, and records the ones it made.
     ///
+    /// A run of published bytes, as the thing that decides whether two drawables name the same
+    /// GPU copy.
+    ///
+    /// The producer's reference rather than the pointer it resolves to. A pointer is only good
+    /// for the frame it was read in -- compaction moves a slab's bytes within the region and
+    /// rewrites the table, so the same address is another slab's bytes a frame later -- while a
+    /// reference names the same bytes for as long as the slab lives. Sealed slabs are immutable,
+    /// so bytes once named do not change under a cached upload, and a slot is not handed out
+    /// again until every geometry naming it has been removed.
+    struct SlabKey {
+        std::uint32_t slab = 0;
+        std::uint32_t offset = 0;
+        std::size_t bytes = 0;
+
+        friend bool operator<(const SlabKey& a, const SlabKey& b) {
+            return std::tie(a.slab, a.offset, a.bytes) < std::tie(b.slab, b.offset, b.bytes);
+        }
+        friend bool operator==(const SlabKey& a, const SlabKey& b) {
+            return std::tie(a.slab, a.offset, a.bytes) == std::tie(b.slab, b.offset, b.bytes);
+        }
+    };
+
+    /// A GPU copy several drawables name, and how many of them still do.
+    template <typename T>
+    struct Shared {
+        T* object = nullptr;
+        std::size_t users = 0;
+    };
+
+    /// Vertex bytes uploaded once per slab run rather than once per drawable.
+    ///
+    /// A terrain's ground is the same mesh on every tile and a whole-tile raster quad the same
+    /// quad, which the producer now allocates once -- so without this the saving stops at the
+    /// ring and every tile still gets its own copy in GPU memory, which is the one that matters
+    /// on a device that shares it with the CPU.
+    std::map<SlabKey, Shared<filament::BufferObject>> sharedVertexBuffers_;
+    /// The same for indices, for the uploads that are a straight copy.
+    ///
+    /// Not the widened ones: a segmented bucket's indices are rebased per drawable, so what is
+    /// uploaded is not the slab's bytes and two drawables naming one slab do not agree.
+    std::map<SlabKey, Shared<filament::IndexBuffer>> sharedIndexBuffers_;
+
+    /// Takes a share of a slab's vertex upload, making it on first use.
+    filament::BufferObject* shareVertices(const SlabKey& key, const std::uint8_t* data);
+    /// Drops a share, destroying the upload when the last one goes.
+    void releaseVertices(const SlabKey& key);
+    /// The same pair for indices.
+    filament::IndexBuffer* shareIndices(const SlabKey& key, const std::uint8_t* data,
+                                        std::uint32_t count);
+    void releaseIndices(const SlabKey& key);
+
     /// A slab with no bytes is the shared zero buffer, which is not among the `owned` and is not
     /// destroyed with the mesh. Answers false when an allocation failed, which leaves the caller
     /// to tear down what it had built.
-    bool uploadSlabs(const Slabs& slabs, std::uint32_t vertices,
-                     filament::VertexBuffer& into, std::vector<filament::BufferObject*>& owned);
+    /// Published bytes go into `shared` instead of `owned`: their upload is counted rather than
+    /// owned, and the mesh releases its share when it retires.
+    bool uploadSlabs(const Slabs& slabs, std::uint32_t vertices, filament::VertexBuffer& into,
+                     std::vector<filament::BufferObject*>& owned, std::vector<SlabKey>& sharedKeys);
 
     /// The shared zero buffer, grown to cover `vertices` at the widest paint attribute.
     ///
@@ -346,8 +411,12 @@ private:
         /// Buffer objects this mesh made, which it also destroys.
         ///
         /// The shared zero buffer is deliberately not among them -- it outlives every mesh that
-        /// points at it.
+        /// points at it, and neither are the buffers shared by slab: those are counted.
         std::vector<filament::BufferObject*> ownedBuffers = {};
+        /// Slabs whose GPU copy this mesh shares, released when it retires. See `SlabKey`.
+        std::vector<SlabKey> sharedBuffers = {};
+        /// The slab its indices were uploaded from, when that upload is shareable.
+        std::optional<SlabKey> sharedIndices = {};
     };
 
     /// One layer's uniform blocks, by slot.
@@ -435,7 +504,10 @@ private:
     MaskGrid maskGrid(std::uint32_t cells);
 
     /// Uploads a drawable's indices, rebasing a segmented bucket onto its whole vertex buffer.
-    filament::IndexBuffer* uploadIndices(const DrawableAdd& add);
+    /// `shared` is set when the upload is a straight copy of published bytes, and so is counted
+    /// rather than owned. A segmented bucket's indices are rebased per drawable and are not.
+    filament::IndexBuffer* uploadIndices(const DrawableAdd& add,
+                                         std::optional<SlabKey>& sharedKey);
 
     /// The globe's depth shell -- an opaque sphere just beneath the surface, which is what stops
     /// the far side of the planet drawing through the near one. See `globe_shell.mat`.
@@ -612,6 +684,8 @@ private:
     /// left gets no pass rather than a wrong one: drawing its kernels onto the map would be a
     /// picture, and drawing nothing is a missing layer, which is the failure worth having.
     std::uint8_t nextOffscreenLayer_ = 0x80;
+    std::uint64_t sharedUploads_ = 0;
+    std::uint64_t sharedBytes_ = 0;
     std::uint64_t textureUploads_ = 0;
     std::uint64_t textureSkipped_ = 0;
 };
