@@ -1528,6 +1528,7 @@ void FilamentRenderer::writeMasks() {
             instance->setParameter("matrix", matrix);
             instance->setParameter("unpack", raisedFor->second.unpack);
             instance->setParameter("params", raisedFor->second.params);
+            instance->setParameter("center", raisedFor->second.center);
             instance->setParameter(
                 "elevation", raisedHeight->second,
                 filament::TextureSampler(filament::TextureSampler::MinFilter::LINEAR,
@@ -3276,7 +3277,9 @@ void FilamentRenderer::endFrame(std::uint64_t) {
                 tileTerrain_[mesh->second.tile] = TileTerrain{
                     elevation,
                     {block.unpack[0], block.unpack[1], block.unpack[2], block.unpack[3]},
-                    {block.params[0], block.params[1], block.params[2], block.params[3]}};
+                    {block.params[0], block.params[1], block.params[2], block.params[3]},
+                    // Slot one of the skirt vector, beside the skirt itself.
+                    block.skirt[1]};
             }
         }
     }

@@ -25,7 +25,10 @@ material {
         // The raise block of the tile's drawables, and the elevation they sample.
         { type : sampler2d, name : elevation },
         { type : float4,    name : unpack },
-        { type : float4,    name : params }
+        { type : float4,    name : params },
+        // The ground under the camera's center, in meters -- see `terrain_height.glsl`. The mask
+        // has to stand where the surface stands, so it takes the same shift.
+        { type : float,     name : center }
     ],
     requires : [ position ]
 }
@@ -41,7 +44,8 @@ vertex {
         float height = (channels.r * materialParams.unpack.r
                       + channels.g * materialParams.unpack.g
                       + channels.b * materialParams.unpack.b
-                      - materialParams.unpack.a) * materialParams.params.w;
+                      - materialParams.unpack.a
+                      - materialParams.center) * materialParams.params.w;
         material.worldPosition = materialParams.matrix * vec4(position, height, 1.0);
     }
 }
