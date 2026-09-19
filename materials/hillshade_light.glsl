@@ -18,7 +18,7 @@
 // is the one thing this cannot be.
 //
 // Reads `materialParams.exaggeration`, `.accent`, `.method`, `.numLights`, `.altitudes`,
-// `.azimuths` and the eight named light colours. A material that includes this declares all of
+// `.azimuths` and the eight named light colors. A material that includes this declares all of
 // them.
 
     // Filament already defines `PI` in its own math header, so this one is named apart.
@@ -46,7 +46,7 @@
         return index == 0 ? four.x : index == 1 ? four.y : index == 2 ? four.z : four.w;
     }
 
-    // And a light's own two colours, for the same reason and by the same shape.
+    // And a light's own two colors, for the same reason and by the same shape.
     vec4 shadowAt(int index) {
         return index == 0 ? materialParams.shadow0
              : index == 1 ? materialParams.shadow1
