@@ -4324,18 +4324,35 @@ void FilamentRenderer::issue(const Batch& batch) {
                 instance->setParameter("accent",
                                        filament::math::float4{paint.accent[0], paint.accent[1],
                                                               paint.accent[2], paint.accent[3]});
-                // The first light. `num_lights` is in the block and the other three slots are
-                // there; the standard method reads one, which is what every style writes.
-                instance->setParameter("azimuth", paint.azimuths[0]);
-                instance->setParameter("altitude", paint.altitudes[0]);
+                // How the slopes are lit, and how many of the four lights do it. Both are the
+                // layer's rather than the tile's, and both ride in the tile block beside the
+                // latitude range because that is where mbgl keeps them.
+                instance->setParameter("method", tile.method);
+                instance->setParameter("numLights", tile.num_lights);
                 instance->setParameter(
-                    "shadow", filament::math::float4{paint.shadows[0], paint.shadows[1],
-                                                     paint.shadows[2], paint.shadows[3]});
-                instance->setParameter("highlight",
-                                       filament::math::float4{paint.highlights[0],
-                                                              paint.highlights[1],
-                                                              paint.highlights[2],
-                                                              paint.highlights[3]});
+                    "altitudes",
+                    filament::math::float4{paint.altitudes[0], paint.altitudes[1],
+                                           paint.altitudes[2], paint.altitudes[3]});
+                instance->setParameter(
+                    "azimuths", filament::math::float4{paint.azimuths[0], paint.azimuths[1],
+                                                       paint.azimuths[2], paint.azimuths[3]});
+                // Four colours each, one per light, set by name: an array parameter of `float4`
+                // is flattened into floats by the material compiler, so the second entry of one
+                // would be the first colour's green.
+                const auto colourAt = [](const float* block, std::size_t light) {
+                    const std::size_t at = light * 4;
+                    return filament::math::float4{block[at], block[at + 1], block[at + 2],
+                                                  block[at + 3]};
+                };
+                static constexpr const char* kShadowNames[] = {"shadow0", "shadow1", "shadow2",
+                                                               "shadow3"};
+                static constexpr const char* kHighlightNames[] = {"highlight0", "highlight1",
+                                                                  "highlight2", "highlight3"};
+                for (std::size_t light = 0; light < 4; ++light) {
+                    instance->setParameter(kShadowNames[light], colourAt(paint.shadows, light));
+                    instance->setParameter(kHighlightNames[light],
+                                           colourAt(paint.highlights, light));
+                }
 
                 const auto found = textures_.find(mesh->second.texture);
                 if (found == textures_.end()) {
