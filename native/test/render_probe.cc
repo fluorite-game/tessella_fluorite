@@ -122,6 +122,32 @@ void json_gap(std::string_view text, std::size_t& at) {
     }
 }
 
+/// One member of a JSON object, by key, as the bytes its value occupies.
+///
+/// `{}` where the object does not carry it, which is every optional field's default.
+std::string_view json_member(std::string_view object, std::string_view key) {
+    if (object.size() < 2 || object.front() != '{') {
+        return {};
+    }
+    std::string_view inner = object.substr(1, object.size() - 2);
+    std::size_t at = 0;
+    while (at < inner.size()) {
+        json_gap(inner, at);
+        const std::string_view name = json_value(inner, at);
+        while (at < inner.size() && (inner[at] == ':' || std::isspace(static_cast<unsigned char>(inner[at])))) {
+            at++;
+        }
+        const std::string_view value = json_value(inner, at);
+        if (name.size() >= 2 && name.substr(1, name.size() - 2) == key) {
+            return value;
+        }
+        if (name.empty() && value.empty()) {
+            break;
+        }
+    }
+    return {};
+}
+
 /// A quoted string's contents, for the two places an operation carries a name.
 std::string_view unquoted(std::string_view value) {
     if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
@@ -201,6 +227,33 @@ bool apply_script(tsf::MapView& map, Camera& camera, const char* path) {
             }
             if (!map.setGeojsonData(source, document)) {
                 std::fprintf(stderr, "probe: setData %s refused (%d)\n", source.c_str(),
+                             (int)map.lastResult());
+                return false;
+            }
+            continue;
+        }
+        if (name == "addImage") {
+            // `["addImage", id, path, {"pixelRatio": r, "sdf": b}]`, the render tests' own
+            // operation. The picture is read from the path the script names, which is the same
+            // file the oracle reads.
+            const std::string id{unquoted(next())};
+            const std::string path{unquoted(next())};
+            const std::string_view options = next();
+            double pixelRatio = 1.0;
+            bool sdf = false;
+            if (const std::string_view ratio = json_member(options, "pixelRatio"); !ratio.empty()) {
+                pixelRatio = std::atof(std::string{ratio}.c_str());
+            }
+            if (const std::string_view flag = json_member(options, "sdf"); flag == "true") {
+                sdf = true;
+            }
+            const std::string bytes = slurp(path.c_str());
+            if (bytes.empty()) {
+                std::fprintf(stderr, "probe: cannot read %s\n", path.c_str());
+                return false;
+            }
+            if (!map.addImage(id, bytes, pixelRatio, sdf)) {
+                std::fprintf(stderr, "probe: addImage %s refused (%d)\n", id.c_str(),
                              (int)map.lastResult());
                 return false;
             }

@@ -140,6 +140,11 @@ bool MapView::setGeojsonData(std::string_view source, std::string_view geojson) 
   return host_->setGeojsonData(source, geojson);
 }
 
+bool MapView::addImage(std::string_view id, std::string_view image, const double pixelRatio,
+                       const bool sdf) {
+  return host_->addImage(id, image, pixelRatio, sdf);
+}
+
 bool MapView::addAnnotationImage(std::string_view id, std::string_view image,
                                  const double pixelRatio, const bool sdf) {
   return host_->addAnnotationImage(id, image, pixelRatio, sdf);
