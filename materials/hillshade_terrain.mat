@@ -41,7 +41,7 @@ material {
         { type : float4,    name : azimuths },
         // One per light, named rather than an array: Filament flattens an array parameter of
         // `float4` into floats, so `shadows[1]` there is the second *component* of the first
-        // colour rather than the second colour.
+        // color rather than the second color.
         { type : float4,    name : shadow0 },
         { type : float4,    name : shadow1 },
         { type : float4,    name : shadow2 },
