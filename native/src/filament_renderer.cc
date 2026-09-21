@@ -1093,10 +1093,39 @@ void FilamentRenderer::onTexture(const TextureUpdate& update) {
     };
 
     if (update.rects.empty() || resized) {
+        // A packed payload has no whole texture in it to lay down. The producer only packs a
+        // texture this already holds at this size, so a resize here is the two disagreeing --
+        // counted and dropped, because half a texture written at full-texture coordinates is
+        // wrong pixels rather than missing ones. The next whole update repairs it.
+        if (update.packed && !update.rects.empty()) {
+            textureSkipped_++;
+            return;
+        }
         const std::size_t bytes =
             static_cast<std::size_t>(update.width) * update.height * pixel;
         if (bytes <= update.pixels.size) {
             upload(0, 0, update.width, update.height, update.pixels.data, bytes);
+        }
+        return;
+    }
+    if (update.packed) {
+        // Each rect's own pixels, tight at its own width, in the order the rects name them. No
+        // cut-out and no scratch buffer: the run is already the shape the upload wants.
+        std::size_t at = 0;
+        for (const tsl_rect& rect : update.rects) {
+            if (rect.w == 0 || rect.h == 0 || rect.x + rect.w > update.width ||
+                rect.y + rect.h > update.height) {
+                continue;
+            }
+            const std::size_t bytes = static_cast<std::size_t>(rect.w) * rect.h * pixel;
+            // Short payload: the rects and the run disagree, so where the next one begins is not
+            // known either. Stop rather than read past the record.
+            if (at + bytes > update.pixels.size) {
+                textureSkipped_++;
+                return;
+            }
+            upload(rect.x, rect.y, rect.w, rect.h, update.pixels.data + at, bytes);
+            at += bytes;
         }
         return;
     }

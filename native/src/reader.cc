@@ -326,6 +326,9 @@ void Reader::dispatch(const tsl_record_header& header,
         // Zero rectangles means the whole texture, and a consumer reading that as "no damage"
         // uploads nothing and samples a blank atlas -- a map with no labels and no error.
         out.rects.assign(update.rects, update.rects + update.rect_count);
+        // A producer that has never heard of the flag zeroes the byte, which reads as the whole
+        // texture -- the only thing the wire carried before it.
+        out.packed = update.packed != 0;
         out.pixels = Bytes{payload + update.pixels.offset, update.pixels.count};
         sink.onTextureUpdate(out);
         break;

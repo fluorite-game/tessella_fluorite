@@ -224,6 +224,10 @@ struct TextureUpdate {
     /// every texture but a color relief's elevation stops is.
     std::uint8_t channel_type = 0;
     std::vector<tsl_rect> rects;
+    /// Whether `pixels` holds only the dirty regions, packed tight at their own widths and in
+    /// the order `rects` names them. False is the whole texture, with the rects naming which
+    /// part of it moved -- which is what every producer before the flag existed sent.
+    bool packed = false;
     Bytes pixels;
 
     /// Bytes one pixel of this texture occupies, from the header's own table and the channel
