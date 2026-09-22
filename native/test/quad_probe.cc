@@ -172,6 +172,15 @@ int main(int argc, char** argv) {
     for (std::size_t i = 0; i < panes.size(); i++) {
         std::printf("%s primitives %llu\n", kCities[i].name,
                     (unsigned long long)panes[i].map->renderer().primitives());
+        // And why, when a pane drew almost nothing. A source whose origin has gone -- a dated
+        // pmtiles build is kept about a week -- leaves every pane at two primitives and says
+        // nothing, which reads as a regression in whatever was being tested and cost a bisect to
+        // tell apart from one. The readiness carries the count and the first reason.
+        std::string reason;
+        const auto ready = panes[i].map->readiness(&reason);
+        if (!reason.empty()) {
+            std::printf("%s readiness %d: %s\n", kCities[i].name, (int)ready, reason.c_str());
+        }
     }
 
     std::vector<std::uint8_t> pixels(static_cast<std::size_t>(W) * H * 4);

@@ -510,6 +510,12 @@ int main(int argc, char** argv) {
 
     std::string reason;
     std::printf("readiness %d\n", (int)map->readiness(&reason));
+    // And the reason, which was being fetched and dropped. A source whose origin has gone leaves
+    // a frame that is empty and says nothing about why -- the number alone does not name the
+    // tile, the source or the status.
+    if (!reason.empty()) {
+        std::printf("readiness_reason %s\n", reason.c_str());
+    }
     std::printf("renderables %llu\n", (unsigned long long)map->renderer().renderables());
     std::printf("primitives %llu\n", (unsigned long long)map->renderer().primitives());
     std::printf("instances_made %llu\n", (unsigned long long)map->renderer().made());
