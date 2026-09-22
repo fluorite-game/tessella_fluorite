@@ -4982,6 +4982,24 @@ void FilamentRenderer::issue(const Batch& batch) {
         } else {
             float minX = 1e30f, minY = 1e30f, maxX = -1e30f, maxY = -1e30f;
             const float corners[4][2] = {{0, 0}, {8192, 0}, {8192, 8192}, {0, 8192}};
+            // The tile's *own* matrix, not the drawable's, because the box has to bound what the
+            // stencil keeps rather than where this drawable's geometry goes. The two differ by
+            // exactly `*-translate`: a translated drawable's matrix moves the tile square across
+            // the screen, while its mask stays where the tile is.
+            //
+            // A tile's geometry reaches past its square -- that is what the MVT buffer is for --
+            // and the mask is what bounds it. Under `line-translate: [14, 0]` the buffered roads
+            // just outside a tile's left edge move *into* it and mbgl draws them, because its
+            // mask admits them; a box built from the translated matrix started 14 pixels further
+            // right and cut every one of them. That reads as a 14-pixel band of missing road down
+            // one tile edge, and only where the stencil and the scissor are both on, because
+            // either alone still admits the band.
+            //
+            // Absent from the mask set, the drawable's own matrix is the only bound there is, and
+            // an unclipped drawable is not scissored at all.
+            const auto mask = masks_.find(mesh->second.tile);
+            const filament::math::mat4f& box =
+                mask == masks_.end() ? transform : mask->second;
             // A corner behind the camera has a negative `w`, and dividing by it mirrors that
             // corner through the origin: the box then bounds somewhere the tile is not, and the
             // tile is scissored to a strip of it. A pitched camera puts corners behind itself
@@ -4993,7 +5011,7 @@ void FilamentRenderer::issue(const Batch& batch) {
             bool boundable = true;
             for (const auto& corner : corners) {
                 const filament::math::float4 clip =
-                    transform * filament::math::float4{corner[0], corner[1], 0.0f, 1.0f};
+                    box * filament::math::float4{corner[0], corner[1], 0.0f, 1.0f};
                 if (clip.w <= 0.0f) {
                     boundable = false;
                     break;
