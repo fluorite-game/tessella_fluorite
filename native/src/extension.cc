@@ -156,7 +156,20 @@ void attach(void* /*user*/,
   }
   State& shared = state();
   const std::lock_guard<std::mutex> lock(shared.mutex);
+  // Both early returns below are ordinary startup states rather than faults, and
+  // both used to be silent. That is survivable when they resolve on a later
+  // attach and expensive when they do not: a board where the map never appears
+  // looks identical to one where it draws nothing, with no error anywhere and
+  // the shell running at full speed. Said once per slot, so a view that attaches
+  // before its camera does not repeat it every frame.
   if (slot >= shared.slots.size() || !shared.configured) {
+    static std::array<bool, FLUORITE_VIEW_EXTENSION_MAX_SLOTS> told{};
+    if (slot < told.size() && !told[slot]) {
+      told[slot] = true;
+      std::fprintf(stderr,
+                   "[tessella_fluorite] slot %u: attach before configure; no map built\n",
+                   slot);
+    }
     return;
   }
   Slot& held = shared.slots[slot];
@@ -164,6 +177,13 @@ void attach(void* /*user*/,
   // A camera set before the view existed is the one it comes up at. Without a
   // camera the map has nowhere to point, so there is nothing to build yet.
   if (!held.camera.set) {
+    static std::array<bool, FLUORITE_VIEW_EXTENSION_MAX_SLOTS> told{};
+    if (slot < told.size() && !told[slot]) {
+      told[slot] = true;
+      std::fprintf(stderr,
+                   "[tessella_fluorite] slot %u: attach before its camera; no map built\n",
+                   slot);
+    }
     return;
   }
 
@@ -299,6 +319,12 @@ extern "C" int32_t tessella_fluorite_configure(const char* style_json, const cha
   shared.style = style_json;
   shared.materials = material_dir;
   shared.configured = true;
+  // One line each at startup for the two states that decide whether a map can
+  // exist at all. Cheap, and the alternative is what this cost on a Pi 4: the
+  // shell running at full speed with four empty panes, no error anywhere, and
+  // no way from outside to tell "never configured" from "configured, and the
+  // host never attached a view to it".
+  std::fprintf(stderr, "[tessella_fluorite] configured\n");
   return 0;
 }
 
@@ -324,6 +350,9 @@ extern "C" int32_t tessella_fluorite_install(void) {
       .resize = resize,
   };
   fluorite_set_view_extension(&extension);
+  // The other half of the pair above: from here on, a view the host attaches
+  // reaches `attach`. Silence after this line means the host never called it.
+  std::fprintf(stderr, "[tessella_fluorite] view extension installed\n");
   return 0;
 }
 
