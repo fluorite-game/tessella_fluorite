@@ -217,6 +217,11 @@ public:
 
     /// Drawables whose tile matched no mask, so nothing clipped them.
     [[nodiscard]] std::uint64_t unmasked() const noexcept { return unmasked_; }
+    /// 3D runs that wanted the draw-once mask and could not have it: a second one in a frame, or
+    /// any of them in a frame whose clip fields took the whole byte. Each draws as every 3D layer
+    /// did before the mask existed, which is a picture that blends some pixels twice rather than
+    /// a wrong one -- so it is worth counting and not worth refusing.
+    [[nodiscard]] std::uint64_t drawOnceSkipped() const noexcept { return drawOnceSkipped_; }
 
     /// How many drawables were placed at each matrix scale. One scale means one zoom; several
     /// means drawables are carrying other tiles' matrices.
@@ -393,6 +398,12 @@ private:
         /// that pass *as* the color pass, which is what a building looked like before: a flat
         /// footprint in the roof's shade, with no walls and no depth between them.
         bool color = true;
+        /// Whether this drawable leaves the map plane.
+        ///
+        /// `DrawFlags::IS_3D`. Paired with `clipped` below, it is what selects mbgl's 3D stencil:
+        /// `getIs3D() && getEnableStencil()` there picks the draw-once mask over the tile clip,
+        /// and those are the two bits the producer already sends.
+        bool is3d = false;
         /// Whether the producer asked for this drawable to be clipped to its tile.
         ///
         /// `DrawFlags::ENABLE_STENCIL`, carried on the geometry because that is where it
@@ -638,6 +649,29 @@ private:
     std::map<std::tuple<std::uint32_t, std::int32_t, std::uint32_t, bool, std::uint32_t>,
              filament::MaterialInstance*>
         instances_;
+
+    /// Whether this frame's clip fields packed into their seven bits.
+    ///
+    /// False means the fallback took the whole byte, `kDrawOnceBit` with it, so no 3D layer gets
+    /// a draw-once mask this frame and one draws as it did before this existed.
+    bool stencilPartitioned_ = false;
+
+    /// The run that owns `kDrawOnceBit` this frame, and whether any does.
+    ///
+    /// One bit, so one run. A second 3D layer in the same frame cannot have it -- clearing the
+    /// bit between two runs would need a second pass, which a scene drawn in one does not have --
+    /// and draws unmasked, which is what every 3D layer did before. `drawOnceSkipped_` counts
+    /// those so the case is visible rather than silent.
+    std::uint64_t drawOnceRun_ = 0;
+    bool drawOnceTaken_ = false;
+    std::uint64_t drawOnceSkipped_ = 0;
+
+    /// Identifies the run a batch belongs to: one layer's drawables in one pass of one view.
+    /// Keyed exactly as `endFrame` breaks runs -- by layer and pass, and not by view -- so the
+    /// run that takes the bit and the batch that tests for it agree by construction.
+    static std::uint64_t runKey(std::uint32_t layer, std::uint8_t pass) noexcept {
+        return (static_cast<std::uint64_t>(layer) << 8) | pass;
+    }
 
     /// The layer every renderable goes on. See the constructor.
     std::uint8_t layer_ = 0x01;

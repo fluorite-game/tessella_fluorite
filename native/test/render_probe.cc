@@ -533,6 +533,8 @@ int main(int argc, char** argv) {
     std::printf("placements %zu\n", map->renderer().placements());
     std::printf("shared_slots %llu\n", (unsigned long long)map->renderer().sharedSlots());
     std::printf("unmasked %llu\n", (unsigned long long)map->renderer().unmasked());
+    std::printf("draw_once_skipped %llu\n",
+                (unsigned long long)map->renderer().drawOnceSkipped());
     for (const auto& [scale, n] : map->renderer().scales()) {
         std::printf("scale %.5f %llu\n", scale, (unsigned long long)n);
     }

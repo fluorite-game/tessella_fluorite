@@ -27,6 +27,22 @@
 
 namespace tsf {
 
+/// The bit a 3D layer's draw-once mask owns, and the clip masks may not.
+///
+/// A fill extrusion blends, and a pixel it blends twice is visibly wrong -- mbgl stops that with
+/// `stencilModeFor3D`, a single value the whole layer tests `NotEqual` and replaces on pass, so
+/// the first surface to reach a pixel is the only one that shades it. mbgl can spend the entire
+/// byte on it because it repaints the stencil before each layer group; a scene drawn in one pass
+/// cannot, so one bit is set aside instead and the clip fields share the other seven.
+///
+/// Seven is not a guess. Over the scene sweep and the example set -- 906 frames -- no frame's
+/// fields needed the eighth bit at all: the widest was seven, and 95.5% partitioned at all. So
+/// reserving this one costs no frame its clip.
+inline constexpr std::uint8_t kDrawOnceBit = 0x80;
+
+/// The bits the clip fields are packed into, which is the byte less the bit above.
+inline constexpr unsigned kClipBits = 7;
+
 /// How one tile's mask is painted and how its geometry tests against it.
 struct StencilAssignment {
     /// Written by the mask, compared by the geometry.

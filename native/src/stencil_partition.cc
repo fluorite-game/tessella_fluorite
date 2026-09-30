@@ -43,7 +43,7 @@ StencilPartition partitionStencil(
     unsigned offset = 0;
     for (auto& [zoom, cells] : codes) {
         const std::uint8_t width = bitsFor(cells.size());
-        if (cells.size() > 255 || offset + width > 8) {
+        if (cells.size() > 255 || offset + width > kClipBits) {
             out.partitioned = false;
             break;
         }
@@ -58,6 +58,8 @@ StencilPartition partitionStencil(
 
     if (!out.partitioned) {
         // A value per tile in the whole byte, stopping short of 255 as the renderer always has.
+        // This spends `kDrawOnceBit` too, so a frame that lands here has no draw-once mask to
+        // give a 3D layer; `partitioned` is what the renderer reads to know that.
         std::uint8_t next = 1;
         for (const TileID& tile : tiles) {
             if (next == 255) {
