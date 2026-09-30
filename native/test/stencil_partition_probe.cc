@@ -199,6 +199,55 @@ void one_place_at_two_drawn_zooms_shares_a_code() {
           "one canonical tile, one value");
 }
 
+/// The clip fields never take the bit a 3D layer's draw-once mask owns.
+///
+/// The mask tests `NotEqual` against `kDrawOnceBit` and replaces on pass, over the whole frame.
+/// If a clip field shared that bit, the mask would read whatever the clip wrote and a building
+/// would blend once, twice or not at all depending on which tile it stood on. So the fields are
+/// packed into seven bits and this is what holds them there.
+///
+/// Sized from the widest partition the corpus produces: seven bits was the most any frame of the
+/// scene sweep or the example set asked for, so a case that fills seven is the boundary.
+void the_fields_leave_the_draw_once_bit_alone() {
+    // Seven bits exactly: 32 tiles at one zoom is six -- `bitsFor` counts to *n* past zero, so
+    // 32 places want 33 codes -- and a second zoom's single tile takes the seventh.
+    std::set<TileID> tiles;
+    for (std::uint32_t x = 0; x < 8; ++x) {
+        for (std::uint32_t y = 0; y < 4; ++y) {
+            tiles.insert(tile(6, x, y));
+        }
+    }
+    tiles.insert(tile(2, 0, 0));
+    const auto partition = tsf::partitionStencil(tiles, {{1, tiles}});
+    check(partition.partitioned, "seven bits of fields still partition");
+    for (const auto& [id, assignment] : partition.tiles) {
+        check((assignment.value & tsf::kDrawOnceBit) == 0, "no value takes the draw-once bit");
+        check((assignment.readMask & tsf::kDrawOnceBit) == 0, "no read mask takes it");
+        check((assignment.writeMask & tsf::kDrawOnceBit) == 0, "no write mask takes it");
+    }
+}
+
+/// And when they do not fit, the fallback takes the whole byte -- the bit with it.
+///
+/// This is the other half of the contract above, and the reason the renderer asks
+/// `partitioned` before it hands a 3D layer the mask rather than assuming the bit is free. A
+/// fallback frame's masks compare and write all eight bits, so a draw-once mask there would read
+/// whatever a clip had written.
+void the_fallback_leaves_no_bit_for_the_mask() {
+    std::set<TileID> tiles;
+    for (std::uint32_t x = 0; x < 16; ++x) {
+        for (std::uint32_t y = 0; y < 8; ++y) {
+            tiles.insert(tile(8, x, y));
+        }
+    }
+    const auto partition = tsf::partitionStencil(tiles, {{1, tiles}});
+    check(!partition.partitioned, "a zoom wanting eight bits falls back");
+    for (const auto& [id, assignment] : partition.tiles) {
+        check(assignment.readMask == 0xFF && assignment.writeMask == 0xFF,
+              "the fallback spends the whole byte, draw-once bit included");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -209,6 +258,8 @@ int main() {
     too_many_tiles_fall_back();
     fields_that_overflow_fall_back();
     one_place_at_two_drawn_zooms_shares_a_code();
+    the_fields_leave_the_draw_once_bit_alone();
+    the_fallback_leaves_no_bit_for_the_mask();
     if (failures != 0) {
         std::printf("%d failure(s)\n", failures);
         return EXIT_FAILURE;

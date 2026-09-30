@@ -1522,6 +1522,7 @@ void FilamentRenderer::writeMasks() {
         named.insert(tile);
     }
     const StencilPartition partition = partitionStencil(named, maskGroups_);
+    stencilPartitioned_ = partition.partitioned;
 
     for (const auto& [tile, matrix] : masks_) {
         const auto assigned = partition.tiles.find(tile);
@@ -1805,6 +1806,12 @@ void FilamentRenderer::beginFrame(std::uint64_t) {
     scissored_ = 0;
     masked_ = 0;
     unmasked_ = 0;
+    // The stencil is cleared with the frame, so the bit starts unset and the run that claims it
+    // has to claim it again.
+    drawOnceRun_ = 0;
+    drawOnceTaken_ = false;
+    drawOnceSkipped_ = 0;
+    stencilPartitioned_ = false;
     glyphsDrawn_ = 0;
     glyphsHidden_ = 0;
     zooms_.clear();
@@ -2181,6 +2188,7 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
                            textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE),
                            textureFor(add, kTerrainElevationSlot)};
     meshes_[add.id].clipped = add.enableStencil;
+    meshes_[add.id].is3d = add.is3D;
     meshes_[add.id].color = add.enableColor;
     meshes_[add.id].paintMask = color != nullptr ? 1u : 0u;
     meshes_[add.id].ownedBuffers = std::move(owned);
@@ -2389,6 +2397,7 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
                            textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE),
                            textureFor(add, kTerrainElevationSlot)};
     meshes_[add.id].clipped = add.enableStencil;
+    meshes_[add.id].is3d = add.is3D;
     meshes_[add.id].color = add.enableColor;
     meshes_[add.id].paintMask = color != nullptr ? 1u : 0u;
     meshes_[add.id].ownedBuffers = std::move(owned);
@@ -2652,6 +2661,7 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
                            textureFor(add, kTerrainElevationSlot)};
     meshes_[add.id].filter = filterFor(add);
     meshes_[add.id].clipped = add.enableStencil;
+    meshes_[add.id].is3d = add.is3D;
     meshes_[add.id].color = add.enableColor;
     meshes_[add.id].paintMask = paintMask;
     meshes_[add.id].ownedBuffers = std::move(owned);
@@ -3129,6 +3139,7 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
         mesh.tile = add.tileID ? *add.tileID : TileID{};
         mesh.color = add.enableColor;
         mesh.clipped = add.enableStencil;
+        mesh.is3d = add.is3D;
         mesh.paintMask = paintMask;
         mesh.sharedBuffers = std::move(sharedKeys);
         mesh.sharedIndices = sharedIndices;
@@ -3214,6 +3225,7 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
     // is built by position and a field inserted among them takes the next one's value.
     meshes_[add.id].sharedIndices = sharedIndices;
     meshes_[add.id].clipped = add.enableStencil;
+    meshes_[add.id].is3d = add.is3D;
     meshes_[add.id].color = add.enableColor;
 }
 
@@ -3406,6 +3418,34 @@ void FilamentRenderer::endFrame(std::uint64_t) {
             ++end;
         }
         std::reverse(run, end);
+
+        // One run of a 3D layer takes `kDrawOnceBit`, and the first one does.
+        //
+        // mbgl settles this per layer group before drawing any of it, for the reason its comment
+        // gives: `stencilModeFor3D` hands out a different value every call, so every drawable in
+        // the group has to be given the same one. Here the run *is* the group, so the value is
+        // decided here and read in `issue`.
+        //
+        // Only where the clip fields left the bit alone. The fallback spends the whole byte, and
+        // a mask sharing a bit with a clip would test against whatever the clip wrote.
+        if (stencilPartitioned_) {
+            const bool has3d = std::any_of(run, end, [&](const Batch& batch) {
+                return std::any_of(
+                        batch.geometries.begin(), batch.geometries.end(), [&](std::uint64_t id) {
+                            const auto mesh = meshes_.find(id);
+                            return mesh != meshes_.end() && mesh->second.is3d;
+                        });
+            });
+            if (has3d) {
+                if (drawOnceTaken_) {
+                    drawOnceSkipped_++;
+                } else {
+                    drawOnceRun_ = runKey(layer, pass);
+                    drawOnceTaken_ = true;
+                }
+            }
+        }
+
         run = end;
     }
 
@@ -4839,12 +4879,46 @@ void FilamentRenderer::issue(const Batch& batch) {
         if (clipped && reference == 0) {
             unmasked_++;
         }
-        if (reference != 0 && !noStencil) {
+
+        // The 3D layer's draw-once mask, which is what the paragraphs above leave unsolved.
+        //
+        // Dropping the tile clip keeps a building's walls, and the note above measures what it
+        // costs: two tiles' copies of an overlapping building both blend. Depth narrows that a
+        // long way -- taking the prepass out puts this scene from 205 gross to 14,677 -- but it
+        // cannot close it, because depth separates surfaces that differ in depth and the ones
+        // left are the ones that do not: a wall shared by two rooms, a roof meeting the wall
+        // raised off it.
+        //
+        // mbgl bounds it with the stencil instead of the depth buffer. `stencilModeFor3D` tests
+        // `NotEqual` against one value for the whole layer and replaces on pass, so the first
+        // fragment to reach a pixel writes the value and every later one fails -- one blend per
+        // pixel, whatever the depths do, and across tiles as well as within one. The producer
+        // already says which drawables want it: `IS_3D` with `ENABLE_STENCIL`, which is exactly
+        // the pair mbgl reads, and which the color pass carries and the depth pass does not. That
+        // asymmetry is required, not incidental: a depth pass that also wrote the value would
+        // leave the color pass testing `NotEqual` against its own mark everywhere, and the layer
+        // would vanish.
+        const bool drawOnce = mesh->second.is3d && mesh->second.clipped && drawOnceTaken_
+                              && runKey(batch.layerIndex, batch.pass) == drawOnceRun_;
+        if (drawOnce && !noStencil) {
+            instance->setStencilWrite(true);
+            instance->setStencilReferenceValue(kDrawOnceBit);
+            instance->setStencilReadMask(kDrawOnceBit);
+            instance->setStencilWriteMask(kDrawOnceBit);
+            instance->setStencilCompareFunction(filament::MaterialInstance::StencilCompareFunc::NE);
+            instance->setStencilOpDepthStencilPass(filament::MaterialInstance::StencilOperation::REPLACE);
+        } else if (reference != 0 && !noStencil) {
             instance->setStencilWrite(false);
             instance->setStencilReferenceValue(impossibleRef ? 200 : reference);
             // Only this tile's zoom's bits: the rest of the byte belongs to other zooms' masks.
             instance->setStencilReadMask(impossibleRef ? 0xFF : stencil.mask);
             instance->setStencilCompareFunction(filament::MaterialInstance::StencilCompareFunc::E);
+        } else if (!noStencil) {
+            // Explicitly off, not merely unset. An instance is cached and carries the stencil
+            // state it was last given, so a drawable that wants none has to say so -- the same
+            // reason the scissor below is unset explicitly rather than skipped.
+            instance->setStencilWrite(false);
+            instance->setStencilCompareFunction(filament::MaterialInstance::StencilCompareFunc::A);
         }
 
         // The bounding-box scissor below is a coarser thing than the mask and does not replace it:
