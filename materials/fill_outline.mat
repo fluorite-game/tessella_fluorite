@@ -4,7 +4,7 @@
 //
 // The same vertices as its fill, with its own indices over them, drawn as lines rather than
 // triangles -- the ABI carries no topology, so the family implies it, which is what mbgl's own
-// fill-outline does with gfx::DrawMode::Lines. Its colour is the layer's `outline_color`, a
+// fill-outline does with gfx::DrawMode::Lines. Its color is the layer's `outline_color`, a
 // separate float4 in the evaluated-paint block, not the fill's own.
 //
 // # This is where a fill gets its antialiasing
@@ -18,7 +18,7 @@
 //     alpha = 1 - smoothstep(0, 1, dist)
 //
 // `frag_position` is the vertex's position in screen pixels, interpolated along the line, so the
-// distance is perpendicular. Without it the outline drew a hard line in the fill's own colour,
+// distance is perpendicular. Without it the outline drew a hard line in the fill's own color,
 // invisible against the fill it traces, and every polygon in every style had a stair-stepped
 // edge -- 175 pixels of one test quad and 3,167 of the Protomaps park layer.
 //

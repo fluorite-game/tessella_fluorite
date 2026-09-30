@@ -139,7 +139,7 @@ vertex {
             // found by projecting a short horizontal line and measuring what became of it.
             // One tile unit east, bent the same way. The anchored form differentiates its
             // expansion for this; the direct bend has nothing to differentiate, so it bends the
-            // neighbouring point and takes the difference the caller wants.
+            // neighboring point and takes the difference the caller wants.
             vec4 offsetPoint = bend(a_pos + vec2(1.0, 0.0));
             vec2 a = projectedPoint.xy / projectedPoint.w;
             vec2 b = offsetPoint.xy / offsetPoint.w;
@@ -182,7 +182,7 @@ vertex {
                               clamp(rawFade.x + fade_change, 0.0, 1.0),
                               fontScale);
         material.glyphGamma = vec4(clip.w, 0.0, 0.0, 0.0);
-        // The layer's opacity, or this feature's. A sprite carries its own colour, so this is the
+        // The layer's opacity, or this feature's. A sprite carries its own color, so this is the
         // only one of the five the icon shader has.
         material.symbolScalars = vec4(resolveSymbolOpacity(getCustom3()), 0.0, 0.0, 0.0);
         material.worldPosition = clip;

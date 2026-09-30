@@ -169,9 +169,9 @@ public:
     [[nodiscard]] std::uint64_t renderables() const noexcept { return renderables_; }
     /// How many primitives those renderables carry.
     [[nodiscard]] std::uint64_t primitives() const noexcept { return primitives_; }
-    /// Instances made this frame, and how many of them got a paint colour.
+    /// Instances made this frame, and how many of them got a paint color.
     [[nodiscard]] std::uint64_t made() const noexcept { return made_; }
-    [[nodiscard]] std::uint64_t coloured() const noexcept { return coloured_; }
+    [[nodiscard]] std::uint64_t colored() const noexcept { return colored_; }
 
     /// How many geometries arrived at each tile zoom, so a frame drawing coarse ancestors
     /// beside the tiles that replaced them is visible rather than inferred.
@@ -387,12 +387,12 @@ private:
         /// After the textures, because both mesh records above are built with positional
         /// initializers and a field between them would silently take the next one's value.
         std::uint32_t filter = 0;
-        /// Whether this drawable writes colour.
+        /// Whether this drawable writes color.
         ///
         /// `DrawFlags::ENABLE_COLOR`, cleared for an extrusion's depth-only pass. Ignoring it drew
-        /// that pass *as* the colour pass, which is what a building looked like before: a flat
+        /// that pass *as* the color pass, which is what a building looked like before: a flat
         /// footprint in the roof's shade, with no walls and no depth between them.
-        bool colour = true;
+        bool color = true;
         /// Whether the producer asked for this drawable to be clipped to its tile.
         ///
         /// `DrawFlags::ENABLE_STENCIL`, carried on the geometry because that is where it
@@ -521,7 +521,7 @@ private:
     filament::VertexBuffer* shellVertices_ = nullptr;
     filament::IndexBuffer* shellIndices_ = nullptr;
     std::uint32_t shellIndexCount_ = 0;
-    /// The colour the shell is painted, taken from the last background drawable seen. A tile that
+    /// The color the shell is painted, taken from the last background drawable seen. A tile that
     /// has not arrived then reads as ocean rather than as a hole through the planet.
     filament::math::float4 shellColor_{0.0f, 0.0f, 0.0f, 1.0f};
 
@@ -550,7 +550,7 @@ private:
     /// The unread paint slot of every constant-paint drawable in the frame.
     ///
     /// Filament bakes `requires` into the package and refuses a primitive whose vertex buffer
-    /// does not declare what its material requires, so a drawable whose colour is the layer's
+    /// does not declare what its material requires, so a drawable whose color is the layer's
     /// still has to declare the attribute it will never read. One buffer serves all of them:
     /// declared, never sampled because the specialization compiled the branch out, and grown to
     /// the largest vertex count seen rather than allocated per drawable.
@@ -668,7 +668,7 @@ private:
     std::uint64_t redrawn_ = 0;
     std::map<std::uint8_t, std::uint64_t> passes_;
     std::uint64_t made_ = 0;
-    std::uint64_t coloured_ = 0;
+    std::uint64_t colored_ = 0;
     std::uint64_t renderables_ = 0;
     std::uint64_t primitives_ = 0;
     std::uint64_t walls_ = 0;

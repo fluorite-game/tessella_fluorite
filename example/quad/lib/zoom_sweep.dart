@@ -14,7 +14,7 @@ import 'dart:math' as math;
 ///
 /// This is the hardest thing the pipeline is asked to do. Every level crossed
 /// throws away a cover and asks for another, every label re-places against a
-/// different set of neighbours, and the arena churns a whole screen of geometry
+/// different set of neighbors, and the arena churns a whole screen of geometry
 /// per level. A pan moves the camera; this replaces everything it is looking at.
 class ZoomSweep {
   const ZoomSweep({

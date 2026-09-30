@@ -67,7 +67,7 @@ material {
     ],
     requires : [ position, custom0, custom1, custom2, custom3, custom4,
                  custom5, custom6, custom7 ],
-    // Four, Filament's limit: the two the geometry needs, the resolved colour for this pass,
+    // Four, Filament's limit: the two the geometry needs, the resolved color for this pass,
     // and the three scalars the fragment reads.
     variables : [ glyph, glyphGamma, symbolPaint, symbolScalars ]
 }
@@ -152,7 +152,7 @@ vertex {
                               fontScale);
         material.glyphGamma = vec4(clip.w, 0.0, 0.0, 0.0);
         // The layer's paint, or this feature's. `isHalo` is a per-drawable uniform, so which of
-        // the two colours this pass wants is settled here rather than per fragment.
+        // the two colors this pass wants is settled here rather than per fragment.
         material.symbolPaint = materialParams.isHalo >= 0.5 ? resolveSymbolHaloColor()
                                                             : resolveSymbolFillColor();
         material.symbolScalars = vec4(resolveSymbolOpacity(getCustom5()),

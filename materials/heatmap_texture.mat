@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// A heatmap layer's second pass: the density the first pass accumulated, read through a colour
+// A heatmap layer's second pass: the density the first pass accumulated, read through a color
 // ramp and drawn over the frame.
 //
 // One quad per layer, not per tile -- the unit square scaled to the world size here, which is

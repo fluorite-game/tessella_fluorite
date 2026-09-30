@@ -4,7 +4,7 @@
 // plan.md §18 item 6, the same expansion `fill_globe_anchored.mat` evaluates.
 //
 // The outline has to be on whichever form the fill is on. It traces the fill's own ring, so any
-// disagreement between the two curves is a fringe of outline colour lying beside the edge it is
+// disagreement between the two curves is a fringe of outline color lying beside the edge it is
 // meant to sit on -- and `fill-outline-color` defaults to `fill-color`, so that fringe reads as
 // more fill rather than as a line out of place. Measured with the outline left on the direct bend
 // while the fill was anchored: Monterey z13 against the oracle went 0.489% to 1.047%, so the

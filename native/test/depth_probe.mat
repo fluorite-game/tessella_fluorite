@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The smallest thing that can answer "which quad wins": a flat colour, and a position taken
+// The smallest thing that can answer "which quad wins": a flat color, and a position taken
 // straight to clip space the way every tessella material takes it.
 //
 // Deliberately not one of the shipped materials. Those carry the arithmetic of a real layer, and

@@ -130,7 +130,7 @@ double peak_rss_mib() {
     return kib / 1024.0;
 }
 
-/// One phase's samples, summarised. Percentiles rather than a mean alone: a
+/// One phase's samples, summarized. Percentiles rather than a mean alone: a
 /// quad that is fast on average and stalls every thirtieth frame is a quad that
 /// drops frames, and the mean hides exactly that.
 struct Summary {
@@ -141,7 +141,7 @@ struct Summary {
     double max = 0.0;
 };
 
-Summary summarise(std::vector<double> samples) {
+Summary summarize(std::vector<double> samples) {
     Summary out;
     if (samples.empty()) return out;
     std::sort(samples.begin(), samples.end());
@@ -350,8 +350,8 @@ int main(int argc, char** argv) {
         }
     }
     if (wanted("still")) std::printf("still  (nothing moving)\n");
-    report("still", "tick", summarise(stillTick));
-    report("still", "frame", summarise(stillFrame));
+    report("still", "tick", summarize(stillTick));
+    report("still", "frame", summarize(stillFrame));
     std::printf("bench still.records=%llu\n",
                 (unsigned long long)(panes[0].map->records() - recordsBeforeStill));
 
@@ -394,8 +394,8 @@ int main(int argc, char** argv) {
         }
     }
     if (wanted("solo")) std::printf("solo   (one camera moving, three still)\n");
-    report("solo", "tick", summarise(soloTick));
-    report("solo", "frame", summarise(soloFrame));
+    report("solo", "tick", summarize(soloTick));
+    report("solo", "frame", summarize(soloFrame));
 
     // --- motion: every camera moving every frame ------------------------------
     //
@@ -423,8 +423,8 @@ int main(int argc, char** argv) {
         }
     }
     if (wanted("motion")) std::printf("motion (all four cameras moving)\n");
-    report("motion", "tick", summarise(motionTick));
-    report("motion", "frame", summarise(motionFrame));
+    report("motion", "tick", summarize(motionTick));
+    report("motion", "frame", summarize(motionFrame));
     const std::uint64_t motionRecords = panes[0].map->records() - recordsBeforeMotion;
     std::printf("  Seattle    %llu records over %d frames (%.1f per frame)\n",
                 (unsigned long long)motionRecords, frames + warmup,
@@ -446,10 +446,10 @@ int main(int argc, char** argv) {
                     static_cast<double>(panes[i].map->slabUsed()) / (1024.0 * 1024.0),
                     kCities[i].name, static_cast<int>(panes[i].map->lastResult()));
     }
-    report("motion", "prod", summarise(produce));
-    report("motion", "drain", summarise(drain));
+    report("motion", "prod", summarize(produce));
+    report("motion", "drain", summarize(drain));
     for (std::size_t i = 0; i < panes.size(); i++) {
-        const Summary pane = summarise(perPane[i]);
+        const Summary pane = summarize(perPane[i]);
         std::printf("  %-10s tick   mean %7.3f  p50 %7.3f  p95 %7.3f  max %7.3f\n",
                     kCities[i].name, pane.mean, pane.p50, pane.p95, pane.max);
         std::printf("bench motion.%s.tick.mean=%.4f motion.%s.tick.p50=%.4f\n", kCities[i].name,
@@ -560,8 +560,8 @@ int main(int argc, char** argv) {
         }
     }
     if (wanted("sweep")) std::printf("sweep  (zoom 0 to 18 and home, all four)\n");
-    report("sweep", "tick", summarise(sweepTick));
-    report("sweep", "frame", summarise(sweepFrame));
+    report("sweep", "tick", summarize(sweepTick));
+    report("sweep", "frame", summarize(sweepFrame));
     std::printf("  region-full ticks %llu\n", (unsigned long long)sweepFull);
     std::printf("bench sweep.region_full=%llu\n", (unsigned long long)sweepFull);
     for (std::size_t i = 0; i < panes.size(); i++) {
@@ -583,7 +583,7 @@ int main(int argc, char** argv) {
                     static_cast<double>(live) / (1024.0 * 1024.0), (unsigned long long)slabs);
     }
 
-    const Summary motion = summarise(motionFrame);
+    const Summary motion = summarize(motionFrame);
     std::printf("peak rss %.0f MiB\n", peak_rss_mib());
     std::printf("bench rss.peak_mib=%.0f fps.motion_p50=%.1f fps.motion_p99=%.1f\n", peak_rss_mib(),
                 motion.p50 > 0 ? 1000.0 / motion.p50 : 0.0,

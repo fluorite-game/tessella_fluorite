@@ -3,7 +3,7 @@
 // A heatmap layer's first pass: one Gaussian kernel per point, summed into an offscreen target.
 //
 // The quad is never seen, exactly as a circle's is not. What is written is a density -- one
-// float per pixel, accumulated across every kernel that covers it -- and the layer's colour
+// float per pixel, accumulated across every kernel that covers it -- and the layer's color
 // comes later, when `heatmap_texture.mat` reads that density through a ramp.
 //
 // Two things make this pass unlike every other family here. It blends *additively*, because

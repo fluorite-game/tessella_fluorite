@@ -17,7 +17,7 @@
 // The lighting is mbgl's, term for term. It is not a physical model and should not be tidied into
 // one: the directional factor *brightens* a lit surface rather than dimming it -- at full
 // incidence it is `max(1 - luminance + intensity, 1)`, never below one -- and only a surface
-// facing away is scaled down, by `1 - intensity`. Multiplying the colour by the intensity instead
+// facing away is scaled down, by `1 - intensity`. Multiplying the color by the intensity instead
 // is what made every building near-black.
 //
 // Placed by the shader like a line, and for the same reason: the base/height selection happens in
@@ -76,7 +76,7 @@ vertex {
 
         // The building's own base and height, per vertex. These are data-driven in every real
         // style -- liberty reads `render_height` off the feature -- so taking them from the paint
-        // block instead leaves every building zero metres tall and flat on the ground, which is
+        // block instead leaves every building zero meters tall and flat on the ground, which is
         // what it was doing. A property the style left constant is handed over as a pair of equal
         // values, so this one path serves both.
         // Each is one float, or the lower and upper zoom stop when it also varies with zoom. A
@@ -130,13 +130,13 @@ vertex {
                          + (materialParams.verticalGradient * factor);
         }
 
-        // Shading is floored at a tint complementary to the light, so a coloured light leaves its
+        // Shading is floored at a tint complementary to the light, so a colored light leaves its
         // opposite in the shadows rather than driving them to black.
         vec3 minLight = mix(vec3(0.0), vec3(0.3), 1.0 - materialParams.lightColor);
         vec3 lit = clamp(color.rgb * directional * materialParams.lightColor, minLight, vec3(1.0));
 
         // Premultiplied: rgb scaled by the opacity and alpha set to it, which is mbgl's
-        // `vcolor * opacity` over a colour whose alpha was one.
+        // `vcolor * opacity` over a color whose alpha was one.
         material.shade = vec4(lit, 1.0) * materialParams.opacity;
 
         // `z` straight, not scaled by the height factor. That factor exists only for the pattern

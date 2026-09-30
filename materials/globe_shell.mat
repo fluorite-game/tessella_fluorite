@@ -43,10 +43,10 @@ material {
         // Sphere to clip -- `tsl_camera_update.globe_matrix`, the same matrix the bent families
         // are drawn through.
         { type : float4x4, name : globeMatrix },
-        // The style's background colour. The shell is painted as well as depth-written, which
+        // The style's background color. The shell is painted as well as depth-written, which
         // costs nothing and closes a class of artifact: tiles arrive over a network, so a zoom
         // always has moments with tiles missing, and a missing tile would otherwise leave a hole
-        // straight through the planet. In the background colour the same moment reads as ocean
+        // straight through the planet. In the background color the same moment reads as ocean
         // nothing has been drawn on yet, which is what it is.
         { type : float4, name : color }
     ],

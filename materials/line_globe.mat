@@ -8,7 +8,7 @@
 // anchored form is built for, the bend is evaluated directly and has no linear part to extrude
 // along.
 //
-// So the centreline point and the extruded point are bent separately and the difference between
+// So the centerline point and the extruded point are bent separately and the difference between
 // them is the projected extrusion. Two evaluations of the bend a vertex, which is what the exact
 // answer costs -- and this is the low-zoom path, where a frame is a handful of tiles and a globe
 // is mostly coastline, borders and rivers. Without it a globe drew no line layer at all below
@@ -61,7 +61,7 @@ material {
     ],
     requires : [ position, custom0, custom1, custom2, custom3, custom4, custom5,
                  custom6 ],
-    // `linePaint` is the colour with the opacity already in it: both are per feature, so every
+    // `linePaint` is the color with the opacity already in it: both are per feature, so every
     // vertex of a segment carries the same pair and the product interpolates like either factor.
     variables : [ lineEdge, lineGamma, linePaint ]
 }
@@ -103,7 +103,7 @@ vertex {
         normal.y = normal.y * 2.0 - 1.0;
 
         // a_data arrives as four unsigned bytes; the first two are the extrusion, biased by 128.
-        // Raw bytes, not normalised: the vertex buffer declares UBYTE4 without a normalize
+        // Raw bytes, not normalized: the vertex buffer declares UBYTE4 without a normalize
         // flag, so the shader sees 0..255 rather than 0..1.
         vec4 data = getCustom0();
         vec2 extrude = data.xy - 128.0;
@@ -131,7 +131,7 @@ vertex {
 
         float ratio = max(materialParams.ratio, 1e-6);
 
-        // Bent twice: the centreline point this vertex sits on, and the same point pushed
+        // Bent twice: the centerline point this vertex sits on, and the same point pushed
         // sideways by the extrusion. Their difference is the projected extrusion, which on the
         // plane is `matrix * vec4(dist, 0, 0)` -- the linear part this bend does not have.
         vec2 at = center + offset2 / ratio;
@@ -171,7 +171,7 @@ fragment {
                     * gammaScale;
         float alpha = clamp(min(dist - (inset - blur2), outset - dist) / blur2, 0.0, 1.0);
 
-        // Premultiplied, matching the blending Filament is configured for: the colour is scaled by
+        // Premultiplied, matching the blending Filament is configured for: the color is scaled by
         // the coverage as well as the opacity, so a half-covered edge contributes half of both.
         material.baseColor = variable_linePaint * alpha;
     }

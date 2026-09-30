@@ -5,11 +5,11 @@
 // Same job as `mask.mat` -- write the stencil and nothing else -- and it exists because a globe
 // needs the clip more than a plane does, not less. MVT geometry runs past its tile's edge by
 // design, into the buffer that hides seams, and something has to stop that overhang painting into
-// the neighbour. On a plane a bounding-box scissor does most of it and the stencil refines it;
+// the neighbor. On a plane a bounding-box scissor does most of it and the stencil refines it;
 // under a globe the box is meaningless (the tile is a curved patch and the matrix reaches
 // normalized Mercator), so the stencil is the only device left.
 //
-// Drawn without one, a globe shows the overhang as wedges of water lying across its neighbours --
+// Drawn without one, a globe shows the overhang as wedges of water lying across its neighbors --
 // which is not a bend artifact: switching the stencil and scissor off on a *flat* map produces the
 // same wedges at the same camera.
 //

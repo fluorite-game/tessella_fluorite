@@ -11,7 +11,7 @@
 // does not anti-alias lines with MSAA; it widens the quad by half a pixel on each side and fades
 // the coverage out across that margin in the fragment shader, which is resolution-independent and
 // costs no bandwidth. `normal` interpolates from +1 at one edge of the strip through 0 at the
-// centreline to -1 at the other, so its length scaled by `outset` is the fragment's distance from
+// centerline to -1 at the other, so its length scaled by `outset` is the fragment's distance from
 // the center in pixels -- and that distance against the two edges is the whole of the coverage.
 //
 // Dash patterns and the round/square caps are still not here; a solid line of the right width in
@@ -58,7 +58,7 @@ material {
     ],
     requires : [ position, custom0, custom1, custom2, custom3, custom4, custom5,
                  custom6 ],
-    // `linePaint` is the colour with the opacity already in it: both are per feature, so every
+    // `linePaint` is the color with the opacity already in it: both are per feature, so every
     // vertex of a segment carries the same pair and the product interpolates like either factor.
     variables : [ lineEdge, lineGamma, linePaint ]
 }
@@ -79,7 +79,7 @@ vertex {
         normal.y = normal.y * 2.0 - 1.0;
 
         // a_data arrives as four unsigned bytes; the first two are the extrusion, biased by 128.
-        // Raw bytes, not normalised: the vertex buffer declares UBYTE4 without a normalize
+        // Raw bytes, not normalized: the vertex buffer declares UBYTE4 without a normalize
         // flag, so the shader sees 0..255 rather than 0..1.
         vec4 data = getCustom0();
         vec2 extrude = data.xy - 128.0;
@@ -151,7 +151,7 @@ fragment {
                     * gammaScale;
         float alpha = clamp(min(dist - (inset - blur2), outset - dist) / blur2, 0.0, 1.0);
 
-        // Premultiplied, matching the blending Filament is configured for: the colour is scaled by
+        // Premultiplied, matching the blending Filament is configured for: the color is scaled by
         // the coverage as well as the opacity, so a half-covered edge contributes half of both.
         material.baseColor = variable_linePaint * alpha;
     }

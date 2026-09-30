@@ -3,10 +3,10 @@
 // The line family's paint. See `fill_paint.glsl` for why each family gets its own file, and
 // `paint.glsl` for the encoding.
 //
-// Six properties, and three of them shape the geometry rather than colour it: `width`, `gapwidth`
+// Six properties, and three of them shape the geometry rather than color it: `width`, `gapwidth`
 // and `offset` are read in the vertex stage and never reach the fragment. That is why the resolve
 // is six small functions rather than one -- the two halves of the shader want different subsets,
-// and a single struct would carry the colour through the vertex stage for nothing.
+// and a single struct would carry the color through the vertex stage for nothing.
 
 #include "paint.glsl"
 

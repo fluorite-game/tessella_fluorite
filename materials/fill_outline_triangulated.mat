@@ -14,8 +14,8 @@
 // that shader -- `shaders/mtl/fill.hpp`, transcribed -- so the widening happens in the vertex
 // stage where the backend cannot do it, and the fade is the line family's own.
 //
-// Two attributes and no paint: the colour is the layer's `outline_color` and the opacity its
-// `opacity`, which is why mbgl only takes this path when both are constant. A colour that varies
+// Two attributes and no paint: the color is the layer's `outline_color` and the opacity its
+// `opacity`, which is why mbgl only takes this path when both are constant. A color that varies
 // per feature has nowhere to travel here and keeps the line-primitive path.
 material {
     name : tessella_fill_outline_triangulated,
@@ -57,7 +57,7 @@ vertex {
         normal.y = normal.y * 2.0 - 1.0;
 
         // a_data arrives as four unsigned bytes; the first two are the extrusion, biased by 128.
-        // Raw bytes, not normalised: the vertex buffer declares UBYTE4 without a normalize flag.
+        // Raw bytes, not normalized: the vertex buffer declares UBYTE4 without a normalize flag.
         vec2 extrude = getCustom0().xy - 128.0;
 
         // One pixel wide, which is mbgl's `const float width = 1.0` here -- the outline has no

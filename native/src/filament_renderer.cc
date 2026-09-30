@@ -223,9 +223,9 @@ constexpr std::uint32_t kLineTilePropsSlot = 3;
 ///
 /// The generic path assigns `CUSTOM0`, `CUSTOM1`, ... in the order the wire lists attributes.
 /// That is fine while every drawable of a family carries the same ones, and wrong the moment paint
-/// becomes data-driven: a fill whose colour is the layer's but whose opacity is the feature's
+/// becomes data-driven: a fill whose color is the layer's but whose opacity is the feature's
 /// sends one paint attribute, and in wire order it would land in `CUSTOM0` -- the slot the
-/// material reads as *colour*. `getCustom0()` has to mean one property for the life of the
+/// material reads as *color*. `getCustom0()` has to mean one property for the life of the
 /// package, so the slot comes from the attribute's id.
 ///
 /// `slot` is -1 for the position, which takes Filament's own `POSITION`.
@@ -237,7 +237,7 @@ struct PaintSlot {
     int bit;
     /// Width the *shader* declares, in bytes, which is not always what the buffer supplies.
     ///
-    /// A property that varies with zoom carries both endpoints and a colour is four floats; one
+    /// A property that varies with zoom carries both endpoints and a color is four floats; one
     /// that varies only per feature carries one endpoint and two. The shader reads the wide form
     /// either way and mixes by a factor of zero, which is mbgl's arrangement -- so the last
     /// vertex reads past what the producer sent unless the slab is padded to this.
@@ -247,7 +247,7 @@ struct PaintSlot {
 };
 
 /// The fill family's slots. `fill-outline-color` is the outline shader's `CUSTOM0` because the
-/// outline is a different builtin with its own id space position, not a second colour on the fill.
+/// outline is a different builtin with its own id space position, not a second color on the fill.
 constexpr PaintSlot kFillSlots[] = {
     {TSL_UBO_ID_FILL_POS_VERTEX_ATTRIBUTE, -1, -1, 0,
      filament::VertexBuffer::AttributeType::SHORT2},
@@ -359,7 +359,7 @@ constexpr PaintSlot kHeatmapSlots[] = {
      filament::VertexBuffer::AttributeType::FLOAT2},
 };
 
-/// The second pass's quad has a position and nothing else: its colour comes from two samplers.
+/// The second pass's quad has a position and nothing else: its color comes from two samplers.
 constexpr PaintSlot kHeatmapTextureSlots[] = {
     {TSL_UBO_ID_HEATMAP_POS_VERTEX_ATTRIBUTE, -1, -1, 0,
      filament::VertexBuffer::AttributeType::SHORT2},
@@ -465,7 +465,7 @@ constexpr const char* kLineGradientConstants[] = {"blurFromAttribute", "opacityF
                                                   "gapWidthFromAttribute", "offsetFromAttribute",
                                                   "widthFromAttribute"};
 /// The extrusion family binds `base` and `height` unconditionally -- they shape the geometry and
-/// the builder synthesises a constant fill where the style did not drive them -- so the colour is
+/// the builder synthesises a constant fill where the style did not drive them -- so the color is
 /// the only property with a permutation, and the mask is one bit wide.
 constexpr const char* kFillExtrusionConstants[] = {"colorFromAttribute"};
 constexpr const char* kSymbolSdfConstants[] = {"colorFromAttribute", "haloColorFromAttribute",
@@ -645,11 +645,11 @@ filament::RenderableManager::PrimitiveType primitiveFor(std::uint8_t topology) {
     }
 }
 
-/// Where a family's evaluated-paint block keeps its colour.
+/// Where a family's evaluated-paint block keeps its color.
 ///
-/// Every block opens with `color[4]`, except that an outline wants the *outline* colour, which the
+/// Every block opens with `color[4]`, except that an outline wants the *outline* color, which the
 /// fill block keeps immediately after it.
-std::size_t colourOffset(std::int32_t family) {
+std::size_t colorOffset(std::int32_t family) {
     switch (family) {
         case TSL_BUILTIN_FILL_OUTLINE_SHADER:
         case TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER:
@@ -662,10 +662,10 @@ std::size_t colourOffset(std::int32_t family) {
 
 /// Where a family's evaluated-paint block keeps its opacity.
 ///
-/// Every one of them opens with `color[4]`, which is why the colour read is family-agnostic. What
-/// follows differs: background is colour then opacity, fill puts `outline_color[4]` between them.
+/// Every one of them opens with `color[4]`, which is why the color read is family-agnostic. What
+/// follows differs: background is color then opacity, fill puts `outline_color[4]` between them.
 /// Reading fill's layout out of a background block overruns a 32-byte buffer, and the size check
-/// that caught it was silently costing the background its colour -- twelve of seventy-seven
+/// that caught it was silently costing the background its color -- twelve of seventy-seven
 /// instances drew fully transparent.
 std::size_t opacityOffset(std::int32_t family, std::size_t bytes) {
     switch (family) {
@@ -683,13 +683,13 @@ std::size_t opacityOffset(std::int32_t family, std::size_t bytes) {
             return offsetof(tsl_line_evaluated_props_ubo, opacity);
         case TSL_BUILTIN_CIRCLE_SHADER:
             return offsetof(tsl_circle_evaluated_props_ubo, opacity);
-        // Raster is deliberately absent: its block does not open with a colour, and it sets
+        // Raster is deliberately absent: its block does not open with a color, and it sets
         // `opacity` itself from `tsl_raster_evaluated_props_ubo` alongside the rest of its paint.
         case TSL_BUILTIN_BACKGROUND_SHADER:
             return offsetof(tsl_background_props_ubo, opacity);
         // Both extrusion families, which share one props block. Missing here, the default below
         // left `opacity` at one and a translucent building was drawn opaque: the roofs came out
-        // at the lit colour instead of nine parts lit to one part what was behind them, which is
+        // at the lit color instead of nine parts lit to one part what was behind them, which is
         // 3 of 255 on a roof and 14 on a wall, over a third of the frame. It is also why the
         // layer matched the oracle exactly at an opacity of one -- the only value at which not
         // blending is right.
@@ -697,7 +697,7 @@ std::size_t opacityOffset(std::int32_t family, std::size_t bytes) {
         case TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER:
             return offsetof(tsl_fill_extrusion_props_ubo, opacity);
         default:
-            // Unknown layouts still open with a colour; the opacity is left at one rather than
+            // Unknown layouts still open with a color; the opacity is left at one rather than
             // read from an offset nothing has checked.
             return bytes;
     }
@@ -734,7 +734,7 @@ bool attributeType(std::uint8_t wire, filament::VertexBuffer::AttributeType& out
 /// How many bytes one vertex of a wire attribute type occupies.
 ///
 /// Only the types a paint attribute can arrive as, which is a run of floats: the walls copy an
-/// instance's colour bytes verbatim rather than decoding them, so they need the width and not
+/// instance's color bytes verbatim rather than decoding them, so they need the width and not
 /// just the type.
 std::size_t attributeBytes(filament::VertexBuffer::AttributeType type) {
     using AT = filament::VertexBuffer::AttributeType;
@@ -1002,7 +1002,7 @@ void FilamentRenderer::onTexture(const TextureUpdate& update) {
             break;
         default:
             // Depth and stencil are not something a layer samples, and guessing a format here
-            // would upload whatever bytes happened to arrive as colour.
+            // would upload whatever bytes happened to arrive as color.
             textureSkipped_++;
             return;
     }
@@ -1013,9 +1013,9 @@ void FilamentRenderer::onTexture(const TextureUpdate& update) {
     // real pixels arrive later at the real size. A Filament texture cannot be resized, so the
     // placeholder is replaced rather than written into. Both of those uploads are whole-texture,
     // so nothing is lost; a *rect* update that disagreed with the held size would be, and there is
-    // no sensible way to honour one, since the bytes for the rest of the atlas never arrive twice.
+    // no sensible way to honor one, since the bytes for the rest of the atlas never arrive twice.
     //
-    // A resize is honoured whether or not it carries rects, and the rects are then ignored. The
+    // A resize is honored whether or not it carries rects, and the rects are then ignored. The
     // payload of every texture update is the *whole* image -- the rects say which parts of it
     // changed, not which parts were sent -- so a resize loses nothing by uploading all of it,
     // and every texel is new anyway.
@@ -1247,7 +1247,7 @@ FilamentRenderer::MaskGrid FilamentRenderer::maskGrid(const std::uint32_t cells)
     for (std::uint32_t row = 0; row < side; ++row) {
         for (std::uint32_t column = 0; column < side; ++column) {
             // From the exact fraction, so the last row and column land on the tile's edge rather
-            // than short of it. A gap there is a seam the neighbouring mask does not cover.
+            // than short of it. A gap there is a seam the neighboring mask does not cover.
             const auto at = [&](std::uint32_t n) {
                 return static_cast<std::int16_t>((static_cast<std::int64_t>(n) * 8192) / cells);
             };
@@ -1441,7 +1441,7 @@ void FilamentRenderer::writeShell() {
     }
     shellInstance_->setParameter("globeMatrix", globeMatrix_);
     // Diagnostic: a shell nobody can mistake for the background. With TSF_SHELL_COLOR set, any
-    // pixel of this colour inside the disc is sphere with no surface tile over it.
+    // pixel of this color inside the disc is sphere with no surface tile over it.
     static const char* const shellOverride = std::getenv("TSF_SHELL_COLOR");
     if (shellOverride != nullptr) {
         float r = 0.0f, g = 0.0f, b = 0.0f;
@@ -1512,7 +1512,7 @@ void FilamentRenderer::writeMasks() {
     // zoom -- every mask writes the same value, every drawable tests for it, and the test passes
     // everywhere. Per tile it does the work it exists for: a tile's geometry runs well past its
     // own edge into the buffer that hides seams, and the mask is what stops that overhang painting
-    // over the neighbour it overlaps.
+    // over the neighbor it overlaps.
     //
     // Which bits each tile's mask writes and its geometry compares is `partitionStencil`'s to
     // decide: a field of the byte per canonical zoom, so layer groups drawn at different zooms can
@@ -1569,7 +1569,7 @@ void FilamentRenderer::writeMasks() {
             static_cast<float>(tile.overscaled_z % 4) / 4.0f, 0.5f, 1.0f});
         instance->setParameter("opacity", 1.0f);
         instance->setDepthWrite(false);
-        // Tested against the shell on a globe, for the reason the colour pass is: both hemispheres
+        // Tested against the shell on a globe, for the reason the color pass is: both hemispheres
         // project onto the same disc, so a far-side tile's mask lands on the same pixels as a
         // near-side one. Untested, REPLACE let whichever was drawn last own the pixel -- and in the
         // middle of the disc that was the far side, so every near-side fill failed its own
@@ -1799,7 +1799,7 @@ void FilamentRenderer::beginFrame(std::uint64_t) {
     pending_.clear();
     renderables_ = 0;
     primitives_ = 0;
-    coloured_ = 0;
+    colored_ = 0;
     ordered_ = 0;
     unplaced_ = 0;
     scissored_ = 0;
@@ -1892,7 +1892,7 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
     // source and the fallback below is what reads it.
     const Attribute* base = nullptr;
     const Attribute* height = nullptr;
-    const Attribute* colour = nullptr;
+    const Attribute* color = nullptr;
     for (const Attribute& attribute : add.instanceAttrs) {
         if (attribute.desc.attr_id == TSL_UBO_ID_FILL_EXTRUSION_OUTLINE_POS_ATTRIBUTE) {
             positions = &attribute;
@@ -1903,19 +1903,19 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
         } else if (attribute.desc.attr_id == TSL_UBO_ID_FILL_EXTRUSION_HEIGHT_VERTEX_ATTRIBUTE) {
             height = &attribute;
         } else if (attribute.desc.attr_id == TSL_UBO_ID_FILL_EXTRUSION_COLOR_VERTEX_ATTRIBUTE) {
-            colour = &attribute;
+            color = &attribute;
         }
     }
-    // The width of one instance's colour, and zero when the layer's paint is uniform. A type the
+    // The width of one instance's color, and zero when the layer's paint is uniform. A type the
     // wire names and this build cannot bind is treated as absent rather than as garbage.
-    filament::VertexBuffer::AttributeType colourType =
+    filament::VertexBuffer::AttributeType colorType =
         filament::VertexBuffer::AttributeType::FLOAT4;
-    std::size_t colourWidth = 0;
-    if (colour != nullptr && attributeType(colour->desc.data_type, colourType)) {
-        colourWidth = attributeBytes(colourType);
+    std::size_t colorWidth = 0;
+    if (color != nullptr && attributeType(color->desc.data_type, colorType)) {
+        colorWidth = attributeBytes(colorType);
     }
-    if (colourWidth == 0) {
-        colour = nullptr;
+    if (colorWidth == 0) {
+        color = nullptr;
     }
     if (positions == nullptr || decimals == nullptr || add.attrs.empty()) {
         return false;
@@ -1943,9 +1943,9 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
     // the only per-instance channel Filament has here, which is the same reason the instances
     // are expanded at all.
     std::vector<float> extents;
-    // The colour, replicated the same way and copied rather than decoded: the bytes are mbgl's
+    // The color, replicated the same way and copied rather than decoded: the bytes are mbgl's
     // packed pair and the shader unpacks them, so the wall never needs to know what is in them.
-    std::vector<std::uint8_t> colours;
+    std::vector<std::uint8_t> colors;
     // Wide while building: four corners a wall, so a building-dense tile passes 65535 corners
     // well before its outline runs out -- 16384 walls. Narrowed on upload when it fits.
     std::vector<std::uint32_t> indexes;
@@ -1960,7 +1960,7 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
         // bytes as the flag, and the closing point of a ring was marked by the parity of its x.
         // Half the rings therefore raised a wall from their last point to the *next ring's*
         // first, which is a quad six hundred tile units long. Invisible while every wall stood
-        // zero metres tall, and the moment the walls got their height it was a cross-hatch of
+        // zero meters tall, and the moment the walls got their height it was a cross-hatch of
         // lines over the whole tile.
         const Outline p1 = unpackOutline(
             positions->data.data + i * positions->desc.stride + positions->desc.offset,
@@ -2027,10 +2027,10 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
         const float instanceHeight = readFloat(height, i);
         const float instanceBaseUpper = readUpper(base, i);
         const float instanceHeightUpper = readUpper(height, i);
-        // This instance's colour bytes, or none when the layer's paint is uniform.
-        const std::uint8_t* instanceColour =
-            colour != nullptr && i < colour->count()
-                ? colour->data.data + i * colour->desc.stride + colour->desc.offset
+        // This instance's color bytes, or none when the layer's paint is uniform.
+        const std::uint8_t* instanceColor =
+            color != nullptr && i < color->count()
+                ? color->data.data + i * color->desc.stride + color->desc.offset
                 : nullptr;
 
         // No cap here. There was one, at 16-bit indexes, and it stopped the walk in silence: every
@@ -2051,11 +2051,11 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
             extents.push_back(instanceHeight);
             extents.push_back(instanceBaseUpper);
             extents.push_back(instanceHeightUpper);
-            if (colourWidth != 0) {
-                const std::size_t at = colours.size();
-                colours.resize(at + colourWidth, 0);
-                if (instanceColour != nullptr) {
-                    std::memcpy(colours.data() + at, instanceColour, colourWidth);
+            if (colorWidth != 0) {
+                const std::size_t at = colors.size();
+                colors.resize(at + colorWidth, 0);
+                if (instanceColor != nullptr) {
+                    std::memcpy(colors.data() + at, instanceColor, colorWidth);
                 }
             }
         }
@@ -2083,13 +2083,13 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
                       // Base and height at the lower zoom stop, then both at the upper.
                       .attribute(filament::VertexAttribute::CUSTOM1, 2,
                                  filament::VertexBuffer::AttributeType::FLOAT4, 0, 16)
-                      // The colour, declared whether or not this layer drives it -- `requires` is
+                      // The color, declared whether or not this layer drives it -- `requires` is
                       // baked into the package -- and fed by the shared zero buffer when it does
                       // not, which the specialization compiles away.
                       .attribute(filament::VertexAttribute::CUSTOM2, 3,
-                                 colour != nullptr ? colourType
+                                 color != nullptr ? colorType
                                                    : filament::VertexBuffer::AttributeType::FLOAT4,
-                                 0, static_cast<std::uint8_t>(colour != nullptr ? colourWidth : 16))
+                                 0, static_cast<std::uint8_t>(color != nullptr ? colorWidth : 16))
                       .build(*engine_);
     if (built == nullptr) {
         return false;
@@ -2122,8 +2122,8 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
     upload(0, vertices);
     upload(1, normals);
     upload(2, extents);
-    if (colour != nullptr) {
-        uploadBytes(3, colours.data(), colours.size());
+    if (color != nullptr) {
+        uploadBytes(3, colors.data(), colors.size());
     } else {
         built->setBufferObjectAt(*engine_, 3, shared);
     }
@@ -2174,15 +2174,15 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
                            add.tileID ? *add.tileID : TileID{},
                            // Both slots, on every path that builds a mesh. Two of the four set
                            // only slot zero, and a drawable that sampled two textures lost the
-                           // second in silence -- a heatmap quad with no colour ramp was skipped
+                           // second in silence -- a heatmap quad with no color ramp was skipped
                            // entirely, and a raster cross-fade fell back to its first picture,
                            // which is what kept the gap from ever showing.
                            textureFor(add), textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE),
                            textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE),
                            textureFor(add, kTerrainElevationSlot)};
     meshes_[add.id].clipped = add.enableStencil;
-    meshes_[add.id].colour = add.enableColor;
-    meshes_[add.id].paintMask = colour != nullptr ? 1u : 0u;
+    meshes_[add.id].color = add.enableColor;
+    meshes_[add.id].paintMask = color != nullptr ? 1u : 0u;
     meshes_[add.id].ownedBuffers = std::move(owned);
     walls_ += indexCount / 3;
     return true;
@@ -2205,23 +2205,23 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
     const Attribute* decimals = nullptr;
     const Attribute* base = nullptr;
     const Attribute* height = nullptr;
-    const Attribute* colour = nullptr;
+    const Attribute* color = nullptr;
     for (const Attribute& attribute : add.attrs) {
         switch (attribute.desc.attr_id) {
             case TSL_UBO_ID_FILL_EXTRUSION_POS_VERTEX_ATTRIBUTE: position = &attribute; break;
             case TSL_UBO_ID_FILL_EXTRUSION_DECIMALS_ED_ATTRIBUTE: decimals = &attribute; break;
             case TSL_UBO_ID_FILL_EXTRUSION_BASE_VERTEX_ATTRIBUTE: base = &attribute; break;
             case TSL_UBO_ID_FILL_EXTRUSION_HEIGHT_VERTEX_ATTRIBUTE: height = &attribute; break;
-            case TSL_UBO_ID_FILL_EXTRUSION_COLOR_VERTEX_ATTRIBUTE: colour = &attribute; break;
+            case TSL_UBO_ID_FILL_EXTRUSION_COLOR_VERTEX_ATTRIBUTE: color = &attribute; break;
             default: break;
         }
     }
     if (position == nullptr || decimals == nullptr) {
         return false;
     }
-    filament::VertexBuffer::AttributeType colourType{};
-    if (colour != nullptr && !attributeType(colour->desc.data_type, colourType)) {
-        colour = nullptr;
+    filament::VertexBuffer::AttributeType colorType{};
+    if (color != nullptr && !attributeType(color->desc.data_type, colorType)) {
+        color = nullptr;
     }
     const auto count = static_cast<std::uint32_t>(add.vertexCount);
     if (count == 0) {
@@ -2301,15 +2301,15 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
                          .attribute(filament::VertexAttribute::CUSTOM2, 3, heightType,
                                     height ? height->desc.offset : 0,
                                     height ? height->desc.stride : 4)
-                         // The colour, when this layer's is the feature's. Declared either way,
+                         // The color, when this layer's is the feature's. Declared either way,
                          // because `requires` is baked into the package -- see
                          // `native/test/permutation_probe.cc` -- and fed by the shared zero
                          // buffer when it is the layer's, which the constant compiles away.
                          .attribute(filament::VertexAttribute::CUSTOM3, 4,
-                                    colour != nullptr ? colourType
+                                    color != nullptr ? colorType
                                                       : filament::VertexBuffer::AttributeType::FLOAT4,
-                                    colour != nullptr ? colour->desc.offset : 0,
-                                    colour != nullptr ? colour->desc.stride
+                                    color != nullptr ? color->desc.offset : 0,
+                                    color != nullptr ? color->desc.stride
                                                       : sizeof(float) * 4)
                          .build(*engine_);
     if (vertices == nullptr) {
@@ -2342,8 +2342,8 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
            base ? base->data.size : baseFill.size());
     upload(3, height ? height->data.data : heightFill.data(),
            height ? height->data.size : heightFill.size());
-    if (colour != nullptr) {
-        upload(4, colour->data.data, colour->data.size);
+    if (color != nullptr) {
+        upload(4, color->data.data, color->data.size);
     } else {
         vertices->setBufferObjectAt(*engine_, 4, shared);
     }
@@ -2382,15 +2382,15 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
                            add.tileID ? *add.tileID : TileID{},
                            // Both slots, on every path that builds a mesh. Two of the four set
                            // only slot zero, and a drawable that sampled two textures lost the
-                           // second in silence -- a heatmap quad with no colour ramp was skipped
+                           // second in silence -- a heatmap quad with no color ramp was skipped
                            // entirely, and a raster cross-fade fell back to its first picture,
                            // which is what kept the gap from ever showing.
                            textureFor(add), textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE),
                            textureFor(add, TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE),
                            textureFor(add, kTerrainElevationSlot)};
     meshes_[add.id].clipped = add.enableStencil;
-    meshes_[add.id].colour = add.enableColor;
-    meshes_[add.id].paintMask = colour != nullptr ? 1u : 0u;
+    meshes_[add.id].color = add.enableColor;
+    meshes_[add.id].paintMask = color != nullptr ? 1u : 0u;
     meshes_[add.id].ownedBuffers = std::move(owned);
     return true;
 }
@@ -2640,7 +2640,7 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
                            textureFor(add),
                            // Slot one, which two families use and which this path used to drop:
                            // a raster's second picture for its cross-fade, and a heatmap quad's
-                           // colour ramp. Left at zero the ramp resolved to nothing and the
+                           // color ramp. Left at zero the ramp resolved to nothing and the
                            // whole second pass was skipped for want of a texture the producer
                            // had sent.
                            textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE),
@@ -2652,7 +2652,7 @@ bool FilamentRenderer::buildSymbol(const DrawableAdd& add) {
                            textureFor(add, kTerrainElevationSlot)};
     meshes_[add.id].filter = filterFor(add);
     meshes_[add.id].clipped = add.enableStencil;
-    meshes_[add.id].colour = add.enableColor;
+    meshes_[add.id].color = add.enableColor;
     meshes_[add.id].paintMask = paintMask;
     meshes_[add.id].ownedBuffers = std::move(owned);
     // The shares this mesh took, so retiring it gives them back. Left off, a symbol's published
@@ -2706,7 +2706,7 @@ filament::Material* FilamentRenderer::materialFor(std::int32_t family, std::uint
     if (package == packages_.end() || names == nullptr) {
         // A family with no constants has one program, and a drawable that thinks otherwise is a
         // table and a material that disagree. Drawn with the uniform form rather than not at all:
-        // the wrong colour is a bug worth seeing, and a missing layer looks like a data problem.
+        // the wrong color is a bug worth seeing, and a missing layer looks like a data problem.
         return base == table.end() ? nullptr : base->second;
     }
     filament::Material::Builder builder;
@@ -2865,7 +2865,7 @@ bool FilamentRenderer::uploadSlabs(const Slabs& slabs, std::uint32_t vertices,
 }
 
 filament::BufferObject* FilamentRenderer::zeroPaint(std::size_t vertices) {
-    // The widest paint attribute any family declares is a zoom-varying colour, four floats.
+    // The widest paint attribute any family declares is a zoom-varying color, four floats.
     constexpr std::size_t kWidest = sizeof(float) * 4;
     if (zeroPaint_ != nullptr && vertices <= zeroPaintVertices_) {
         return zeroPaint_;
@@ -3113,7 +3113,7 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
         // zero and nothing noticed. A dashed line reads its distance field through it, and a
         // zero here is `missing_atlas` on every drawable of the layer.
         mesh.texture = textureFor(add);
-        // And slot one, which joined this path the same way: a heatmap's quad reads its colour
+        // And slot one, which joined this path the same way: a heatmap's quad reads its color
         // ramp there, and a zero is the whole second pass skipped for want of a texture the
         // producer sent. The comment above is this one's, one field along and one family later.
         mesh.texture1 = textureFor(add, TSL_UBO_ID_RASTER_IMAGE1_TEXTURE);
@@ -3127,7 +3127,7 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
         mesh.zoom = add.tileID ? add.tileID->z : std::uint8_t{0};
         mesh.overscaledZoom = add.tileID ? add.tileID->overscaled_z : std::uint8_t{0};
         mesh.tile = add.tileID ? *add.tileID : TileID{};
-        mesh.colour = add.enableColor;
+        mesh.color = add.enableColor;
         mesh.clipped = add.enableStencil;
         mesh.paintMask = paintMask;
         mesh.sharedBuffers = std::move(sharedKeys);
@@ -3214,7 +3214,7 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
     // is built by position and a field inserted among them takes the next one's value.
     meshes_[add.id].sharedIndices = sharedIndices;
     meshes_[add.id].clipped = add.enableStencil;
-    meshes_[add.id].colour = add.enableColor;
+    meshes_[add.id].color = add.enableColor;
 }
 
 void FilamentRenderer::onRetire(std::uint64_t id) {
@@ -3383,7 +3383,7 @@ void FilamentRenderer::endFrame(std::uint64_t) {
     // already the order mbgl paints in: a fill's triangles then its outline, a symbol's sprites
     // then its halo then its letters, an extrusion's roof then the walls raised on it. Reversing
     // that drew every one of them in the wrong order, and it was invisible for as long as it was
-    // because the usual outline colour is the fill's own. With a contrasting `fill-outline-color`
+    // because the usual outline color is the fill's own. With a contrasting `fill-outline-color`
     // it is plain: the oracle's outline straddles the polygon edge, half of it blended over the
     // fill, and this side had the fill painted over that half -- red outside the edge and none
     // inside.
@@ -3396,7 +3396,7 @@ void FilamentRenderer::endFrame(std::uint64_t) {
     // The extrusions used to be the carve-out here, un-reversed on their own because they have a
     // depth buffer and the roof has to precede its walls. That is this rule, arrived at from one
     // family rather than from the general case -- the same bug, and this is where it was found:
-    // the depth prepass was arriving *after* the colour pass, so nothing ever read what it wrote.
+    // the depth prepass was arriving *after* the color pass, so nothing ever read what it wrote.
     std::reverse(pending_.begin(), pending_.end());
     for (auto run = pending_.begin(); run != pending_.end();) {
         const auto layer = run->layerIndex;
@@ -3696,7 +3696,7 @@ void FilamentRenderer::issue(const Batch& batch) {
             instance->setParameter("skirt",
                                    filament::math::float4{block.skirt[0], block.skirt[1],
                                                           block.skirt[2], block.skirt[3]});
-            coloured_++;
+            colored_++;
 
             const auto found = textures_.find(mesh->second.texture);
             if (found == textures_.end()) {
@@ -3802,23 +3802,23 @@ void FilamentRenderer::issue(const Batch& batch) {
             instance->setParameter("color",
                                    filament::math::float4{block.color[0], block.color[1],
                                                           block.color[2], block.color[3]});
-            coloured_++;
+            colored_++;
         }
 
         if (const auto props = layer->second.find(kPropsSlot);
             props != layer->second.end() &&
-            props->second.size() >= colourOffset(batch.builtinShader) + sizeof(float) * 4) {
-            // A symbol has no single colour: it carries a fill and a halo, and which of them
+            props->second.size() >= colorOffset(batch.builtinShader) + sizeof(float) * 4) {
+            // A symbol has no single color: it carries a fill and a halo, and which of them
             // applies is a property of the pass rather than of the layer. Its own block below
             // sets both, so the shared path would only be setting a uniform it does not declare.
             const bool patterned =
                 batch.builtinShader == TSL_BUILTIN_FILL_PATTERN_SHADER
                 || batch.builtinShader == TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER;
-            // Neither heatmap pass has a colour either, and for a reason worth saying: the
-            // kernels write a *density* and the quad reads its colour out of the ramp texture.
-            // A layer whose colour is a texture has no colour uniform, and Filament panics on a
+            // Neither heatmap pass has a color either, and for a reason worth saying: the
+            // kernels write a *density* and the quad reads its color out of the ramp texture.
+            // A layer whose color is a texture has no color uniform, and Filament panics on a
             // uniform a material does not declare rather than ignoring it.
-            const bool sharedColour = batch.builtinShader != TSL_BUILTIN_SYMBOL_SDFSHADER
+            const bool sharedColor = batch.builtinShader != TSL_BUILTIN_SYMBOL_SDFSHADER
                                       && batch.builtinShader != TSL_BUILTIN_SYMBOL_ICON_SHADER
                                       && batch.builtinShader != TSL_BUILTIN_RASTER_SHADER
                                       && batch.builtinShader != TSL_BUILTIN_HEATMAP_SHADER
@@ -3829,25 +3829,25 @@ void FilamentRenderer::issue(const Batch& batch) {
                                       // line, and its material declares no color uniform.
                                       && batch.builtinShader != TSL_BUILTIN_LINE_GRADIENT_SHADER
                                       && !patterned;
-            if (sharedColour) {
-                float colour[4] = {0, 0, 0, 0};
-                std::memcpy(colour, props->second.data() + colourOffset(batch.builtinShader),
-                            sizeof colour);
-                coloured_++;
+            if (sharedColor) {
+                float color[4] = {0, 0, 0, 0};
+                std::memcpy(color, props->second.data() + colorOffset(batch.builtinShader),
+                            sizeof color);
+                colored_++;
                 instance->setParameter(
-                    "color", filament::math::float4{colour[0], colour[1], colour[2], colour[3]});
+                    "color", filament::math::float4{color[0], color[1], color[2], color[3]});
                 // The globe's shell is painted in this, so a tile that has not arrived reads as
                 // ocean rather than as a hole through the planet. Taken from the background
                 // family rather than configured: it is the style's own answer to "what is under
                 // everything", which is exactly what the shell is.
                 if (batch.builtinShader == TSL_BUILTIN_BACKGROUND_SHADER) {
                     shellColor_ =
-                        filament::math::float4{colour[0], colour[1], colour[2], 1.0f};
+                        filament::math::float4{color[0], color[1], color[2], 1.0f};
                 }
             }
 
-            // Opacity is not a property of having a shared colour, and nesting it inside that
-            // test cost every family that sets its own colour its opacity: a raster tile at
+            // Opacity is not a property of having a shared color, and nesting it inside that
+            // test cost every family that sets its own color its opacity: a raster tile at
             // `raster-opacity` 0.55 was composited at one, which is opaque imagery over the
             // vector layers it should be showing through to. Every material declares the
             // parameter, so this runs for all of them; a family whose block has no opacity field
@@ -3858,7 +3858,7 @@ void FilamentRenderer::issue(const Batch& batch) {
             // that writes it. Fading the kernels would fade the density before the ramp saw it,
             // which is a different picture rather than a fainter one -- and the material
             // declares no such parameter, so Filament panics rather than ignoring it.
-            // And a hillshade, whose colours are three of its own -- shadow, highlight and
+            // And a hillshade, whose colors are three of its own -- shadow, highlight and
             // accent -- and whose block has no opacity at all. A layer's strength is
             // `hillshade-exaggeration`, which rides in the tile props beside the latitude range.
             if (batch.builtinShader != TSL_BUILTIN_HEATMAP_SHADER
@@ -4365,10 +4365,10 @@ void FilamentRenderer::issue(const Batch& batch) {
                 instance->setParameter(
                     "azimuths", filament::math::float4{paint.azimuths[0], paint.azimuths[1],
                                                        paint.azimuths[2], paint.azimuths[3]});
-                // Four colours each, one per light, set by name: an array parameter of `float4`
+                // Four colors each, one per light, set by name: an array parameter of `float4`
                 // is flattened into floats by the material compiler, so the second entry of one
-                // would be the first colour's green.
-                const auto colourAt = [](const float* block, std::size_t light) {
+                // would be the first color's green.
+                const auto colorAt = [](const float* block, std::size_t light) {
                     const std::size_t at = light * 4;
                     return filament::math::float4{block[at], block[at + 1], block[at + 2],
                                                   block[at + 3]};
@@ -4378,9 +4378,9 @@ void FilamentRenderer::issue(const Batch& batch) {
                 static constexpr const char* kHighlightNames[] = {"highlight0", "highlight1",
                                                                   "highlight2", "highlight3"};
                 for (std::size_t light = 0; light < 4; ++light) {
-                    instance->setParameter(kShadowNames[light], colourAt(paint.shadows, light));
+                    instance->setParameter(kShadowNames[light], colorAt(paint.shadows, light));
                     instance->setParameter(kHighlightNames[light],
-                                           colourAt(paint.highlights, light));
+                                           colorAt(paint.highlights, light));
                 }
 
                 const auto found = textures_.find(mesh->second.texture);
@@ -4394,7 +4394,7 @@ void FilamentRenderer::issue(const Batch& batch) {
                                              filament::TextureSampler::MagFilter::LINEAR));
             }
 
-            // A raster tile needs its own placement, the style's colour adjustments, and both
+            // A raster tile needs its own placement, the style's color adjustments, and both
             // pictures: the tile's own and the parent it is fading from.
             if (batch.builtinShader == TSL_BUILTIN_RASTER_SHADER) {
                 tsl_raster_evaluated_props_ubo paint{};
@@ -4459,14 +4459,14 @@ void FilamentRenderer::issue(const Batch& batch) {
             }
 
             // The heatmap's second pass samples two as well, and the same two slots carry them:
-            // slot 0 is what the first pass drew and slot 1 the colour ramp, which is
+            // slot 0 is what the first pass drew and slot 1 the color ramp, which is
             // `TSL_UBO_ID_RASTER_IMAGE1_TEXTURE`'s number and `TSL_UBO_ID_HEATMAP_COLOR_RAMP_TEXTURE`'s
             // too. The render target is in `textures_` without ever having been uploaded --
             // nothing sends pixels to a target -- which is why it is put there by hand when the
             // target is created.
             //
             // Both are clamped. The ramp is 256x1 and a density of exactly one would wrap to its
-            // first stop under repeat, which paints the hottest pixels the colour of the coldest.
+            // first stop under repeat, which paints the hottest pixels the color of the coldest.
             if (batch.builtinShader == TSL_BUILTIN_HEATMAP_TEXTURE_SHADER) {
                 const auto image = textures_.find(mesh->second.texture);
                 const auto ramp = textures_.find(mesh->second.texture1);
@@ -4559,14 +4559,14 @@ void FilamentRenderer::issue(const Batch& batch) {
                 // The shader divides its atlas coordinates by this, so it has to be the size of
                 // the texture actually bound. A drawable carrying one size against a texture of
                 // another draws each glyph at the ratio between them -- a magnified corner of
-                // itself, and its neighbour's corners around it.
+                // itself, and its neighbor's corners around it.
                 //
                 // Taken from the texture rather than from the block. The two are the same thing
                 // said twice, and the block's copy can be a frame behind: a fetch that finds a
                 // new script hands the map a larger atlas, the upload carries the new size, and
                 // a drawable whose uniforms were not re-sent still names the old one. Every
                 // glyph then draws at the ratio between them -- a magnified corner of itself
-                // with its neighbours' corners around it, which is what the CJK panes showed and
+                // with its neighbors' corners around it, which is what the CJK panes showed and
                 // no flat, settled, Latin frame ever could.
                 //
                 // Counted as well as corrected: the staleness is a producer question, and a
@@ -4701,7 +4701,7 @@ void FilamentRenderer::issue(const Batch& batch) {
             }
 
             // An extrusion needs its base and height, its light, and the height factor that turns
-            // metres into the tile's own units -- the last from the drawable block, the rest from
+            // meters into the tile's own units -- the last from the drawable block, the rest from
             // the layer's paint.
             if (batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER ||
                 batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER) {
@@ -4753,13 +4753,13 @@ void FilamentRenderer::issue(const Batch& batch) {
         // because those are drawn from an anchor whose geometry legitimately overhangs the tile
         // that owns it. Clipping them anyway cut every label at every tile edge it crossed.
         // What the producer said this pass draws. An extrusion's depth pass clears `ENABLE_COLOR`
-        // and exists only to fill the depth buffer; drawing it as though it wrote colour is a
+        // and exists only to fill the depth buffer; drawing it as though it wrote color is a
         // building painted twice, once flat.
-        instance->setColorWrite(mesh->second.colour);
+        instance->setColorWrite(mesh->second.color);
 
         // And the depth buffer, which is what makes a building a volume rather than an outline.
         //
-        // Read and written by both passes, where mbgl leaves its colour pass read-only.
+        // Read and written by both passes, where mbgl leaves its color pass read-only.
         // `depth_probe` is why: two quads at the depths a z15 frame really produces, and the only
         // combination putting the near one in front in both draw orders is this projection with
         // Filament's default comparison and the write on. Reversing z -- the obvious reading,
@@ -4768,11 +4768,11 @@ void FilamentRenderer::issue(const Batch& batch) {
         //
         // Depth alone cannot prevent a double blend: the test rejects a farther fragment that
         // arrives second, but nothing stops it arriving first. So the buffer is filled with the
-        // whole layer before any colour is blended. On a stacked building an upper block's wall
+        // whole layer before any color is blended. On a stacked building an upper block's wall
         // projects over the lower block's roof, and without this both are blended, which reads as
         // a lighter rectangle let into the wall.
         //
-        // The colour pass writes depth as well as reading it, where mbgl leaves it read-only.
+        // The color pass writes depth as well as reading it, where mbgl leaves it read-only.
         // Read-only measures worse here and is not taken on faithfulness alone.
         if (resolvesInDepth(batch.builtinShader)) {
             instance->setDepthCulling(true);
@@ -4812,15 +4812,15 @@ void FilamentRenderer::issue(const Batch& batch) {
 
         // An extrusion is not clipped to its tile, in either pass.
         //
-        // The producer marks the colour pass `ENABLE_STENCIL` and the depth pass not, which is
-        // what mbgl does -- `setEnableStencil(doDepthPass)` on the colour builder, the depth
+        // The producer marks the color pass `ENABLE_STENCIL` and the depth pass not, which is
+        // what mbgl does -- `setEnableStencil(doDepthPass)` on the color builder, the depth
         // builder left at the default of false. There the asymmetry is harmless: mbgl's stencil
         // is what makes exactly one tile paint each pixel, and between them the tiles cover
         // everything.
         //
         // Here it was the anomaly. A building's geometry runs past its tile's edge by design, and
-        // clipping the colour pass to the tile square slices the walls off there. Nothing paints
-        // what is cut: the neighbouring tile does not carry its own copy of that building to
+        // clipping the color pass to the tile square slices the walls off there. Nothing paints
+        // what is cut: the neighboring tile does not carry its own copy of that building to
         // paint it with. So the clip removes wall faces and puts the background in their place.
         //
         // Measured against the oracle, clipping is what the visible error *is*. Unclipped the
@@ -4829,9 +4829,9 @@ void FilamentRenderer::issue(const Batch& batch) {
         // which is 2.1% of pixels differing by a shade nobody sees, against wall faces that are
         // simply missing.
         //
-        // Both passes, not just one. A clip on the depth pass and not the colour pass is worse
-        // than either: the depth pass writes for the whole building and the colour pass cannot
-        // paint the part outside the tile, which leaves depth with no colour -- a hole rather
+        // Both passes, not just one. A clip on the depth pass and not the color pass is worse
+        // than either: the depth pass writes for the whole building and the color pass cannot
+        // paint the part outside the tile, which leaves depth with no color -- a hole rather
         // than a slice. That asymmetry is why the prepass looked broken when it was first drawn.
         const bool clipped = mesh->second.clipped && !resolvesInDepth(batch.builtinShader);
         const StencilRef stencil = clipped ? referenceFor(mesh->second.tile) : StencilRef{};
@@ -4850,11 +4850,11 @@ void FilamentRenderer::issue(const Batch& batch) {
         // The bounding-box scissor below is a coarser thing than the mask and does not replace it:
         // an ancestor's box is its whole extent, so clipping to it clips nothing. Kept because it
         // costs nothing and bounds what the stencil then refines.
-        // §11.7 asks a consumer to honour the stencil tiles the producer
+        // §11.7 asks a consumer to honor the stencil tiles the producer
         // sends; this is that obligation met with a scissor. MVT geometry runs past its tile's
         // edge by design, into the buffer that exists to hide seams, so without a clip a tile
-        // paints into its neighbour and what is already there blends a second time. That was the
-        // banding: 122,097 pixels of a building grey composited twice, a colour the oracle never
+        // paints into its neighbor and what is already there blends a second time. That was the
+        // banding: 122,097 pixels of a building gray composited twice, a color the oracle never
         // produces.
         //
         // The rectangle comes from the drawable's own matrix rather than from the stencil record,
@@ -4864,7 +4864,7 @@ void FilamentRenderer::issue(const Batch& batch) {
         //
         // A globe scissors too, and has to. This is the device that clips a tile's *overhang* --
         // the stencil above is for ancestors, and most drawables are not stencil-clipped at all,
-        // so without a box the buffer that hides seams paints straight into the neighbour. That
+        // so without a box the buffer that hides seams paints straight into the neighbor. That
         // was the wedges of water lying across the map.
         //
         // The box cannot come from four corners through the drawable's matrix, which under a globe
@@ -4885,7 +4885,7 @@ void FilamentRenderer::issue(const Batch& batch) {
             // below. For a large one it is not: at z0 one tile is the whole sphere, its silhouette
             // is a quarter turn from every grid line, and the box came out narrower than the disc
             // -- so the fill was scissored away at the limb while the background, which carries no
-            // box, drew there. That is the strip of land colour down each side of the planet.
+            // box, drew there. That is the strip of land color down each side of the planet.
             filament::math::float3 lo{1e30f, 1e30f, 1e30f};
             filament::math::float3 hi{-1e30f, -1e30f, -1e30f};
             for (int row = 0; row <= kSamples && boundable; ++row) {
@@ -5154,11 +5154,11 @@ void FilamentRenderer::issue(const Batch& batch) {
         if (std::getenv("TSF_ORDER_LOG")) {
             std::fprintf(stderr,
                          "order %llu shader %d layer %u pass %u band %u geom %llu slot %u "
-                         "colour %d idx %u tx %.4f ty %.4f tile %u/%u/%u\n",
+                         "color %d idx %u tx %.4f ty %.4f tile %u/%u/%u\n",
                          (unsigned long long)ordered_, (int)batch.builtinShader,
                          (unsigned)batch.layerIndex, (unsigned)batch.pass, (unsigned)band,
                          (unsigned long long)batch.geometries[i], (unsigned)batch.uboIndexes[i],
-                         (int)mesh->second.colour, (unsigned)mesh->second.indexCount,
+                         (int)mesh->second.color, (unsigned)mesh->second.indexCount,
                          (double)transform[3][0], (double)transform[3][1],
                          (unsigned)mesh->second.tile.z, (unsigned)mesh->second.tile.x,
                          (unsigned)mesh->second.tile.y);

@@ -4,14 +4,14 @@
 //
 // `fill_extrusion_instanced.mat` says what this draws and how it is shaded; none of that changes on a sphere. What
 // changes is the last line: a plane places a vertex with one matrix whose `z` column carries the
-// metres-to-pixels factor, and a sphere has no such column. A building does not stand along the
+// meters-to-pixels factor, and a sphere has no such column. A building does not stand along the
 // plane's `z` there -- it stands along the surface normal, which is the sphere point itself.
 //
 // So the footprint comes from the expansion, as every other anchored material takes it, and the
-// height rides on `bendH`: the clip displacement per metre, which the producer takes at the
+// height rides on `bendH`: the clip displacement per meter, which the producer takes at the
 // anchor as `clip_matrix * vec4(sphere_point, 0) / EARTH_RADIUS_M`. The normal turns by the
-// tile's own angular width across it -- 1e-4 radians at z15 -- so a hundred-metre building leans
-// by a centimetre, and taking the direction at the anchor is the same approximation the rest of
+// tile's own angular width across it -- 1e-4 radians at z15 -- so a hundred-meter building leans
+// by a centimeter, and taking the direction at the anchor is the same approximation the rest of
 // the expansion already makes.
 //
 // Anchored only, and deliberately. The direct bend serves zooms below ten, and no style draws
@@ -45,7 +45,7 @@ material {
         { type : float4, name : bendUU },
         { type : float4, name : bendVV },
         { type : float4, name : bendUV },
-        // Clip displacement per metre of height, at the anchor.
+        // Clip displacement per meter of height, at the anchor.
         { type : float4, name : bendH },
         { type : float4, name : color },
         { type : float,  name : opacity },
@@ -135,7 +135,7 @@ vertex {
         // (`vec2(edgedistance, z * height_factor)`); mbgl never places geometry with it. It is
         // negative -- at z14 it is -4 -- so multiplying by it extruded every building four times
         // too far and downward, which at pitch zero left the walls sprawled over the roads.
-        // The footprint through the expansion, then the height along the normal. `z` is metres,
+        // The footprint through the expansion, then the height along the normal. `z` is meters,
         // which is what `bendH` is per unit of -- a plane folds the same factor into its matrix's
         // `z` column.
         vec2 d = footprint - materialParams.bendCenter;
