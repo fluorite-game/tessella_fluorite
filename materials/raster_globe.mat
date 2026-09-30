@@ -61,7 +61,7 @@ vertex {
 
     void materialVertex(inout MaterialVertexInputs material) {
         vec2 position = getPosition().xy;
-        // The texture coordinates are int16 over 8192 rather than normalised floats, which is what
+        // The texture coordinates are int16 over 8192 rather than normalized floats, which is what
         // gives a raster tile enough precision to be sampled at a fraction of a texel. 8192 is the
         // same EXTENT the position coordinates use, so the two scale together.
         vec2 texel = getCustom0().xy;
@@ -97,7 +97,7 @@ fragment {
                    dot(rgb, materialParams.spinWeights.zxy),
                    dot(rgb, materialParams.spinWeights.yzx));
 
-        // Saturation, toward or away from the pixel's own grey.
+        // Saturation, toward or away from the pixel's own gray.
         float average = (color.r + color.g + color.b) / 3.0;
         rgb += (average - rgb) * materialParams.saturationFactor;
 

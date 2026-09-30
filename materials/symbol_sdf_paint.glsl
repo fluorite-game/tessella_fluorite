@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The four paint properties only the SDF half has: a sprite carries its own colour, so an icon
+// The four paint properties only the SDF half has: a sprite carries its own color, so an icon
 // has no fill, no halo and no blur to resolve.
 
 #include "symbol_paint.glsl"

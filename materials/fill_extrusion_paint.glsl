@@ -2,7 +2,7 @@
 //
 // The fill-extrusion family's paint. See `fill_paint.glsl` for why each family gets its own file.
 //
-// One property, because `base` and `height` shape the building rather than colour it: both are
+// One property, because `base` and `height` shape the building rather than color it: both are
 // bound unconditionally and the builder synthesises a constant fill where the style did not drive
 // them, so neither has a permutation to select.
 

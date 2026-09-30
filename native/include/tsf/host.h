@@ -151,7 +151,7 @@ public:
     /// GL JS's `map.addImage(id, image)`. The picture joins the style's own sheet, under a name
     /// any layer can ask for, and a style with no sprite at all can still have images this way.
     /// `sdf` says the picture is a signed distance field, which is what lets `icon-color`
-    /// recolour it.
+    /// recolor it.
     ///
     /// Distinct from `addAnnotationImage`, which adds an image an *annotation* names. After the
     /// style has resolved; an icon is laid out against the sheet per frame, so an image that

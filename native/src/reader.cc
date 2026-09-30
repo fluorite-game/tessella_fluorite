@@ -17,7 +17,7 @@ constexpr std::uint64_t alignUp(std::uint64_t value, std::uint64_t to) noexcept 
 /// Copies a trivially-copyable record out of the stream.
 ///
 /// By value rather than by cast: a record's bytes are aligned to the *record* boundary and its
-/// fields to their own, but a reinterpret_cast onto a stream is undefined behaviour whatever the
+/// fields to their own, but a reinterpret_cast onto a stream is undefined behavior whatever the
 /// alignment, and the copy is a few dozen bytes against a frame's worth of geometry.
 template <typename T>
 bool read(const std::uint8_t* from, std::uint32_t available, T& into) noexcept {

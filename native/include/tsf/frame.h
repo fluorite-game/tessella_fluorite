@@ -180,7 +180,7 @@ struct DrawableAdd {
 
     /// Ring position just past the record that announced this geometry.
     ///
-    /// §13.2's acknowledgement, from the consumer's end. The producer will not reuse the slab
+    /// §13.2's acknowledgment, from the consumer's end. The producer will not reuse the slab
     /// these bytes live in until the consumer has said it has uploaded past this point, which is
     /// what makes handing the borrowed pointer straight to the driver safe — and what makes
     /// copying it wasted work rather than prudence.
@@ -251,7 +251,7 @@ struct StencilTiles {
 ///
 /// One record in mbgl and two here, and they arrive that way: the order establishes an epoch and
 /// the camera names the epoch it requires. §11.7's obligation is to hold a camera until its
-/// epoch is held, which a consumer cannot honour if the two are one record.
+/// epoch is held, which a consumer cannot honor if the two are one record.
 struct FrameOrder {
     std::uint32_t view = 0;
     std::uint64_t orderEpoch = 0;

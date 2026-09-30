@@ -25,7 +25,7 @@ fragment {
         // Straight alpha. Filament's transparent mode composites the source already multiplied,
         // so multiplying here as well darkens the result once per composite -- invisible where a
         // single layer covers a pixel and compounding wherever layers stack, which is what the
-        // banding across liberty was: 133,033 pixels of a grey the oracle never produces, gone the
+        // banding across liberty was: 133,033 pixels of a gray the oracle never produces, gone the
         // moment this stopped double-multiplying.
         material.baseColor = materialParams.color * materialParams.opacity;
     }

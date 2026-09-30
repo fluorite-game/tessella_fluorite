@@ -4,14 +4,14 @@
 //
 // `fill_extrusion.mat` says what this draws and how it is shaded; none of that changes on a sphere. What
 // changes is the last line: a plane places a vertex with one matrix whose `z` column carries the
-// metres-to-pixels factor, and a sphere has no such column. A building does not stand along the
+// meters-to-pixels factor, and a sphere has no such column. A building does not stand along the
 // plane's `z` there -- it stands along the surface normal, which is the sphere point itself.
 //
 // So the footprint comes from the expansion, as every other anchored material takes it, and the
-// height rides on `bendH`: the clip displacement per metre, which the producer takes at the
+// height rides on `bendH`: the clip displacement per meter, which the producer takes at the
 // anchor as `clip_matrix * vec4(sphere_point, 0) / EARTH_RADIUS_M`. The normal turns by the
-// tile's own angular width across it -- 1e-4 radians at z15 -- so a hundred-metre building leans
-// by a centimetre, and taking the direction at the anchor is the same approximation the rest of
+// tile's own angular width across it -- 1e-4 radians at z15 -- so a hundred-meter building leans
+// by a centimeter, and taking the direction at the anchor is the same approximation the rest of
 // the expansion already makes.
 //
 // Anchored only, and deliberately. The direct bend serves zooms below ten, and no style draws
@@ -45,7 +45,7 @@ material {
         { type : float4, name : bendUU },
         { type : float4, name : bendVV },
         { type : float4, name : bendUV },
-        // Clip displacement per metre of height, at the anchor.
+        // Clip displacement per meter of height, at the anchor.
         { type : float4, name : bendH },
         { type : float4, name : color },
         { type : float,  name : opacity },
@@ -80,7 +80,7 @@ vertex {
 
         // The building's own base and height, per vertex. These are data-driven in every real
         // style -- liberty reads `render_height` off the feature -- so taking them from the paint
-        // block instead leaves every building zero metres tall and flat on the ground, which is
+        // block instead leaves every building zero meters tall and flat on the ground, which is
         // what it was doing. A property the style left constant is handed over as a pair of equal
         // values, so this one path serves both.
         // Each is one float, or the lower and upper zoom stop when it also varies with zoom. A
@@ -134,13 +134,13 @@ vertex {
                          + (materialParams.verticalGradient * factor);
         }
 
-        // Shading is floored at a tint complementary to the light, so a coloured light leaves its
+        // Shading is floored at a tint complementary to the light, so a colored light leaves its
         // opposite in the shadows rather than driving them to black.
         vec3 minLight = mix(vec3(0.0), vec3(0.3), 1.0 - materialParams.lightColor);
         vec3 lit = clamp(color.rgb * directional * materialParams.lightColor, minLight, vec3(1.0));
 
         // Premultiplied: rgb scaled by the opacity and alpha set to it, which is mbgl's
-        // `vcolor * opacity` over a colour whose alpha was one.
+        // `vcolor * opacity` over a color whose alpha was one.
         material.shade = vec4(lit, 1.0) * materialParams.opacity;
 
         // `z` straight, not scaled by the height factor. That factor exists only for the pattern
@@ -148,7 +148,7 @@ vertex {
         // (`vec2(edgedistance, z * height_factor)`); mbgl never places geometry with it. It is
         // negative -- at z14 it is -4 -- so multiplying by it extruded every building four times
         // too far and downward, which at pitch zero left the walls sprawled over the roads.
-        // The footprint through the expansion, then the height along the normal. `z` is metres,
+        // The footprint through the expansion, then the height along the normal. `z` is meters,
         // which is what `bendH` is per unit of -- a plane folds the same factor into its matrix's
         // `z` column.
         vec2 d = footprint + decimals - materialParams.bendCenter;

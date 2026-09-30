@@ -129,8 +129,8 @@ void attach(void* /*user*/,
   // A map is a display-referred sRGB layer, like the UI over it. Filament's
   // post-processing treats what a shader wrote as linear scene-referred light
   // and tone-maps it, and the styles come out of that as pale washes: roads at
-  // a couple of percent contrast against their background, water grey. It is
-  // not subtle and it is not a colour to argue about -- it is a pipeline that
+  // a couple of percent contrast against their background, water gray. It is
+  // not subtle and it is not a color to argue about -- it is a pipeline that
   // does not apply to this content.
   //
   // View-wide, so a pane that also draws ECS content loses tone mapping for
@@ -255,7 +255,7 @@ void frame(void* /*user*/, std::uint32_t slot, double delta_s) {
   //
   // TSF_NO_FADES turns them off, which is what a capture wants: `mbgl-render` runs in static map
   // mode where `symbolFadeChange` returns one, so instant fades are what a parity comparison is
-  // against, and a settled probe that stops mid-fade reads a label at part of its colour.
+  // against, and a settled probe that stops mid-fade reads a label at part of its color.
   static const bool noFades = std::getenv("TSF_NO_FADES") != nullptr;
   if (!noFades) {
     held.map->advance(delta_s * 1000.0);

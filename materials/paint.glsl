@@ -20,9 +20,9 @@
 // the narrow form at the narrow stride, so the last vertex's wide read runs past the end of what
 // the producer sent.
 //
-// # Colours are two floats, not four
+// # Colors are two floats, not four
 //
-// `packUint8Pair(a, b) = a * 256 + b` over `255 * component`, so a colour is two floats and a
+// `packUint8Pair(a, b) = a * 256 + b` over `255 * component`, so a color is two floats and a
 // zoom-varying one is four. `unpackFloat` is `unpack_float` from mbgl's `common.hpp`, integer
 // division included: the halves are exact 8-bit values and float division would round the wrong
 // one at the boundary.
@@ -37,7 +37,7 @@ vec4 decodeColor(const vec2 encoded) {
     return vec4(unpackFloat(encoded[0]) / 255.0, unpackFloat(encoded[1]) / 255.0);
 }
 
-/// mbgl's `unpack_mix_color`: two packed colours and the frame's mix factor.
+/// mbgl's `unpack_mix_color`: two packed colors and the frame's mix factor.
 vec4 unpackMixColor(const vec4 packed, const float t) {
     return mix(decodeColor(packed.xy), decodeColor(packed.zw), t);
 }

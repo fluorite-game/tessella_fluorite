@@ -3,7 +3,7 @@
 // The symbol family: icons, drawn from the sprite sheet.
 //
 // The icon half of a symbol, and the reason it is a separate family rather than a flag: a glyph
-// carries distance and an icon carries colour, so one is resolved through a smoothstep and the
+// carries distance and an icon carries color, so one is resolved through a smoothstep and the
 // other is simply sampled. A highway shield is the clearest case -- the shield is an icon and the
 // number on it is text, two drawables over the same anchor.
 //
@@ -129,7 +129,7 @@ vertex {
                               clamp(rawFade.x + fade_change, 0.0, 1.0),
                               fontScale);
         material.glyphGamma = vec4(clip.w, 0.0, 0.0, 0.0);
-        // The layer's opacity, or this feature's. A sprite carries its own colour, so this is the
+        // The layer's opacity, or this feature's. A sprite carries its own color, so this is the
         // only one of the five the icon shader has.
         material.symbolScalars = vec4(resolveSymbolOpacity(getCustom3()), 0.0, 0.0, 0.0);
         material.worldPosition = clip;

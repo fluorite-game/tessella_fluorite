@@ -63,7 +63,7 @@ material {
     requires : [ position, custom0, custom1, custom2, custom3, custom4, custom5,
                  custom6 ],
     // Four, which is Filament's limit and is why the shape scalars share one: the fragment
-    // needs the radius, the stroke width and the blur, and neither colour has room to spare.
+    // needs the radius, the stroke width and the blur, and neither color has room to spare.
     variables : [ circleData, circleFill, circleStroke, circleShape ]
 }
 

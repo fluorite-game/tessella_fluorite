@@ -6,7 +6,7 @@
 // This exists because toggling depth flags on a real frame cannot tell "clipped away" from "failed
 // the test" -- both are a blank layer, and two attempts at the extrusion depth pass were spent on
 // that ambiguity. Here there are two quads and nothing else, so a blank frame means clipped and a
-// wrong colour means the comparison.
+// wrong color means the comparison.
 //
 // The convention it is looking for: the *near* quad wins, whichever order the two are drawn in.
 //
@@ -42,7 +42,7 @@ constexpr std::uint32_t W = 64;
 constexpr std::uint32_t H = 64;
 
 // Clip depths in the producer's own convention: nearer is *smaller*, both inside [0, 1]. These are
-// the real numbers a z15 frame produces -- ground and a hundred and fifty metres up.
+// the real numbers a z15 frame produces -- ground and a hundred and fifty meters up.
 constexpr float FAR_Z = 0.999981f;
 constexpr float NEAR_Z = 0.999773f;
 
@@ -171,12 +171,12 @@ int main(int argc, char** argv) {
                 std::vector<utils::Entity> entities;
                 std::vector<filament::MaterialInstance*> instances;
                 // red = near, blue = far.
-                const struct { float z; filament::math::float4 colour; } quads[2] = {
+                const struct { float z; filament::math::float4 color; } quads[2] = {
                     {NEAR_Z, {1.0f, 0.0f, 0.0f, 1.0f}}, {FAR_Z, {0.0f, 0.0f, 1.0f, 1.0f}}};
                 for (int step = 0; step < 2; step++) {
                     const auto& q = quads[order == 0 ? step : 1 - step];
                     auto* instance = material->createInstance();
-                    instance->setParameter("color", q.colour);
+                    instance->setParameter("color", q.color);
                     instance->setParameter("clipZ", q.z);
                     instance->setParameter("clipW", divisor);
                     instance->setDepthCulling(func != filament::MaterialInstance::DepthFunc::A);
@@ -271,9 +271,9 @@ int main(int argc, char** argv) {
             std::vector<utils::Entity> entities;
             std::vector<filament::MaterialInstance*> instances;
             std::uint16_t blend = 0;
-            const auto add = [&](float z, filament::math::float4 colour, bool writes) {
+            const auto add = [&](float z, filament::math::float4 color, bool writes) {
                 auto* instance = material->createInstance();
-                instance->setParameter("color", colour);
+                instance->setParameter("color", color);
                 instance->setParameter("clipZ", z);
                 instance->setParameter("clipW", 1050.0f);
                 instance->setDepthCulling(true);
@@ -350,10 +350,10 @@ int main(int argc, char** argv) {
     }
 
     // Phase three: one surface drawn as mbgl draws a translucent extrusion -- a depth-only pass
-    // that writes no colour, then a colour pass that reads the depth without writing it.
+    // that writes no color, then a color pass that reads the depth without writing it.
     //
-    // Ours loses most of its walls when the colour pass is made read-only, and the question this
-    // answers is whether that is Filament's behaviour or our two passes disagreeing about depth.
+    // Ours loses most of its walls when the color pass is made read-only, and the question this
+    // answers is whether that is Filament's behavior or our two passes disagreeing about depth.
     // `offset` is the depth difference between the two passes: zero is the same surface twice,
     // and anything else stands in for a per-sub-layer depth nudge.
     std::printf("\n%-22s %-12s %s\n", "two-pass", "center", "verdict");
@@ -366,14 +366,14 @@ int main(int argc, char** argv) {
 
         std::vector<utils::Entity> entities;
         std::vector<filament::MaterialInstance*> instances;
-        const auto pass = [&](float z, bool writesColour) {
+        const auto pass = [&](float z, bool writesColor) {
             auto* instance = material->createInstance();
             instance->setParameter("color", filament::math::float4{1.0f, 0.0f, 0.0f, 1.0f});
             instance->setParameter("clipZ", z);
             instance->setParameter("clipW", 1050.0f);
             instance->setDepthCulling(true);
-            instance->setDepthWrite(!writesColour);
-            instance->setColorWrite(writesColour);
+            instance->setDepthWrite(!writesColor);
+            instance->setColorWrite(writesColor);
             utils::Entity entity = utils::EntityManager::get().create();
             filament::RenderableManager::Builder(1)
                 .boundingBox({{-1, -1, -1}, {1, 1, 1}})
@@ -387,7 +387,7 @@ int main(int argc, char** argv) {
             instances.push_back(instance);
         };
         pass(NEAR_Z, false);            // depth only
-        pass(NEAR_Z + offset, true);    // colour, reading
+        pass(NEAR_Z + offset, true);    // color, reading
 
         std::vector<std::uint8_t> pixels(W * H * 4);
         filament::backend::PixelBufferDescriptor pb(pixels.data(), pixels.size(),
@@ -409,7 +409,7 @@ int main(int argc, char** argv) {
         const std::size_t center = ((H / 2) * W + W / 2) * 4;
         const bool drew = pixels[center] > 128;
         std::printf("depth+read, offset %-7.0e %-12s %s\n", offset,
-                    drew ? "red" : "blank", drew ? "colour survives" : "<== colour lost");
+                    drew ? "red" : "blank", drew ? "color survives" : "<== color lost");
         for (auto entity : entities) {
             sceneObj->remove(entity);
             engine->getRenderableManager().destroy(entity);

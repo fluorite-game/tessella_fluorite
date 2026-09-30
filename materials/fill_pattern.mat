@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The fill-pattern family: a fill painted with a sprite instead of a colour.
+// The fill-pattern family: a fill painted with a sprite instead of a color.
 //
 // The pattern is anchored to the *world*, not to the tile, so it does not slide when tiles are
 // replaced and does not seam where two tiles meet. That is what `pixel_coord_upper` and

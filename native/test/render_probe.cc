@@ -364,12 +364,12 @@ int main(int argc, char** argv) {
     tsf::FilamentRenderer::configureCamera(*camera);
     // No post-processing. Filament tone maps for photographic rendering by default -- ACES, plus
     // bloom and dithering -- and a map is not a photograph: the style already says exactly what
-    // colour each thing is, so anything applied on top of that is a deviation from the oracle by
+    // color each thing is, so anything applied on top of that is a deviation from the oracle by
     // construction. It is what left the first correct frame looking bleached.
     // Off, because a map is display-referred sRGB and Filament's post-processing
     // tone-maps what a shader wrote as though it were scene-referred light.
     // TSF_POSTPROCESS turns it back on, which is how the washed-out platform
-    // view was reproduced headlessly: roads vanish, water goes grey.
+    // view was reproduced headlessly: roads vanish, water goes gray.
     view->setPostProcessingEnabled(std::getenv("TSF_POSTPROCESS") != nullptr);
     // The clip masks need somewhere to go.
     view->setStencilBufferEnabled(true);
@@ -519,7 +519,7 @@ int main(int argc, char** argv) {
     std::printf("renderables %llu\n", (unsigned long long)map->renderer().renderables());
     std::printf("primitives %llu\n", (unsigned long long)map->renderer().primitives());
     std::printf("instances_made %llu\n", (unsigned long long)map->renderer().made());
-    std::printf("instances_coloured %llu\n", (unsigned long long)map->renderer().coloured());
+    std::printf("instances_colored %llu\n", (unsigned long long)map->renderer().colored());
     for (const auto& [z, n] : map->renderer().zooms()) {
         std::printf("zoom_%u %llu\n", (unsigned)z, (unsigned long long)n);
     }
@@ -621,7 +621,7 @@ int main(int argc, char** argv) {
 
     // Rendered once before the capture. A headless swap chain hands out buffers in rotation, and
     // reading back on the very first frame returns one nothing has drawn into -- which produced a
-    // constant image that did not move when the scene, the materials, or even the clear colour
+    // constant image that did not move when the scene, the materials, or even the clear color
     // changed, and cost a long detour before it was noticed.
     for (int warm = 0; warm < 2; warm++) {
         if (renderer->beginFrame(swapChain)) {
