@@ -3518,6 +3518,11 @@ void FilamentRenderer::issue(const Batch& batch) {
     // drawable, which the producer emits after the rest, landed wherever it landed.
     // Five and six rather than four and five: band zero is the globe's depth shell and one
     // through four are the masks, which have to be written before anything tests against them.
+    //
+    // That leaves band seven, and it is the whole of what an app has for ECS content that must
+    // draw over the map -- Fluorite's default of four is inside the mask range, so content left
+    // there is painted over. The README's "Draw order beside ECS content" is the version an app
+    // author reads; keep the two in step.
     const auto band = static_cast<std::uint8_t>(
         batch.pass == static_cast<std::uint8_t>(TSL_RENDER_PASS_OPAQUE) ? 5 : 6);
 
