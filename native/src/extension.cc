@@ -144,15 +144,38 @@ void attach(void* /*user*/,
     // the test has nothing to read and a tile is clipped to a band across the
     // middle of the map rather than to itself.
     //
+    // Asking for one here is not this side's call, and asking was a latent
+    // abort. Whoever owns the view decides: fluorite derives the swapchain's
+    // depth format, enables the stencil on the view when that format carries
+    // one, and only then calls attach -- `filament_producer.cc`, where the
+    // comment says an external renderer that turned it on for a view whose
+    // swapchain lacks the attachment "would abort the process the first time it
+    // rendered with post-processing off", which is exactly this view's mode.
+    // Filament's panic names it: "View has stencil buffer enabled, but SwapChain
+    // does not have SwapChain::CONFIG_HAS_STENCIL_BUFFER flag set."
+    //
+    // So enabling it unconditionally did nothing when the attachment was there
+    // and aborted when it was not. Read the decision instead; `extension_probe`
+    // sets it before attach too, for the same reason.
+    const bool stencil = filamentView->isStencilBufferEnabled();
     // TSF_NO_STENCIL turns it off, which is a diagnostic and not a mode: the
-    // clipping goes wrong. It exists because asking for a stencil is what makes
-    // Filament allocate a depth+stencil attachment, and a driver that cannot
-    // make an image view over the format it picks crashes inside
-    // vkCreateImageView with the render target half-built -- which is what the
-    // Pi 5's V3D does, in the one place fluorite's own examples never reach
-    // because none of them ask for a stencil.
+    // clipping goes wrong. It exists because allocating a stencil is what makes
+    // a driver that cannot make an image view over the format it picks crash
+    // inside vkCreateImageView with the render target half-built -- which is
+    // what the Pi 5's V3D does, in the one place fluorite's own examples never
+    // reach because none of them ask for a stencil. Disabling cannot panic, so
+    // this direction is always safe. Whether it still helps on V3D is untested:
+    // the attachment is allocated by whoever enabled it, which is now the other
+    // side of attach.
     static const bool noStencil = std::getenv("TSF_NO_STENCIL") != nullptr;
-    filamentView->setStencilBufferEnabled(!noStencil);
+    if (stencil && noStencil) {
+      filamentView->setStencilBufferEnabled(false);
+    }
+    if (!stencil) {
+      std::fprintf(stderr,
+                   "tessella_fluorite: the view has no stencil, so tile clipping "
+                   "will band across the map rather than clip each tile\n");
+    }
   }
   State& shared = state();
   const std::lock_guard<std::mutex> lock(shared.mutex);
