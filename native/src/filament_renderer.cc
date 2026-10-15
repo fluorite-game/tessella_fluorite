@@ -35,6 +35,7 @@ namespace {
 /// ones a real basemap asks for -- measured against OpenFreeMap's liberty, which needs nine.
 std::int32_t familyOf(const std::string& stem) {
     if (stem == "background") return TSL_BUILTIN_BACKGROUND_SHADER;
+    if (stem == "background_pattern") return TSL_BUILTIN_BACKGROUND_PATTERN_SHADER;
     if (stem == "fill") return TSL_BUILTIN_FILL_SHADER;
     if (stem == "fill_outline") return TSL_BUILTIN_FILL_OUTLINE_SHADER;
     if (stem == "fill_pattern") return TSL_BUILTIN_FILL_PATTERN_SHADER;
@@ -750,6 +751,11 @@ std::size_t opacityOffset(std::int32_t family, std::size_t bytes) {
         // `opacity` itself from `tsl_raster_evaluated_props_ubo` alongside the rest of its paint.
         case TSL_BUILTIN_BACKGROUND_SHADER:
             return offsetof(tsl_background_props_ubo, opacity);
+        // The patterned background's block is a different shape at the same slot -- sixty-four
+        // bytes of corners, sizes and the crossfade where a plain one writes thirty-two -- and
+        // its opacity is the last word of it rather than the second.
+        case TSL_BUILTIN_BACKGROUND_PATTERN_SHADER:
+            return offsetof(tsl_background_pattern_props_ubo, opacity);
         // Both extrusion families, which share one props block. Missing here, the default below
         // left `opacity` at one and a translucent building was drawn opaque: the roofs came out
         // at the lit color instead of nine parts lit to one part what was behind them, which is
@@ -3992,6 +3998,12 @@ void FilamentRenderer::issue(const Batch& batch) {
                                       && batch.builtinShader != TSL_BUILTIN_LINE_GRADIENT_SHADER
                                       // And a patterned line's is the sprite.
                                       && batch.builtinShader != TSL_BUILTIN_LINE_PATTERN_SHADER
+                                      // And a patterned background's. Its props block opens
+                                      // with the first sprite's top-left corner rather than
+                                      // with a color, so the shared read would take two atlas
+                                      // coordinates for one.
+                                      && batch.builtinShader
+                                             != TSL_BUILTIN_BACKGROUND_PATTERN_SHADER
                                       && !patterned && !extrusionPatterned;
             if (sharedColor) {
                 float color[4] = {0, 0, 0, 0};
@@ -4279,6 +4291,98 @@ void FilamentRenderer::issue(const Batch& batch) {
                     filament::TextureSampler::MagFilter::LINEAR,
                     filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
                 instance->setParameter("image0", ramp->second, sampler);
+            }
+
+            // A patterned background takes its rectangles from the *layer's* props block --
+            // one for the layer, because a background has no tiles to vary over -- its world
+            // anchor from the drawable block, and the atlas size from the frame-wide block,
+            // which is where this family's shader reads it and where the fill's does not.
+            if (batch.builtinShader == TSL_BUILTIN_BACKGROUND_PATTERN_SHADER) {
+                tsl_background_pattern_drawable_ubo block{};
+                if (at + sizeof block <= drawables->second.size()) {
+                    std::memcpy(&block, drawables->second.data() + at, sizeof block);
+                }
+                instance->setParameter(
+                    "pixelCoordUpper",
+                    filament::math::float2{block.pixel_coord_upper[0],
+                                           block.pixel_coord_upper[1]});
+                instance->setParameter(
+                    "pixelCoordLower",
+                    filament::math::float2{block.pixel_coord_lower[0],
+                                           block.pixel_coord_lower[1]});
+                // Zero here is the whole of what a plain background's block leaves behind, and
+                // a zero ratio takes the world position out of `patternPos`: every fragment
+                // samples the rectangle's own corner, which in the atlas is the padding around
+                // it. tessella#398.
+                instance->setParameter("tileUnitsToPixels", block.tile_units_to_pixels);
+
+                tsl_background_pattern_props_ubo paint{};
+                if (props->second.size() >= sizeof paint) {
+                    std::memcpy(&paint, props->second.data(), sizeof paint);
+                }
+                instance->setParameter(
+                    "patternTlA",
+                    filament::math::float2{paint.pattern_tl_a[0], paint.pattern_tl_a[1]});
+                instance->setParameter(
+                    "patternBrA",
+                    filament::math::float2{paint.pattern_br_a[0], paint.pattern_br_a[1]});
+                instance->setParameter(
+                    "patternTlB",
+                    filament::math::float2{paint.pattern_tl_b[0], paint.pattern_tl_b[1]});
+                instance->setParameter(
+                    "patternBrB",
+                    filament::math::float2{paint.pattern_br_b[0], paint.pattern_br_b[1]});
+                // The sprite's size in logical pixels, which is its own dimensions over its
+                // pixel ratio -- not the rectangle's width on a sheet packed at `@2x`. Guarded
+                // because the fragment divides by it.
+                instance->setParameter(
+                    "patternSizeA",
+                    filament::math::float2{
+                        paint.pattern_size_a[0] > 0.0f ? paint.pattern_size_a[0] : 1.0f,
+                        paint.pattern_size_a[1] > 0.0f ? paint.pattern_size_a[1] : 1.0f});
+                instance->setParameter(
+                    "patternSizeB",
+                    filament::math::float2{
+                        paint.pattern_size_b[0] > 0.0f ? paint.pattern_size_b[0] : 1.0f,
+                        paint.pattern_size_b[1] > 0.0f ? paint.pattern_size_b[1] : 1.0f});
+                instance->setParameter("scaleA", paint.scale_a);
+                instance->setParameter("scaleB", paint.scale_b);
+                instance->setParameter("fade", paint.mix);
+
+                tsl_global_paint_params_ubo frame{};
+                if (const auto global = uniforms_.find(uniformKey(0, -1));
+                    global != uniforms_.end()) {
+                    if (const auto slot = global->second.find(TSL_UBO_ID_GLOBAL_PAINT_PARAMS_UBO);
+                        slot != global->second.end() && slot->second.size() >= sizeof frame) {
+                        std::memcpy(&frame, slot->second.data(), sizeof frame);
+                    }
+                }
+                // A zero atlas size would divide the sprite rectangles into infinity.
+                instance->setParameter(
+                    "texsize",
+                    filament::math::float2{
+                        frame.pattern_atlas_texsize[0] > 0.0f ? frame.pattern_atlas_texsize[0]
+                                                              : 1.0f,
+                        frame.pattern_atlas_texsize[1] > 0.0f ? frame.pattern_atlas_texsize[1]
+                                                              : 1.0f});
+
+                const auto atlas = textures_.find(mesh->second.texture);
+                if (atlas == textures_.end()) {
+                    missingAtlas_++;
+                    if (std::getenv("TSF_MISSING_LOG")) {
+                        std::fprintf(stderr,
+                                     "missing atlas id=%llu layer=%u shader=%d\n",
+                                     (unsigned long long)mesh->second.texture,
+                                     (unsigned)batch.layerIndex, (int)batch.builtinShader);
+                    }
+                    continue;
+                }
+                // Linear and clamped, which is how mbgl's tweaker binds this one: the
+                // coordinate is already folded into one copy of the sprite by `mod`.
+                instance->setParameter("image0", atlas->second,
+                                       filament::TextureSampler(
+                                           filament::TextureSampler::MinFilter::LINEAR,
+                                           filament::TextureSampler::MagFilter::LINEAR));
             }
 
             // A patterned line adds the sprite sheet and the block that says where in it the

@@ -24,11 +24,11 @@ runtime rather than linked, so every platform variant has to be in the file.
 The families here are the ones a real basemap asks for. The comment at the top of each file says
 what it draws and where its arithmetic comes from.
 
-Three families' globe variants are the exception and are written down here rather than left to be
-assumed: the heatmap's two, the patterned extrusion's anchored pair, and the patterned line's. They
-compile and the loader picks them up, and nothing has yet drawn any of the three on a globe to say
-whether they are right. Every other family's globe variant has been looked at against a rendered
-frame.
+Four families' globe variants are the exception and are written down here rather than left to be
+assumed: the heatmap's two, the patterned extrusion's anchored pair, the patterned line's, and the
+patterned background's. They compile and the loader picks them up, and nothing has yet drawn any of
+the four on a globe to say whether they are right. Every other family's globe variant has been
+looked at against a rendered frame.
 
 The patterned line's `_terrain` variant has: a raised copy of `line_pattern_p` at exaggeration
 zero, where the oracle draws no terrain at all, reads the same 6 and 124 the flat scene does.
