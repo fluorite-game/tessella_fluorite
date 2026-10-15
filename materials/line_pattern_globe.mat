@@ -1,0 +1,263 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// A line painted with a sprite instead of a color, bent onto a sphere directly.
+//
+// `line_pattern.mat` is the family and `line_globe.mat` is the bend: the centerline point and
+// the extruded point are bent separately, because the direct bend takes tile-local coordinates
+// through trig and has no linear part to extrude along. Two evaluations a vertex, which is what
+// the exact answer costs at the low zooms this variant is for.
+//
+// Compiled and not yet looked at against a frame: no scene in the suite puts a patterned line on
+// a globe, and the two globe variants are here so that one does not draw a blank where the flat
+// map draws a road. The same note stands on `fill_extrusion_pattern_globe_anchored.mat`.
+//
+// Mirrors mbgl's `line_pattern.vertex.glsl` and `line_pattern.fragment.glsl`. The geometry is the
+// plain line's -- the same quads, the same extrusion, the same edge feather -- and so is every
+// property but one: there is no color. `line-pattern` names a sprite, and the fragment samples it
+// at a coordinate whose two axes mean different things.
+//
+// # The coordinate
+//
+// Along the line, `linesofar`: the running distance the line's own `data` bytes carry, in tile
+// units, which `mod` folds into one copy of the pattern. Across it, `normal.y` -- +1 at one edge
+// of the strip, -1 at the other -- scaled by the outset against the sprite's height, so the
+// picture is stretched over the ribbon's width however wide the style made it. The clamp mbgl
+// puts on that scaling is what keeps a line wider than its sprite from sampling the neighboring
+// symbol on the sheet rather than its own.
+//
+// So the two sizes are not interchangeable. `pattern_size.x` is the display width scaled by the
+// crossfade's scale and divided by the tile-zoom ratio -- a pattern is authored in pixels and the
+// distance is in tile units, and without the division the pattern's period tracks the zoom instead
+// of the ground. `pattern_size.y` takes neither: the width it is stretched across is already in
+// pixels.
+//
+// Two sprites and a fade between them, as every patterned family has: a zoom change swaps one for
+// another and mbgl crossfades rather than cutting.
+//
+// A data-driven `line-pattern` is not read here. The producer sends the per-feature rectangles as
+// attributes, and this material -- like `fill_pattern.mat` -- takes the layer's own pair from the
+// tile props, so an expression over a feature draws the zoom's constant sprite.
+material {
+    name : tessella_line_pattern_globe,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    constants : [
+        // The permutation, as the plain line's minus the color it does not have.
+        { name : blurFromAttribute,     type : bool, default : false },
+        { name : opacityFromAttribute,  type : bool, default : false },
+        { name : gapWidthFromAttribute, type : bool, default : false },
+        { name : offsetFromAttribute,   type : bool, default : false },
+        { name : widthFromAttribute,    type : bool, default : false }
+    ],
+    parameters : [
+        // Tile-local to normalized Mercator, with the depth bias in [3][2].
+        { type : float4x4,  name : matrix },
+        // Unit sphere to clip.
+        { type : float4x4,  name : globeMatrix },
+        { type : float,     name : opacity },
+        { type : float,     name : width },
+        { type : float,     name : gapwidth },
+        { type : float,     name : offset },
+        { type : float,     name : blur },
+        { type : float,     name : ratio },
+        { type : float,     name : pixelRatio },
+        { type : float2,    name : unitsToPixels },
+        // The frame's zoom-mix factors, from `LinePatternDrawableUBO`.
+        { type : float,     name : blurT },
+        { type : float,     name : opacityT },
+        { type : float,     name : gapWidthT },
+        { type : float,     name : offsetT },
+        { type : float,     name : widthT },
+        // `LinePatternTilePropsUBO`: where the two sprites sit in the atlas, how big it is, and
+        // how far between them this frame stands.
+        { type : float4,    name : patternFrom },
+        { type : float4,    name : patternTo },
+        { type : float2,    name : texsize },
+        { type : float,     name : fade },
+        // The tile props' `scale`, which the wire carries as one vector and this takes apart.
+        // The first is the ratio the *sprite* was authored at, which is mbgl's own device pixel
+        // ratio reaching the shader a second time; `pixelRatio` above is the one the feather is
+        // measured in, and the two are kept apart because a probe's device ratio is its own.
+        { type : float,     name : patternPixelRatio },
+        { type : float,     name : tileZoomRatio },
+        { type : float,     name : fromScale },
+        { type : float,     name : toScale },
+        // The sprite sheet. Linear, as mbgl forces it -- `DrawableAtlasesTweaker` is built for
+        // this layer with `sdfIcons` true and "to force linear filter" beside it.
+        { type : sampler2d, name : image0 }
+    ],
+    // Custom slot 1 is the plain line's color and is not declared here: the slot numbers are the
+    // family's, so blur through width keep the slots a plain line gives them.
+    requires : [ position, custom0, custom2, custom3, custom4, custom5, custom6 ],
+    // `lineGamma.z` carries the distance along the line, which the plain line leaves empty.
+    variables : [ lineEdge, lineGamma, linePaint ]
+}
+
+vertex {
+#include "paint.glsl"
+
+    // `globe::sphere_point_from_mercator` through `globe::clip_matrix`, transcribed -- the same
+    // chain `line_globe.mat` walks, factored out here because this material walks it twice.
+    vec4 bend(vec2 tileLocal) {
+        vec4 merc = materialParams.matrix * vec4(tileLocal, 0.0, 1.0);
+
+        float lon = merc.x * 360.0 - 180.0;
+        float fraction = clamp(merc.y, 0.0, 1.0);
+        float lat = atan(exp((180.0 - fraction * 360.0) * PI / 180.0)) * 360.0 / PI - 90.0;
+
+        float latR = lat * PI / 180.0;
+        float lonR = lon * PI / 180.0;
+        vec3 sphere = vec3(cos(latR) * sin(lonR), -sin(latR), cos(latR) * cos(lonR));
+
+        vec4 clip = materialParams.globeMatrix * vec4(sphere, 1.0);
+        // The depth bias, in clip space before the divide, which is where the Mercator path
+        // applies it.
+        clip.z += merc.z;
+        return clip;
+    }
+
+    float resolveLineBlur() {
+        return materialConstants_blurFromAttribute
+                   ? unpackMixFloat(getCustom2().xy, materialParams.blurT)
+                   : materialParams.blur;
+    }
+
+    float resolveLineOpacity() {
+        return materialConstants_opacityFromAttribute
+                   ? unpackMixFloat(getCustom3().xy, materialParams.opacityT)
+                   : materialParams.opacity;
+    }
+
+    float resolveLineGapWidth() {
+        return materialConstants_gapWidthFromAttribute
+                   ? unpackMixFloat(getCustom4().xy, materialParams.gapWidthT)
+                   : materialParams.gapwidth;
+    }
+
+    float resolveLineOffset() {
+        return materialConstants_offsetFromAttribute
+                   ? unpackMixFloat(getCustom5().xy, materialParams.offsetT)
+                   : materialParams.offset;
+    }
+
+    float resolveLineWidth() {
+        return materialConstants_widthFromAttribute
+                   ? unpackMixFloat(getCustom6().xy, materialParams.widthT)
+                   : materialParams.width;
+    }
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        // EXTRUDE_SCALE is mbgl's: the byte pair encodes a unit vector over 63.
+        const float EXTRUDE_SCALE = 63.0;
+        // mbgl's `LINE_DISTANCE_SCALE`, inverted: the generator divides the distance by two
+        // before packing it into fourteen bits, so the shader doubles it on the way back.
+        const float LINE_DISTANCE_SCALE = 2.0;
+
+        float antialiasing = 1.0 / max(materialParams.pixelRatio, 1e-6) / 2.0;
+
+        vec2 posNormal = getPosition().xy;
+        vec2 center = floor(posNormal * 0.5);
+        vec2 normal = posNormal - 2.0 * center;
+        normal.y = normal.y * 2.0 - 1.0;
+
+        // Raw bytes, as the plain line reads them: UBYTE4 without a normalize flag.
+        vec4 data = getCustom0();
+        vec2 extrude = data.xy - 128.0;
+        float direction = mod(data.z, 4.0) - 1.0;
+        // Fourteen bits across two bytes: six above the direction in the third, eight in the
+        // fourth. The same field a gradient reads as a progress, kept here as the distance it is.
+        float linesofar = (floor(data.z / 4.0) + data.w * 64.0) * LINE_DISTANCE_SCALE;
+
+        float gapwidth = resolveLineGapWidth() * 0.5;
+        float halfwidth = resolveLineWidth() * 0.5;
+        float lineOffset = -1.0 * resolveLineOffset();
+
+        float inset = gapwidth + (gapwidth > 0.0 ? antialiasing : 0.0);
+        float outset = gapwidth + halfwidth * (gapwidth > 0.0 ? 2.0 : 1.0)
+                     + (halfwidth == 0.0 ? 0.0 : antialiasing);
+
+        vec2 dist = outset * extrude / EXTRUDE_SCALE;
+
+        float u = 0.5 * direction;
+        float t = 1.0 - abs(u);
+        vec2 offset2 = lineOffset * extrude / EXTRUDE_SCALE * normal.y * mat2(t, -u, u, t);
+
+        float ratio = max(materialParams.ratio, 1e-6);
+
+        // Bent twice: the centerline point this vertex sits on, and the same point pushed
+        // sideways by the extrusion. Their difference is the projected extrusion, which on the
+        // plane is `matrix * vec4(dist, 0, 0)` -- the linear part this bend does not have.
+        vec2 at = center + offset2 / ratio;
+        vec4 placed = bend(at);
+        vec4 clip = bend(at + dist / ratio);
+        vec4 projectedExtrude = clip - placed;
+
+        float unprojected = length(dist);
+        float projected = length(projectedExtrude.xy / clip.w * materialParams.unitsToPixels);
+        float gammaScale = unprojected / max(projected, 1e-6);
+
+        material.lineEdge = vec4(normal, outset, inset);
+        material.lineGamma = vec4(gammaScale, resolveLineBlur(), linesofar, 0.0);
+        material.linePaint = vec4(resolveLineOpacity(), 0.0, 0.0, 0.0);
+        material.worldPosition = clip;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 normal = variable_lineEdge.xy;
+        float outset = variable_lineEdge.z;
+        float inset = variable_lineEdge.w;
+        float gammaScale = variable_lineGamma.x;
+        float linesofar = variable_lineGamma.z;
+        float opacity = variable_linePaint.x;
+
+        vec2 tlA = materialParams.patternFrom.xy;
+        vec2 brA = materialParams.patternFrom.zw;
+        vec2 tlB = materialParams.patternTo.xy;
+        vec2 brB = materialParams.patternTo.zw;
+
+        float spriteRatio = max(materialParams.patternPixelRatio, 1e-6);
+        vec2 displayA = (brA - tlA) / spriteRatio;
+        vec2 displayB = (brB - tlB) / spriteRatio;
+
+        // Along the line in tile units, across it in pixels. Guarded because the fragment
+        // divides by both: a rectangle of no width would take `mod` to a NaN, which on this
+        // family is a whole road drawn in whatever the atlas holds at zero.
+        float zoomRatio = max(materialParams.tileZoomRatio, 1e-6);
+        vec2 sizeA = vec2(max(displayA.x * materialParams.fromScale / zoomRatio, 1e-6),
+                          max(displayA.y, 1e-6));
+        vec2 sizeB = vec2(max(displayB.x * materialParams.toScale / zoomRatio, 1e-6),
+                          max(displayB.y, 1e-6));
+
+        float dist = length(normal) * outset;
+
+        float blur2 = (variable_lineGamma.y + 1.0 / max(materialParams.pixelRatio, 1e-6))
+                    * gammaScale;
+        float alpha = clamp(min(dist - (inset - blur2), outset - dist) / blur2, 0.0, 1.0);
+
+        float xA = mod(linesofar / sizeA.x, 1.0);
+        float xB = mod(linesofar / sizeB.x, 1.0);
+
+        // The clamp is mbgl's and is the whole of what keeps a wide line inside its own symbol:
+        // half the sprite's height plus a pixel of padding is as far from the centerline as the
+        // coordinate may reach, so a road wider than its pattern repeats the edge rows rather
+        // than sampling the symbol packed next to it. The half shifts the signed normal into the
+        // zero-to-one the texture coordinate is interpolated in.
+        float yA = 0.5 + (normal.y * clamp(outset, 0.0, (sizeA.y + 2.0) / 2.0) / sizeA.y);
+        float yB = 0.5 + (normal.y * clamp(outset, 0.0, (sizeB.y + 2.0) / 2.0) / sizeB.y);
+
+        vec2 posA = mix(tlA / materialParams.texsize, brA / materialParams.texsize, vec2(xA, yA));
+        vec2 posB = mix(tlB / materialParams.texsize, brB / materialParams.texsize, vec2(xB, yB));
+
+        vec4 color = mix(texture(materialParams_image0, posA),
+                         texture(materialParams_image0, posB), materialParams.fade);
+
+        // Premultiplied, as the atlas is: the coverage and the opacity scale the sampled texel
+        // directly. No `line-color` takes part -- mbgl's patterned fragment never reads one.
+        material.baseColor = color * (alpha * opacity);
+    }
+}

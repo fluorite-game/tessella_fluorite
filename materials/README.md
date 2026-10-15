@@ -5,11 +5,12 @@ a directory the caller names. The file stem is the family: `familyOf` maps `circ
 `TSL_BUILTIN_CIRCLE_SHADER`, and a family with no package is reported as `missing_family_<n>`
 rather than drawn wrong.
 
-A family may ship three variants. The bare stem draws on a plane; `_globe` bends the placement
+A family may ship four variants. The bare stem draws on a plane; `_globe` bends the placement
 onto a sphere directly; `_globe_anchored` replaces that placement with a quadratic expansion
 about the tile center, which is what a large tile needs once the direct form's `f32` trig costs
-more than a pixel. The loader strips either suffix before looking the family up, so a variant is
-added by dropping a file in.
+more than a pixel; `_terrain` raises the geometry onto the ground, reading the height out of the
+elevation texture the producer sends with it. The loader strips any of the suffixes before
+looking the family up, so a variant is added by dropping a file in.
 
 Compile them all with:
 
@@ -23,6 +24,11 @@ runtime rather than linked, so every platform variant has to be in the file.
 The families here are the ones a real basemap asks for. The comment at the top of each file says
 what it draws and where its arithmetic comes from.
 
-The heatmap's two globe variants are the exception and are written down as one: they compile and
-the loader picks them up, and nothing has yet drawn a heatmap on a globe to say whether they are
-right. Every other family's globe variant has been looked at against a rendered frame.
+Three families' globe variants are the exception and are written down here rather than left to be
+assumed: the heatmap's two, the patterned extrusion's anchored pair, and the patterned line's. They
+compile and the loader picks them up, and nothing has yet drawn any of the three on a globe to say
+whether they are right. Every other family's globe variant has been looked at against a rendered
+frame.
+
+The patterned line's `_terrain` variant has: a raised copy of `line_pattern_p` at exaggeration
+zero, where the oracle draws no terrain at all, reads the same 6 and 124 the flat scene does.

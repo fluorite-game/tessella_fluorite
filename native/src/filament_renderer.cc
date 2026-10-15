@@ -49,6 +49,7 @@ std::int32_t familyOf(const std::string& stem) {
     if (stem == "line") return TSL_BUILTIN_LINE_SHADER;
     if (stem == "line_sdf") return TSL_BUILTIN_LINE_SDFSHADER;
     if (stem == "line_gradient") return TSL_BUILTIN_LINE_GRADIENT_SHADER;
+    if (stem == "line_pattern") return TSL_BUILTIN_LINE_PATTERN_SHADER;
     if (stem == "circle") return TSL_BUILTIN_CIRCLE_SHADER;
     if (stem == "heatmap") return TSL_BUILTIN_HEATMAP_SHADER;
     if (stem == "heatmap_texture") return TSL_BUILTIN_HEATMAP_TEXTURE_SHADER;
@@ -357,6 +358,30 @@ constexpr PaintSlot kLineGradientSlots[] = {
      filament::VertexBuffer::AttributeType::FLOAT2},
 };
 
+/// The patterned line family's, which are the gradient's exactly.
+///
+/// `LinePatternShader` drops the color for the same reason the gradient does -- the surface is a
+/// sprite -- so the five that remain keep the plain line's slots and close up the bits. The two
+/// the pattern adds, `pattern_from` and `pattern_to`, are not here: they are per feature, and
+/// this material reads the layer's own pair from the tile props as `fill_pattern.mat` does. They
+/// arrive on the wire and are ignored, which is what a slot table not naming them means.
+constexpr PaintSlot kLinePatternSlots[] = {
+    {TSL_UBO_ID_LINE_POS_NORMAL_VERTEX_ATTRIBUTE, -1, -1, 0,
+     filament::VertexBuffer::AttributeType::SHORT2},
+    {TSL_UBO_ID_LINE_DATA_VERTEX_ATTRIBUTE, 0, -1, sizeof(std::uint8_t) * 4,
+     filament::VertexBuffer::AttributeType::UBYTE4},
+    {TSL_UBO_ID_LINE_BLUR_VERTEX_ATTRIBUTE, 2, 0, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_LINE_OPACITY_VERTEX_ATTRIBUTE, 3, 1, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_LINE_GAP_WIDTH_VERTEX_ATTRIBUTE, 4, 2, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_LINE_OFFSET_VERTEX_ATTRIBUTE, 5, 3, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+    {TSL_UBO_ID_LINE_WIDTH_VERTEX_ATTRIBUTE, 6, 4, sizeof(float) * 2,
+     filament::VertexBuffer::AttributeType::FLOAT2},
+};
+
 /// The circle family's. Every attribute but the position is paint, which is what makes a circle
 /// the widest permutation space in the style spec -- seven properties, and mbgl compiles a shader
 /// for each of the hundred and twenty-eight combinations it meets.
@@ -453,6 +478,8 @@ std::pair<const PaintSlot*, std::size_t> paintSlots(std::int32_t shader) {
             return {kLineSdfSlots, std::size(kLineSdfSlots)};
         case TSL_BUILTIN_LINE_GRADIENT_SHADER:
             return {kLineGradientSlots, std::size(kLineGradientSlots)};
+        case TSL_BUILTIN_LINE_PATTERN_SHADER:
+            return {kLinePatternSlots, std::size(kLinePatternSlots)};
         case TSL_BUILTIN_CIRCLE_SHADER:
             return {kCircleSlots, std::size(kCircleSlots)};
         case TSL_BUILTIN_HEATMAP_SHADER:
@@ -476,6 +503,11 @@ constexpr const char* kLineSdfConstants[] = {
 constexpr const char* kLineGradientConstants[] = {"blurFromAttribute", "opacityFromAttribute",
                                                   "gapWidthFromAttribute", "offsetFromAttribute",
                                                   "widthFromAttribute"};
+/// The patterned line's, which are the gradient's five and declared separately because they are
+/// the same by coincidence of both families dropping the color, not by sharing a material.
+constexpr const char* kLinePatternConstants[] = {"blurFromAttribute", "opacityFromAttribute",
+                                                 "gapWidthFromAttribute", "offsetFromAttribute",
+                                                 "widthFromAttribute"};
 /// The extrusion family binds `base` and `height` unconditionally -- they shape the geometry and
 /// the builder synthesises a constant fill where the style did not drive them -- so the color is
 /// the only property with a permutation, and the mask is one bit wide.
@@ -502,6 +534,8 @@ std::pair<const char* const*, std::size_t> paintConstants(std::int32_t shader) {
             return {kLineSdfConstants, std::size(kLineSdfConstants)};
         case TSL_BUILTIN_LINE_GRADIENT_SHADER:
             return {kLineGradientConstants, std::size(kLineGradientConstants)};
+        case TSL_BUILTIN_LINE_PATTERN_SHADER:
+            return {kLinePatternConstants, std::size(kLinePatternConstants)};
         case TSL_BUILTIN_CIRCLE_SHADER:
             return {kCircleConstants, std::size(kCircleConstants)};
         case TSL_BUILTIN_HEATMAP_SHADER:
@@ -540,6 +574,11 @@ constexpr MixFactor kLineSdfFactors[] = {{"colorT", 92},    {"blurT", 96},      
 // five sit one slot earlier: 68 through 84 where a plain line has them at 72 through 88.
 constexpr MixFactor kLineGradientFactors[] = {{"blurT", 68},    {"opacityT", 72}, {"gapWidthT", 76},
                                               {"offsetT", 80},  {"widthT", 84}};
+// `LinePatternDrawableUBO` is the gradient's block with `pattern_from_t` and `pattern_to_t` after
+// the width's factor. Neither is read: the pattern this material draws is the layer's, not the
+// feature's, so there is nothing for the two to mix between.
+constexpr MixFactor kLinePatternFactors[] = {{"blurT", 68},   {"opacityT", 72}, {"gapWidthT", 76},
+                                             {"offsetT", 80}, {"widthT", 84}};
 // Behind the matrix, the two pixel coordinates, the height factor and the tile ratio. All three
 // are read: a zoom-interpolated height -- `["interpolate", ["linear"], ["zoom"], 15, 0, 16, ...]`,
 // how buildings rise out of the ground in most styles -- mixed by nothing drew at its lower stop.
@@ -571,6 +610,8 @@ std::pair<const MixFactor*, std::size_t> mixFactors(std::int32_t shader) {
             return {kLineSdfFactors, std::size(kLineSdfFactors)};
         case TSL_BUILTIN_LINE_GRADIENT_SHADER:
             return {kLineGradientFactors, std::size(kLineGradientFactors)};
+        case TSL_BUILTIN_LINE_PATTERN_SHADER:
+            return {kLinePatternFactors, std::size(kLinePatternFactors)};
         case TSL_BUILTIN_CIRCLE_SHADER:
             return {kCircleFactors, std::size(kCircleFactors)};
         case TSL_BUILTIN_FILL_EXTRUSION_SHADER:
@@ -699,6 +740,9 @@ std::size_t opacityOffset(std::int32_t family, std::size_t bytes) {
         case TSL_BUILTIN_LINE_SDFSHADER:
         // A gradient line reads the same evaluated block; only its drawable block differs.
         case TSL_BUILTIN_LINE_GRADIENT_SHADER:
+        // And a patterned one, whose fragment multiplies the sampled sprite by it exactly as a
+        // plain line multiplies its color.
+        case TSL_BUILTIN_LINE_PATTERN_SHADER:
             return offsetof(tsl_line_evaluated_props_ubo, opacity);
         case TSL_BUILTIN_CIRCLE_SHADER:
             return offsetof(tsl_circle_evaluated_props_ubo, opacity);
@@ -3946,6 +3990,8 @@ void FilamentRenderer::issue(const Batch& batch) {
                                       // A gradient line's color is its ramp, sampled along the
                                       // line, and its material declares no color uniform.
                                       && batch.builtinShader != TSL_BUILTIN_LINE_GRADIENT_SHADER
+                                      // And a patterned line's is the sprite.
+                                      && batch.builtinShader != TSL_BUILTIN_LINE_PATTERN_SHADER
                                       && !patterned && !extrusionPatterned;
             if (sharedColor) {
                 float color[4] = {0, 0, 0, 0};
@@ -4097,7 +4143,10 @@ void FilamentRenderer::issue(const Batch& batch) {
             // what the non-SDF branch of the offset below reads.
             if (batch.builtinShader == TSL_BUILTIN_LINE_SHADER
                 || batch.builtinShader == TSL_BUILTIN_LINE_SDFSHADER
-                || batch.builtinShader == TSL_BUILTIN_LINE_GRADIENT_SHADER) {
+                || batch.builtinShader == TSL_BUILTIN_LINE_GRADIENT_SHADER
+                // A patterned line's block puts its ratio where a plain line's does too: it is
+                // the gradient's block with two more factors on the end.
+                || batch.builtinShader == TSL_BUILTIN_LINE_PATTERN_SHADER) {
                 // The whole block rather than one field: width, gap width, offset and blur all
                 // feed the same edge arithmetic, and a shader given some of them from this frame
                 // and the rest from a default draws a line of a width nothing asked for.
@@ -4230,6 +4279,72 @@ void FilamentRenderer::issue(const Batch& batch) {
                     filament::TextureSampler::MagFilter::LINEAR,
                     filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
                 instance->setParameter("image0", ramp->second, sampler);
+            }
+
+            // A patterned line adds the sprite sheet and the block that says where in it the
+            // layer's two images sit. All of it rides in the tile props -- the rectangles, the
+            // atlas size, the scale vector and the crossfade -- which is where a line's block
+            // differs from a fill's: a fill has nowhere to put the fade and reads it from the
+            // layer's paint instead.
+            if (batch.builtinShader == TSL_BUILTIN_LINE_PATTERN_SHADER) {
+                tsl_line_pattern_tile_props_ubo tile{};
+                if (const auto held = layer->second.find(kLineTilePropsSlot);
+                    held != layer->second.end()) {
+                    const std::size_t tileAt =
+                        static_cast<std::size_t>(batch.uboIndexes[i])
+                        * TSL_STRIDE_LINE_TILE_PROPS_UNION_UBO;
+                    if (tileAt + sizeof tile <= held->second.size()) {
+                        std::memcpy(&tile, held->second.data() + tileAt, sizeof tile);
+                    }
+                }
+                instance->setParameter("patternFrom",
+                                       filament::math::float4{tile.pattern_from[0],
+                                                              tile.pattern_from[1],
+                                                              tile.pattern_from[2],
+                                                              tile.pattern_from[3]});
+                instance->setParameter("patternTo",
+                                       filament::math::float4{tile.pattern_to[0],
+                                                              tile.pattern_to[1],
+                                                              tile.pattern_to[2],
+                                                              tile.pattern_to[3]});
+                // `scale` taken apart: the ratio the sprite was authored at, the tile's own
+                // units against a pixel, and the crossfade's two scales. The last three divide
+                // or multiply the pattern's period, so a zero would take it to infinity; the
+                // fragment guards what it divides by and these are passed as they arrived.
+                instance->setParameter("patternPixelRatio",
+                                       tile.scale[0] > 0.0f ? tile.scale[0] : 1.0f);
+                instance->setParameter("tileZoomRatio", tile.scale[1]);
+                instance->setParameter("fromScale", tile.scale[2]);
+                instance->setParameter("toScale", tile.scale[3]);
+                // A zero atlas size would divide the sprite rectangles into infinity.
+                instance->setParameter(
+                    "texsize",
+                    filament::math::float2{tile.texsize[0] > 0.0f ? tile.texsize[0] : 1.0f,
+                                           tile.texsize[1] > 0.0f ? tile.texsize[1] : 1.0f});
+                instance->setParameter("fade", tile.fade);
+
+                const auto atlas = textures_.find(mesh->second.texture);
+                if (atlas == textures_.end()) {
+                    missingAtlas_++;
+                    if (std::getenv("TSF_MISSING_LOG")) {
+                        std::fprintf(stderr,
+                                     "missing atlas id=%llu layer=%u shader=%d tile=%u/%u/%u\n",
+                                     (unsigned long long)mesh->second.texture,
+                                     (unsigned)batch.layerIndex, (int)batch.builtinShader,
+                                     (unsigned)mesh->second.tile.z, (unsigned)mesh->second.tile.x,
+                                     (unsigned)mesh->second.tile.y);
+                    }
+                    continue;
+                }
+                // Linear, and not from the wire: mbgl builds this layer's tweaker with
+                // `sdfIcons` true and "to force linear filter" beside it, which is the same
+                // answer the patterned fill gets and the opposite of the patterned extrusion's.
+                // Clamped, because `mod` has already folded the coordinate into one copy of the
+                // sprite -- a repeating wrap would only reach the symbol packed beside it.
+                instance->setParameter("image0", atlas->second,
+                                       filament::TextureSampler(
+                                           filament::TextureSampler::MinFilter::LINEAR,
+                                           filament::TextureSampler::MagFilter::LINEAR));
             }
 
             // A fill's outline places itself and measures in pixels: it is the pass that
@@ -5375,6 +5490,7 @@ void FilamentRenderer::issue(const Batch& batch) {
                                   batch.builtinShader == TSL_BUILTIN_SYMBOL_SDFSHADER ||
                                   batch.builtinShader == TSL_BUILTIN_LINE_SHADER ||
                                   batch.builtinShader == TSL_BUILTIN_LINE_SDFSHADER ||
+                                  batch.builtinShader == TSL_BUILTIN_LINE_PATTERN_SHADER ||
                                   // A fill outline forms its own screen position, for the
                                   // one-pixel fade that is a fill's whole antialiasing, and
                                   // Filament applies a renderable's transform after the vertex
