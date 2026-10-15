@@ -42,6 +42,10 @@ std::int32_t familyOf(const std::string& stem) {
     if (stem == "fill_outline_triangulated") return TSL_BUILTIN_FILL_OUTLINE_TRIANGULATED_SHADER;
     if (stem == "fill_extrusion") return TSL_BUILTIN_FILL_EXTRUSION_SHADER;
     if (stem == "fill_extrusion_instanced") return TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER;
+    if (stem == "fill_extrusion_pattern") return TSL_BUILTIN_FILL_EXTRUSION_PATTERN_SHADER;
+    if (stem == "fill_extrusion_pattern_instanced") {
+        return TSL_BUILTIN_FILL_EXTRUSION_PATTERN_INSTANCED_SHADER;
+    }
     if (stem == "line") return TSL_BUILTIN_LINE_SHADER;
     if (stem == "line_sdf") return TSL_BUILTIN_LINE_SDFSHADER;
     if (stem == "line_gradient") return TSL_BUILTIN_LINE_GRADIENT_SHADER;
@@ -210,6 +214,14 @@ constexpr std::uint32_t kColorReliefTilePropsSlot = 4;
 /// there is no fallback in it. `idFillTilePropsUBO` is 4 in the generated tables, which are
 /// mbgl's own.
 constexpr std::uint32_t kFillPatternTilePropsSlot = 4;
+
+/// And a patterned extrusion's, which is four as well.
+///
+/// The same number as the fill's and a different family's slot, so it is named apart rather than
+/// shared: the two blocks are not the same shape -- a fill's tile props carry the two rectangles,
+/// the atlas size and nothing else, where an extrusion's are their own 48-byte block -- and
+/// reading one as the other would be a compile that drew a wrong sprite.
+constexpr std::uint32_t kFillExtrusionTilePropsSlot = TSL_UBO_ID_FILL_EXTRUSION_TILE_PROPS_UBO;
 
 /// And a dashed line's, which carries the distance field's gamma and the crossfade.
 ///
@@ -532,6 +544,10 @@ constexpr MixFactor kLineGradientFactors[] = {{"blurT", 68},    {"opacityT", 72}
 // are read: a zoom-interpolated height -- `["interpolate", ["linear"], ["zoom"], 15, 0, 16, ...]`,
 // how buildings rise out of the ground in most styles -- mixed by nothing drew at its lower stop.
 constexpr MixFactor kFillExtrusionFactors[] = {{"baseT", 88}, {"heightT", 92}, {"colorT", 96}};
+// The patterned pair reads the same block and the first two of the same factors. Not the third:
+// the surface is the sprite, so neither pattern material declares a color -- and Filament panics
+// on a uniform a material does not have rather than ignoring it.
+constexpr MixFactor kFillExtrusionPatternFactors[] = {{"baseT", 88}, {"heightT", 92}};
 // Behind the matrices, the two texture sizes and the size pair; `SymbolDrawableUBO` is 260 bytes
 // and these are its last five.
 constexpr MixFactor kSymbolSdfFactors[] = {{"colorT", 240},
@@ -560,6 +576,9 @@ std::pair<const MixFactor*, std::size_t> mixFactors(std::int32_t shader) {
         case TSL_BUILTIN_FILL_EXTRUSION_SHADER:
         case TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER:
             return {kFillExtrusionFactors, std::size(kFillExtrusionFactors)};
+        case TSL_BUILTIN_FILL_EXTRUSION_PATTERN_SHADER:
+        case TSL_BUILTIN_FILL_EXTRUSION_PATTERN_INSTANCED_SHADER:
+            return {kFillExtrusionPatternFactors, std::size(kFillExtrusionPatternFactors)};
         case TSL_BUILTIN_SYMBOL_SDFSHADER:
             return {kSymbolSdfFactors, std::size(kSymbolSdfFactors)};
         case TSL_BUILTIN_SYMBOL_ICON_SHADER:
@@ -695,6 +714,11 @@ std::size_t opacityOffset(std::int32_t family, std::size_t bytes) {
         // blending is right.
         case TSL_BUILTIN_FILL_EXTRUSION_SHADER:
         case TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER:
+        // And the patterned pair, which shares the block. mbgl folds the opacity into the
+        // lighting in the vertex stage -- `lighting *= opacity` -- and the fragment multiplies
+        // the sampled sprite by it, so the parameter reaches the same product by the same route.
+        case TSL_BUILTIN_FILL_EXTRUSION_PATTERN_SHADER:
+        case TSL_BUILTIN_FILL_EXTRUSION_PATTERN_INSTANCED_SHADER:
             return offsetof(tsl_fill_extrusion_props_ubo, opacity);
         default:
             // Unknown layouts still open with a color; the opacity is left at one rather than
@@ -1859,27 +1883,43 @@ struct Outline {
     float x = 0.0f;
     float y = 0.0f;
     bool discarded = false;
+    /// How far along the ring this point is, which only a patterned wall reads.
+    float edge = 0.0f;
 };
 
-/// Unpacks one wall instance: the footprint point it stands on, and whether it closes a ring.
+/// Unpacks one wall instance: the footprint point it stands on, whether it closes a ring, and
+/// how far along the ring it sits.
 ///
-/// `decimals_ed.x` holds seven bits of fraction per axis above a low bit that marks a ring's
-/// closing point, which has no edge leaving it and so raises no wall. The fraction is zero for
-/// integer tile units but a simplification pass produces fractional positions, and dropping it
-/// would part the walls from the roof they meet.
-Outline unpackOutline(const std::uint8_t* pos, const std::uint8_t* dec) {
+/// `decimals_ed` is a `USHORT2`. Its first half holds seven bits of fraction per axis above a low
+/// bit that marks a ring's closing point, which has no edge leaving it and so raises no wall. The
+/// fraction is zero for integer tile units but a simplification pass produces fractional
+/// positions, and dropping it would part the walls from the roof they meet.
+///
+/// Its second half is the accumulated edge distance -- mbgl's `edgedistance`, the horizontal axis
+/// of a patterned wall's texture coordinate. The plain walls mask it off.
+///
+/// `withEdge` is whether that second half is inside the stride the wire declared. `count` measures
+/// whole strides, so the first half always is; the second is read only where the attribute is as
+/// wide as the `USHORT2` it names, and a narrower one leaves the distance at zero rather than
+/// taking two bytes of whatever follows.
+Outline unpackOutline(const std::uint8_t* pos, const std::uint8_t* dec, bool withEdge) {
     std::int16_t ix = 0, iy = 0;
     std::uint16_t packed = 0;
+    std::uint16_t edge = 0;
     std::memcpy(&ix, pos, sizeof ix);
     std::memcpy(&iy, pos + sizeof ix, sizeof iy);
     std::memcpy(&packed, dec, sizeof packed);
+    if (withEdge) {
+        std::memcpy(&edge, dec + sizeof packed, sizeof edge);
+    }
 
     const std::uint16_t fraction = static_cast<std::uint16_t>(packed / 2);
     const float high = static_cast<float>(fraction / 256);
     const float low = static_cast<float>(fraction % 256);
     return Outline{static_cast<float>(ix) + high / 128.0f,
                    static_cast<float>(iy) + low / 128.0f,
-                   (packed % 2) != 0};
+                   (packed % 2) != 0,
+                   static_cast<float>(edge)};
 }
 
 } // namespace
@@ -1931,6 +1971,9 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
     if (instanceCount < 2) {
         return false;
     }
+    // Whether the edge distance is inside the declared stride. See `unpackOutline`.
+    const bool withEdge =
+        decimals->desc.offset + 2 * sizeof(std::uint16_t) <= decimals->desc.stride;
 
     // The template is the unit quad the producer sends: x picks which end of the edge this vertex
     // sits at, y picks the base ring or the roof ring. Read from the wire rather than assumed, so
@@ -1953,12 +1996,18 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
     // The color, replicated the same way and copied rather than decoded: the bytes are mbgl's
     // packed pair and the shader unpacks them, so the wall never needs to know what is in them.
     std::vector<std::uint8_t> colors;
+    // How far along the ring each corner stands, which is the horizontal axis of a patterned
+    // wall's texture coordinate. Written for both wall families rather than only the patterned
+    // one: four bytes a corner buys one vertex layout for the two, as the color attribute is
+    // declared whether or not the layer drives it, and the plain material simply does not name it.
+    std::vector<float> edges;
     // Wide while building: four corners a wall, so a building-dense tile passes 65535 corners
     // well before its outline runs out -- 16384 walls. Narrowed on upload when it fits.
     std::vector<std::uint32_t> indexes;
     vertices.reserve(instanceCount * templateCount * 3);
     normals.reserve(instanceCount * templateCount * 2);
     extents.reserve(instanceCount * templateCount * 4);
+    edges.reserve(instanceCount * templateCount);
     indexes.reserve(instanceCount * templateIndexCount);
 
     for (std::size_t i = 0; i + 1 < instanceCount; i++) {
@@ -1971,14 +2020,15 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
         // lines over the whole tile.
         const Outline p1 = unpackOutline(
             positions->data.data + i * positions->desc.stride + positions->desc.offset,
-            decimals->data.data + i * decimals->desc.stride + decimals->desc.offset);
+            decimals->data.data + i * decimals->desc.stride + decimals->desc.offset, withEdge);
         // A closing point raises no wall, which is what the flag is for.
         if (p1.discarded) {
             continue;
         }
         const Outline p2 = unpackOutline(
             positions->data.data + (i + 1) * positions->desc.stride + positions->desc.offset,
-            decimals->data.data + (i + 1) * decimals->desc.stride + decimals->desc.offset);
+            decimals->data.data + (i + 1) * decimals->desc.stride + decimals->desc.offset,
+            withEdge);
 
         const float dx = p2.x - p1.x;
         const float dy = p2.y - p1.y;
@@ -2058,6 +2108,12 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
             extents.push_back(instanceHeight);
             extents.push_back(instanceBaseUpper);
             extents.push_back(instanceHeightUpper);
+            // The *other* end's distance, which is mbgl's pairing:
+            // `in_position.x == 0.0 ? nextInstanceDecimalsEd.y : instanceDecimalsEd.y`. Taken as
+            // mbgl has it rather than as it reads -- the distance accumulates to a point along
+            // the ring, and swapping the two ends is a sprite that runs backwards along every
+            // wall, a difference no pixel count would attribute.
+            edges.push_back(sx == 0 ? p2.edge : p1.edge);
             if (colorWidth != 0) {
                 const std::size_t at = colors.size();
                 colors.resize(at + colorWidth, 0);
@@ -2081,7 +2137,7 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
     }
     auto* built = filament::VertexBuffer::Builder()
                       .vertexCount(vertexCount)
-                      .bufferCount(4)
+                      .bufferCount(5)
                       .enableBufferObjects()
                       .attribute(filament::VertexAttribute::POSITION, 0,
                                  filament::VertexBuffer::AttributeType::FLOAT3, 0, 12)
@@ -2097,6 +2153,9 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
                                  color != nullptr ? colorType
                                                    : filament::VertexBuffer::AttributeType::FLOAT4,
                                  0, static_cast<std::uint8_t>(color != nullptr ? colorWidth : 16))
+                      // The edge distance. Only the patterned walls read it.
+                      .attribute(filament::VertexAttribute::CUSTOM3, 4,
+                                 filament::VertexBuffer::AttributeType::FLOAT, 0, 4)
                       .build(*engine_);
     if (built == nullptr) {
         return false;
@@ -2134,6 +2193,7 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
     } else {
         built->setBufferObjectAt(*engine_, 3, shared);
     }
+    upload(4, edges);
 
     const auto indexCount = static_cast<std::uint32_t>(indexes.size());
     // Half the bytes when every corner fits in sixteen bits, which is most tiles.
@@ -2190,6 +2250,7 @@ bool FilamentRenderer::expandWalls(const DrawableAdd& add) {
     meshes_[add.id].clipped = add.enableStencil;
     meshes_[add.id].is3d = add.is3D;
     meshes_[add.id].color = add.enableColor;
+    meshes_[add.id].filter = filterFor(add);
     meshes_[add.id].paintMask = color != nullptr ? 1u : 0u;
     meshes_[add.id].ownedBuffers = std::move(owned);
     walls_ += indexCount / 3;
@@ -2399,6 +2460,7 @@ bool FilamentRenderer::buildRoof(const DrawableAdd& add) {
     meshes_[add.id].clipped = add.enableStencil;
     meshes_[add.id].is3d = add.is3D;
     meshes_[add.id].color = add.enableColor;
+    meshes_[add.id].filter = filterFor(add);
     meshes_[add.id].paintMask = color != nullptr ? 1u : 0u;
     meshes_[add.id].ownedBuffers = std::move(owned);
     return true;
@@ -3001,11 +3063,15 @@ void FilamentRenderer::onGeometry(const DrawableAdd& add) {
     }
 
     // The walls arrive as instances over the roof's outline rather than as their own vertices.
-    if (add.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER) {
+    // The patterned halves take the same two paths: a patterned roof's vertices are a plain
+    // roof's, and a patterned wall is the same unrolling with the edge distance carried out of it.
+    if (add.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER
+        || add.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_PATTERN_INSTANCED_SHADER) {
         expandWalls(add);
         return;
     }
-    if (add.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER) {
+    if (add.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER
+        || add.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_PATTERN_SHADER) {
         buildRoof(add);
         return;
     }
@@ -3859,6 +3925,13 @@ void FilamentRenderer::issue(const Batch& batch) {
             const bool patterned =
                 batch.builtinShader == TSL_BUILTIN_FILL_PATTERN_SHADER
                 || batch.builtinShader == TSL_BUILTIN_FILL_OUTLINE_PATTERN_SHADER;
+            // And the extrusions' patterned pair, which has no color either and for the same
+            // reason: the surface is the sprite. Separate from `patterned` above because that
+            // flag also selects the patterned *fill's* drawable block, which is a different
+            // shape -- 96 bytes against the extrusion's 112, with no height factor in it.
+            const bool extrusionPatterned =
+                batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_PATTERN_SHADER
+                || batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_PATTERN_INSTANCED_SHADER;
             // Neither heatmap pass has a color either, and for a reason worth saying: the
             // kernels write a *density* and the quad reads its color out of the ramp texture.
             // A layer whose color is a texture has no color uniform, and Filament panics on a
@@ -3873,7 +3946,7 @@ void FilamentRenderer::issue(const Batch& batch) {
                                       // A gradient line's color is its ramp, sampled along the
                                       // line, and its material declares no color uniform.
                                       && batch.builtinShader != TSL_BUILTIN_LINE_GRADIENT_SHADER
-                                      && !patterned;
+                                      && !patterned && !extrusionPatterned;
             if (sharedColor) {
                 float color[4] = {0, 0, 0, 0};
                 std::memcpy(color, props->second.data() + colorOffset(batch.builtinShader),
@@ -4749,7 +4822,8 @@ void FilamentRenderer::issue(const Batch& batch) {
             // meters into the tile's own units -- the last from the drawable block, the rest from
             // the layer's paint.
             if (batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER ||
-                batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER) {
+                batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER ||
+                extrusionPatterned) {
                 tsl_fill_extrusion_props_ubo paint{};
                 if (props->second.size() >= sizeof paint) {
                     std::memcpy(&paint, props->second.data(), sizeof paint);
@@ -4776,15 +4850,104 @@ void FilamentRenderer::issue(const Batch& batch) {
                 if (at + sizeof block <= drawables->second.size()) {
                     std::memcpy(&block, drawables->second.data() + at, sizeof block);
                 }
-                // The height factor is deliberately not passed: it belongs to the pattern
-                // variants, which use it for texture coordinates rather than placement.
-                //
-                // And the matrix only where a matrix is what places the drawable. A bent
+                // The matrix only where a matrix is what places the drawable. A bent
                 // extrusion takes the expansion instead -- the footprint from its coefficients
                 // and the height along `bendH` -- so its material declares no `matrix` at all,
                 // and Filament panics on a uniform it does not have.
                 if (!useAnchored) {
                     instance->setParameter("matrix", transform);
+                }
+
+                // And the sprite, for the patterned pair. The height factor is theirs alone:
+                // a wall tiles over `vec2(edgedistance, z * heightFactor)`, which is the one
+                // place that number is read -- the placement takes `z` straight on all four
+                // materials, as the plain pair's own comment says.
+                if (extrusionPatterned) {
+                    instance->setParameter("pixelCoordUpper",
+                                           filament::math::float2{block.pixel_coord_upper[0],
+                                                                  block.pixel_coord_upper[1]});
+                    instance->setParameter("pixelCoordLower",
+                                           filament::math::float2{block.pixel_coord_lower[0],
+                                                                  block.pixel_coord_lower[1]});
+                    instance->setParameter("tileRatio", block.tile_ratio);
+                    if (batch.builtinShader ==
+                        TSL_BUILTIN_FILL_EXTRUSION_PATTERN_INSTANCED_SHADER) {
+                        instance->setParameter("heightFactor", block.height_factor);
+                    }
+
+                    // Which sprite, and how big it is in the atlas. Per tile rather than per
+                    // layer, because the same layer resolves to different sprites in different
+                    // tiles when the pattern is data-driven.
+                    tsl_fill_extrusion_tile_props_ubo tile{};
+                    if (const auto held = layer->second.find(kFillExtrusionTilePropsSlot);
+                        held != layer->second.end()) {
+                        const std::size_t tileAt =
+                            static_cast<std::size_t>(batch.uboIndexes[i]) * sizeof tile;
+                        if (tileAt + sizeof tile <= held->second.size()) {
+                            std::memcpy(&tile, held->second.data() + tileAt, sizeof tile);
+                        }
+                    }
+                    instance->setParameter("patternFrom",
+                                           filament::math::float4{tile.pattern_from[0],
+                                                                  tile.pattern_from[1],
+                                                                  tile.pattern_from[2],
+                                                                  tile.pattern_from[3]});
+                    instance->setParameter("patternTo",
+                                           filament::math::float4{tile.pattern_to[0],
+                                                                  tile.pattern_to[1],
+                                                                  tile.pattern_to[2],
+                                                                  tile.pattern_to[3]});
+                    // A zero atlas size would divide the sprite rectangles into infinity.
+                    instance->setParameter(
+                        "texsize",
+                        filament::math::float2{tile.texsize[0] > 0.0f ? tile.texsize[0] : 1.0f,
+                                               tile.texsize[1] > 0.0f ? tile.texsize[1] : 1.0f});
+
+                    instance->setParameter("fromScale", paint.from_scale);
+                    instance->setParameter("toScale", paint.to_scale);
+                    instance->setParameter("fade", paint.fade);
+
+                    tsl_global_paint_params_ubo frame{};
+                    if (const auto global = uniforms_.find(uniformKey(0, -1));
+                        global != uniforms_.end()) {
+                        if (const auto slot =
+                                global->second.find(TSL_UBO_ID_GLOBAL_PAINT_PARAMS_UBO);
+                            slot != global->second.end()
+                            && slot->second.size() >= sizeof frame) {
+                            std::memcpy(&frame, slot->second.data(), sizeof frame);
+                        }
+                    }
+                    instance->setParameter("pixelRatio",
+                                           frame.pixel_ratio > 0.0f ? frame.pixel_ratio : 1.0f);
+
+                    const auto atlas = textures_.find(mesh->second.texture);
+                    if (atlas == textures_.end()) {
+                        missingAtlas_++;
+                        if (std::getenv("TSF_MISSING_LOG")) {
+                            std::fprintf(stderr,
+                                         "missing atlas id=%llu layer=%u shader=%d tile=%u/%u/%u\n",
+                                         (unsigned long long)mesh->second.texture,
+                                         (unsigned)batch.layerIndex, (int)batch.builtinShader,
+                                         (unsigned)mesh->second.tile.z,
+                                         (unsigned)mesh->second.tile.x,
+                                         (unsigned)mesh->second.tile.y);
+                        }
+                        continue;
+                    }
+                    // As the drawable asked for it. mbgl samples this atlas through
+                    // `DrawableAtlasesTweaker` with `sdfIcons` false -- where the patterned
+                    // *fill* passes true and says "to force linear filter" beside it -- so the
+                    // extrusion's sprite is nearest unless the camera is pitched. The producer
+                    // owns that test, as it owns an icon's; this reads what it sent.
+                    const bool nearest = mesh->second.filter != 0;
+                    instance->setParameter("image0", atlas->second,
+                                           filament::TextureSampler(
+                                               nearest
+                                                   ? filament::TextureSampler::MinFilter::NEAREST
+                                                   : filament::TextureSampler::MinFilter::LINEAR,
+                                               nearest
+                                                   ? filament::TextureSampler::MagFilter::NEAREST
+                                                   : filament::TextureSampler::MagFilter::LINEAR));
                 }
             }
         }
@@ -5223,7 +5386,11 @@ void FilamentRenderer::issue(const Batch& batch) {
                                       TSL_BUILTIN_FILL_OUTLINE_TRIANGULATED_SHADER ||
                                   batch.builtinShader ==
                                       TSL_BUILTIN_FILL_EXTRUSION_INSTANCED_SHADER ||
-                                  batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER;
+                                  batch.builtinShader == TSL_BUILTIN_FILL_EXTRUSION_SHADER ||
+                                  batch.builtinShader ==
+                                      TSL_BUILTIN_FILL_EXTRUSION_PATTERN_INSTANCED_SHADER ||
+                                  batch.builtinShader ==
+                                      TSL_BUILTIN_FILL_EXTRUSION_PATTERN_SHADER;
         transforms.setTransform(transforms.getInstance(entity),
                                 placesItself ? filament::math::mat4f() : transform);
 

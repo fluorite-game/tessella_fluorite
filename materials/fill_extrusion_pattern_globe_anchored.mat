@@ -1,0 +1,192 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The patterned roof of a fill-extrusion, bent onto a sphere by the anchored expansion.
+//
+// `fill_extrusion_pattern.mat` says what this draws, why its lighting is shorter than the plain
+// roof's by exactly the surface color, and why the sprite runs over the footprint rather than the
+// placed vertex. None of that changes on a sphere, and neither does the sprite itself:
+// `patternPos` runs over the tile-local footprint and the drawable's own ratio, which a bend does
+// not touch.
+//
+// What changes is the last line. A plane places a vertex with one matrix whose `z` column carries
+// the meters-to-pixels factor, and a sphere has no such column: a building stands along the
+// surface normal there, which `bendH` carries.
+//
+// Anchored only, and deliberately, as the plain pair is: the direct bend serves zooms below ten
+// and no style draws buildings there. Nothing here has been looked at against a rendered frame --
+// no scene draws a patterned extrusion on a globe -- so this is the plain pair's substitution
+// applied to the flat pattern material, and all it claims is that it compiles and the loader
+// picks it up. The heatmap's globe variants carry the same caveat; `README.md` says so.
+material {
+    name : tessella_fill_extrusion_pattern_globe_anchored,
+    shadingModel : unlit,
+    blending : transparent,
+    // Back faces, as mbgl culls them, and `front` for the reason `fill_extrusion.mat` gives:
+    // Filament's front-facing winding is the opposite of mbgl's here.
+    culling : front,
+    parameters : [
+        // `globe_ubo::GlobeBendUbo`, in declaration order, and the tile center it expands
+        // about. This replaces the tile-to-clip matrix.
+        { type : float2,    name : bendCenter },
+        { type : float4,    name : bendAnchor },
+        { type : float4,    name : bendU },
+        { type : float4,    name : bendV },
+        { type : float4,    name : bendUU },
+        { type : float4,    name : bendVV },
+        { type : float4,    name : bendUV },
+        // Clip displacement per meter of height, at the anchor.
+        { type : float4,    name : bendH },
+        // The layer's base and height, for a vertex whose own are NaN.
+        { type : float,     name : base },
+        { type : float,     name : height },
+        { type : float3,    name : lightColor },
+        // Direction the light arrives from, already in the space the normal is in.
+        { type : float3,    name : lightPosition },
+        { type : float,     name : lightIntensity },
+        { type : float,     name : verticalGradient },
+        // The frame's zoom-mix factors, from `FillExtrusionDrawableUBO`. Two, not three: there is
+        // no color to interpolate.
+        { type : float,     name : baseT },
+        { type : float,     name : heightT },
+        // The tile's origin in world pixels, split across two floats -- see `fill_pattern.mat`.
+        { type : float2,    name : pixelCoordUpper },
+        { type : float2,    name : pixelCoordLower },
+        { type : float,     name : tileRatio },
+        { type : float4,    name : patternFrom },
+        { type : float4,    name : patternTo },
+        { type : float2,    name : texsize },
+        { type : float,     name : fromScale },
+        { type : float,     name : toScale },
+        { type : float,     name : fade },
+        { type : float,     name : opacity },
+        { type : float,     name : pixelRatio },
+        { type : sampler2d, name : image0 }
+    ],
+    // No `custom3`: that is the plain roof's color attribute, and this family reads none.
+    requires : [ position, custom0, custom1, custom2 ],
+    variables : [ lighting, patternPosA, patternPosB ]
+}
+
+vertex {
+    /// Where a vertex falls within the pattern's period, in pattern widths.
+    ///
+    /// The triple `mod` is mbgl's and is not redundant: it reduces the high half of the world
+    /// coordinate against the pattern size *before* multiplying it up by 256 twice, so the product
+    /// never leaves the range a float can hold exactly.
+    vec2 patternPos(vec2 upper, vec2 lower, vec2 size, float unitsToPixels, vec2 pos) {
+        vec2 offset = mod(mod(mod(upper, size) * 256.0, size) * 256.0 + lower, size);
+        return (unitsToPixels * pos + offset) / size;
+    }
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec2 footprint = getPosition().xy;
+        vec4 decimalsEd = getCustom0();
+
+        // Every vertex here is on a roof, so the surface faces straight up.
+        vec3 normal = vec3(0.0, 0.0, 1.0);
+        float t = 1.0;
+
+        // The building's own base and height, per vertex, with NaN meaning the layer did not
+        // drive the property and the paint block is the source. `fill_extrusion.mat` says why
+        // both halves of the pair are read.
+        vec4 lowerBase = getCustom1();
+        vec4 lowerHeight = getCustom2();
+        float base = max(lowerBase.x != lowerBase.x
+                             ? materialParams.base
+                             : mix(lowerBase.x, lowerBase.y, materialParams.baseT),
+                         0.0);
+        float height = max(lowerHeight.x != lowerHeight.x
+                               ? materialParams.height
+                               : mix(lowerHeight.x, lowerHeight.y, materialParams.heightT),
+                           0.0);
+        float z = t > 0.0 ? height : base;
+
+        // The fraction the position was packed with, seven bits an axis.
+        float packed = floor(decimalsEd.x / 2.0);
+        float high = floor(packed / 256.0);
+        vec2 decimals = vec2(high, packed - high * 256.0) / 128.0;
+
+        // The sprite's extent in the atlas, as the size it should cover on screen.
+        vec2 tlA = materialParams.patternFrom.xy;
+        vec2 brA = materialParams.patternFrom.zw;
+        vec2 tlB = materialParams.patternTo.xy;
+        vec2 brB = materialParams.patternTo.zw;
+        float ratio = max(materialParams.pixelRatio, 1e-6);
+        vec2 sizeA = (brA - tlA) / ratio;
+        vec2 sizeB = (brB - tlB) / ratio;
+
+        // Over the footprint, which is the position before the fraction is added. See the note at
+        // the top of this file.
+        material.patternPosA = vec4(
+            patternPos(materialParams.pixelCoordUpper, materialParams.pixelCoordLower,
+                       materialParams.fromScale * sizeA, materialParams.tileRatio, footprint),
+            0.0, 0.0);
+        material.patternPosB = vec4(
+            patternPos(materialParams.pixelCoordUpper, materialParams.pixelCoordLower,
+                       materialParams.toScale * sizeB, materialParams.tileRatio, footprint),
+            0.0, 0.0);
+
+        // The range the directional term is mixed into is a constant rather than the surface's
+        // luminance: see this file's note. Nothing else in the term differs from the plain roof's.
+        float directionalFraction = clamp(dot(normal, materialParams.lightPosition), 0.0, 1.0);
+        float minDirectional = 1.0 - materialParams.lightIntensity;
+        float maxDirectional = max(0.5 + materialParams.lightIntensity, 1.0);
+        float directional = mix(minDirectional, maxDirectional, directionalFraction);
+
+        // The vertical gradient down a wall. Never taken here -- a roof's normal has z of one --
+        // and kept because it is one branch of the term mbgl computes, and dropping it would make
+        // this shader agree with the oracle only by coincidence of what it is handed.
+        if (normal.z == 0.0) {
+            float fMin = mix(0.7, 0.98, 1.0 - materialParams.lightIntensity);
+            float factor = clamp((t + base) * pow(height / 150.0, 0.5), fMin, 1.0);
+            directional *= (1.0 - materialParams.verticalGradient)
+                         + (materialParams.verticalGradient * factor);
+        }
+
+        // Shading is floored at a tint complementary to the light, so a colored light leaves its
+        // opposite in the shadows rather than driving them to black. No surface color in it: the
+        // sprite is the surface, and the fragment stage multiplies the two.
+        vec3 minLight = mix(vec3(0.0), vec3(0.3), 1.0 - materialParams.lightColor);
+        vec3 lit = clamp(directional * materialParams.lightColor, minLight, vec3(1.0));
+
+        // Premultiplied, over a lighting whose alpha was one -- mbgl's `lighting *= opacity`.
+        material.lighting = vec4(lit, 1.0) * materialParams.opacity;
+
+        // The footprint through the expansion, then the height along the normal. `z` is meters,
+        // which is what `bendH` is per unit of -- a plane folds the same factor into its matrix's
+        // `z` column.
+        vec2 d = footprint + decimals - materialParams.bendCenter;
+        vec4 bent = materialParams.bendAnchor
+                  + materialParams.bendU * d.x
+                  + materialParams.bendV * d.y
+                  + 0.5 * (materialParams.bendUU * (d.x * d.x)
+                         + materialParams.bendVV * (d.y * d.y))
+                  + materialParams.bendUV * (d.x * d.y);
+        material.worldPosition = bent + materialParams.bendH * z;
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 tlA = materialParams.patternFrom.xy;
+        vec2 brA = materialParams.patternFrom.zw;
+        vec2 tlB = materialParams.patternTo.xy;
+        vec2 brB = materialParams.patternTo.zw;
+
+        // `mod` is what tiles the sprite: the position runs on across the world and this is what
+        // wraps it back into one copy of the pattern before it indexes the atlas.
+        vec2 within = mod(variable_patternPosA.xy, 1.0);
+        vec2 a = mix(tlA / materialParams.texsize, brA / materialParams.texsize, within);
+        vec4 color1 = texture(materialParams_image0, a);
+
+        vec2 withinB = mod(variable_patternPosB.xy, 1.0);
+        vec2 b = mix(tlB / materialParams.texsize, brB / materialParams.texsize, withinB);
+        vec4 color2 = texture(materialParams_image0, b);
+
+        // The atlas is premultiplied already, and the lighting carries the opacity, so the
+        // crossfade scales straight into it.
+        material.baseColor = mix(color1, color2, materialParams.fade) * variable_lighting;
+    }
+}
