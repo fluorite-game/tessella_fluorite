@@ -1,0 +1,107 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// The background family, painted with a sprite instead of a color.
+//
+// Transcribed from mbgl's `BackgroundPatternShader`, Vulkan variant. The arithmetic is the
+// patterned fill's -- the pattern is anchored to the *world* through the tile's pixel origin, so
+// it does not slide when tiles are replaced and does not seam where two meet -- and the
+// difference is where the numbers come from. A fill reads its rectangles out of a tile-properties
+// block written per drawable; a background reads them out of the layer's *props* block, because
+// a background has no tiles to vary over: one block serves the layer and every quad in it.
+//
+// The atlas size is a third source again. mbgl reads it from `paintParams.pattern_atlas_texsize`,
+// the frame-wide block, where the fill and the line carry it in their own. Same number, and the
+// renderer takes it from where this family's shader expects it rather than from where the others
+// do.
+//
+// # Why there is a vertex stage here and none in `background.mat`
+//
+// The plain background has no vertex hook at all: the renderable's transform places the quad and
+// the fragment needs nothing but a color. This one needs the vertex *position* in tile units to
+// form the pattern coordinate, which is what `getPosition()` gives, and it deliberately does not
+// write `material.worldPosition` -- leaving it untouched keeps Filament's own placement, which is
+// the transform `background.mat`'s header explains.
+material {
+    name : tessella_background_pattern,
+    shadingModel : unlit,
+    blending : transparent,
+    culling : none,
+    parameters : [
+        // `BackgroundPatternDrawableUBO`: the tile's origin in world pixels, split across two
+        // floats because one `f32` runs out of mantissa long before a zoom-22 world runs out of
+        // pixels, and the tile's extent over the pixels it covers.
+        { type : float2,    name : pixelCoordUpper },
+        { type : float2,    name : pixelCoordLower },
+        { type : float,     name : tileUnitsToPixels },
+        // `BackgroundPatternPropsUBO`, which carries each rectangle as two corners where a fill's
+        // block carries one four-vector.
+        { type : float2,    name : patternTlA },
+        { type : float2,    name : patternBrA },
+        { type : float2,    name : patternTlB },
+        { type : float2,    name : patternBrB },
+        // The sprites' sizes in logical pixels, which is not the rectangles' size on a sheet
+        // packed at a different pixel ratio.
+        { type : float2,    name : patternSizeA },
+        { type : float2,    name : patternSizeB },
+        { type : float,     name : scaleA },
+        { type : float,     name : scaleB },
+        // mbgl calls this `mix`, which is a GLSL builtin and cannot be a parameter name here.
+        { type : float,     name : fade },
+        { type : float,     name : opacity },
+        // The atlas, from the frame-wide block.
+        { type : float2,    name : texsize },
+        { type : sampler2d, name : image0 }
+    ],
+    requires : [ position ],
+    variables : [ patternPosA, patternPosB ]
+}
+
+vertex {
+    /// Where a vertex falls within the pattern's period, in pattern widths.
+    ///
+    /// The triple `mod` is mbgl's and is not redundant: it reduces the high half of the world
+    /// coordinate against the pattern size *before* multiplying it up by 256 twice, so the product
+    /// never leaves the range a float can hold exactly.
+    vec2 patternPos(vec2 upper, vec2 lower, vec2 size, float unitsToPixels, vec2 pos) {
+        vec2 offset = mod(mod(mod(upper, size) * 256.0, size) * 256.0 + lower, size);
+        return (unitsToPixels * pos + offset) / size;
+    }
+
+    void materialVertex(inout MaterialVertexInputs material) {
+        vec2 position = getPosition().xy;
+
+        material.patternPosA = vec4(
+            patternPos(materialParams.pixelCoordUpper, materialParams.pixelCoordLower,
+                       materialParams.scaleA * materialParams.patternSizeA,
+                       materialParams.tileUnitsToPixels, position),
+            0.0, 0.0);
+        material.patternPosB = vec4(
+            patternPos(materialParams.pixelCoordUpper, materialParams.pixelCoordLower,
+                       materialParams.scaleB * materialParams.patternSizeB,
+                       materialParams.tileUnitsToPixels, position),
+            0.0, 0.0);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        // `mod` is what tiles the sprite: the position runs on across the world and this is what
+        // wraps it back into one copy of the pattern before it indexes the atlas.
+        vec2 imagecoord = mod(variable_patternPosA.xy, 1.0);
+        vec2 a = mix(materialParams.patternTlA / materialParams.texsize,
+                     materialParams.patternBrA / materialParams.texsize, imagecoord);
+        vec4 color1 = texture(materialParams_image0, a);
+
+        vec2 imagecoordB = mod(variable_patternPosB.xy, 1.0);
+        vec2 b = mix(materialParams.patternTlB / materialParams.texsize,
+                     materialParams.patternBrB / materialParams.texsize, imagecoordB);
+        vec4 color2 = texture(materialParams_image0, b);
+
+        // The atlas is premultiplied already, so the crossfade and the opacity scale it
+        // directly. `background.mat` multiplies a straight-alpha color by its opacity instead,
+        // which is the same product reached from the other side.
+        material.baseColor = mix(color1, color2, materialParams.fade) * materialParams.opacity;
+    }
+}
