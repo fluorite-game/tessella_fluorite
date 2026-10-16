@@ -605,7 +605,7 @@ int main(int argc, char** argv) {
         // through the target -- measured, with the quantum unchanged at 0.25 either way -- but
         // an offscreen pass that accumulates has no use for antialiasing or dithering, and
         // leaving them on would put a second suspect beside the first.
-        off->setMultiSampleAntiAliasingOptions({.sampleCount = 1, .enabled = false});
+        off->setMultiSampleAntiAliasingOptions({.enabled = false, .sampleCount = 1});
         off->setAntiAliasing(filament::View::AntiAliasing::NONE);
         off->setDithering(filament::View::Dithering::NONE);
         // Nothing in this pass tests depth or stencil: the kernels are meant to overlap and sum.

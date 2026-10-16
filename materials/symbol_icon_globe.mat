@@ -99,7 +99,13 @@ vertex {
         vec2 a_size = data.zw;
         float a_size_min = floor(a_size.x * 0.5);
 
-        vec2 a_pxoffset = getCustom1().xy;
+        // Sixteenths of a pixel in the first half, and the floor the font scale is raised to in
+        // two-hundred-and-fifty-sixths in the second -- which is `symbol_icon.vertex.glsl`, not
+        // `symbol_sdf.vertex.glsl`. The SDF shader reads the first half raw and ignores the
+        // second, because a label never carries either: only a stretched icon does, where the
+        // picture's fixed parts hold their pixel size while the label grows between them.
+        vec2 a_pxoffset = getCustom1().xy / 16.0;
+        vec2 a_minFontScale = getCustom1().zw / 256.0;
         // Position and fade in one attribute: the consumer packs them together, because a fifth
         // custom slot did not bind here and a fade of zero multiplies every glyph away.
         vec4 placed = getCustom2();
@@ -167,7 +173,7 @@ vertex {
             projected_pos = materialParams.screenFromClip
                           * vec4(anchorClip.xyz / anchorClip.w, 1.0);
         }
-        vec2 pos_rot = a_offset / 32.0 * fontScale + a_pxoffset;
+        vec2 pos_rot = a_offset / 32.0 * max(a_minFontScale, vec2(fontScale)) + a_pxoffset;
         vec2 pos0 = projected_pos.xy / projected_pos.w + rotation_matrix * pos_rot;
         vec4 clip = materialParams.coordMatrix * vec4(pos0, 0.0, 1.0);
 
