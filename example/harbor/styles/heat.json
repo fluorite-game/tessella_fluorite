@@ -1,0 +1,311 @@
+{
+  "version": 8,
+  "name": "Harbour nightlife density",
+  "glyphs": "http://127.0.0.1:8081/glyphs/{fontstack}/{range}.pbf",
+  "sources": {
+    "hk": {
+      "type": "vector",
+      "url": "http://127.0.0.1:8080/hongkong_z15.json"
+    }
+  },
+  "layers": [
+    {
+      "id": "ground",
+      "type": "background",
+      "paint": {
+        "background-color": "#0a0b12"
+      }
+    },
+    {
+      "id": "earth",
+      "type": "fill",
+      "source": "hk",
+      "source-layer": "earth",
+      "paint": {
+        "fill-color": "#15171f"
+      }
+    },
+    {
+      "id": "water",
+      "type": "fill",
+      "source": "hk",
+      "source-layer": "water",
+      "paint": {
+        "fill-color": "#0b1522"
+      }
+    },
+    {
+      "id": "roads",
+      "type": "line",
+      "source": "hk",
+      "source-layer": "roads",
+      "filter": [
+        "match",
+        [
+          "get",
+          "kind"
+        ],
+        [
+          "highway",
+          "major_road"
+        ],
+        true,
+        false
+      ],
+      "paint": {
+        "line-color": "#262a35",
+        "line-width": 1.6
+      }
+    },
+    {
+      "id": "heat",
+      "type": "heatmap",
+      "source": "hk",
+      "source-layer": "pois",
+      "filter": [
+        "match",
+        [
+          "get",
+          "kind"
+        ],
+        [
+          "bar",
+          "pub",
+          "nightclub",
+          "restaurant",
+          "cafe",
+          "fast_food",
+          "hotel",
+          "shop",
+          "clothes",
+          "convenience",
+          "supermarket",
+          "bakery",
+          "jewelry",
+          "hairdresser",
+          "bank",
+          "pharmacy"
+        ],
+        true,
+        false
+      ],
+      "paint": {
+        "heatmap-radius": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "zoom"
+          ],
+          12,
+          18,
+          14,
+          38,
+          16,
+          70
+        ],
+        "heatmap-weight": [
+          "match",
+          [
+            "get",
+            "kind"
+          ],
+          "bar",
+          1.0,
+          "pub",
+          1.0,
+          "nightclub",
+          1.0,
+          "restaurant",
+          0.9,
+          "cafe",
+          0.7,
+          "fast_food",
+          0.6,
+          "hotel",
+          0.5,
+          0.35
+        ],
+        "heatmap-intensity": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "zoom"
+          ],
+          12,
+          1.6,
+          14,
+          2.4,
+          16,
+          3.2
+        ],
+        "heatmap-opacity": 0.92,
+        "heatmap-color": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "heatmap-density"
+          ],
+          0,
+          "rgba(0,0,40,0)",
+          0.12,
+          "#1b2a6b",
+          0.3,
+          "#2f7fd0",
+          0.5,
+          "#2fd6c8",
+          0.68,
+          "#b6e84f",
+          0.84,
+          "#ffcc33",
+          1,
+          "#ff3b2f"
+        ]
+      }
+    },
+    {
+      "id": "venues",
+      "type": "circle",
+      "source": "hk",
+      "source-layer": "pois",
+      "filter": [
+        "match",
+        [
+          "get",
+          "kind"
+        ],
+        [
+          "bar",
+          "pub",
+          "nightclub"
+        ],
+        true,
+        false
+      ],
+      "paint": {
+        "circle-radius": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "zoom"
+          ],
+          13,
+          1.2,
+          16,
+          3.2
+        ],
+        "circle-color": "#ffffff",
+        "circle-opacity": 0.55
+      }
+    },
+    {
+      "id": "place-labels",
+      "type": "symbol",
+      "source": "hk",
+      "source-layer": "places",
+      "filter": [
+        "all",
+        [
+          "all",
+          [
+            "has",
+            "name"
+          ],
+          [
+            "match",
+            [
+              "get",
+              "kind"
+            ],
+            [
+              "locality",
+              "neighbourhood"
+            ],
+            true,
+            false
+          ]
+        ],
+        [
+          "match",
+          [
+            "get",
+            "kind_detail"
+          ],
+          [
+            "city",
+            "town",
+            "suburb",
+            "quarter",
+            "neighbourhood",
+            "village"
+          ],
+          true,
+          false
+        ]
+      ],
+      "layout": {
+        "text-field": [
+          "coalesce",
+          [
+            "get",
+            "name:en"
+          ],
+          [
+            "get",
+            "name"
+          ]
+        ],
+        "text-font": [
+          "Noto Sans Regular"
+        ],
+        "text-size": [
+          "match",
+          [
+            "get",
+            "kind"
+          ],
+          "locality",
+          16,
+          12
+        ],
+        "text-letter-spacing": 0.08,
+        "symbol-sort-key": [
+          "match",
+          [
+            "get",
+            "kind_detail"
+          ],
+          "city",
+          0,
+          "town",
+          1,
+          "suburb",
+          2,
+          "quarter",
+          3,
+          "neighbourhood",
+          4,
+          "village",
+          5,
+          "hamlet",
+          6,
+          "locality",
+          7,
+          8
+        ]
+      },
+      "paint": {
+        "text-color": "#e6ecf5",
+        "text-halo-color": "#07080d",
+        "text-halo-width": 1.8
+      }
+    }
+  ]
+}

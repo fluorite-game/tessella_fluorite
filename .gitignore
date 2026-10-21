@@ -1,11 +1,13 @@
-example/quad/.dart_tool/
-example/quad/.flutter-plugins*
-example/quad/pubspec.lock
+# Per example rather than per named example: the build outputs are the same whichever app
+# writes them, and a second example that spelled its own out would be a second place to forget.
+example/*/.dart_tool/
+example/*/.flutter-plugins*
+example/*/pubspec.lock
 .dart_tool/
 pubspec.lock
-example/quad/build/
+example/*/build/
 build-arm64/
-example/quad/libapp.so.release*
+example/*/libapp.so.release*
 emb.lock
 
 # The render probe and the example app write their tile cache into the working
