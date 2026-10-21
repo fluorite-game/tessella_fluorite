@@ -6,7 +6,10 @@
 
 #include <fluorite/view_extension.h>
 
+#include <filament/Engine.h>
+#include <filament/Renderer.h>
 #include <filament/View.h>
+#include <filament/Viewport.h>
 
 #include <array>
 #include <cstdio>
@@ -16,6 +19,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -94,6 +98,28 @@ struct Slot {
   filament::View* view = nullptr;
   /// Whether the atlas mismatch has already been reported for this slot.
   bool reportedMismatch = false;
+  /// Whether a failing tick has already been reported for this slot.
+  bool reportedFailure = false;
+  /// Frames this slot has been ticked, for the periodic report below.
+  std::uint64_t frames = 0;
+  /// Whether the per-frame drop counters have been reported for this slot.
+  ///
+  /// Here rather than in a probe for the reason the atlas mismatch is: a probe settles at one
+  /// camera and these are the counters that only move while one is turning, so the only place
+  /// they can be read is a running pane.
+  bool reportedDrops = false;
+  /// One view per offscreen pass this map needs, in `offscreenPasses()` order.
+  ///
+  /// A heatmap sums its kernels into a target and the second pass samples it, so without these
+  /// the target is never drawn into and the layer reads an empty texture -- a heatmap that fails
+  /// by drawing nothing, with no error anywhere. Owned here because the engine they are created
+  /// on outlives them only until detach.
+  std::vector<filament::View*> offscreen;
+  /// The layer bits those passes draw on, which the pane's own view must stop showing: the
+  /// kernels belong in the target, and a view that shows them paints them over the map as well.
+  std::uint8_t offscreenBits = 0;
+  /// How many passes `offscreen` was built for, so a style or a zoom that adds one is noticed.
+  std::size_t offscreenBuilt = 0;
 };
 
 struct State {
@@ -103,6 +129,12 @@ struct State {
   bool configured = false;
   bool installed = false;
   std::array<Slot, FLUORITE_VIEW_EXTENSION_MAX_SLOTS> slots;
+  /// The engine every slot was attached with. One per process: fluorite's `EngineHost` is a
+  /// refcounted singleton precisely so the views can share it.
+  filament::Engine* engine = nullptr;
+  /// What the offscreen passes are rendered with. Fluorite owns the renderer that draws the
+  /// panes and the extension ABI does not hand it over, so the passes get their own.
+  filament::Renderer* offscreenRenderer = nullptr;
 };
 
 State& state() {
@@ -196,6 +228,9 @@ void attach(void* /*user*/,
     return;
   }
   Slot& held = shared.slots[slot];
+  // One engine for every slot -- fluorite's `EngineHost` is refcounted so the views can share
+  // it -- so the offscreen renderer below is made once against this.
+  shared.engine = static_cast<filament::Engine*>(engine);
 
   // A camera set before the view existed is the one it comes up at. Without a
   // camera the map has nowhere to point, so there is nothing to build yet.
@@ -238,6 +273,78 @@ void attach(void* /*user*/,
   }
   // create() took the position but not the orientation.
   held.camera.applied = false;
+}
+
+/// Brings `held.offscreen` into agreement with what this map's renderer now asks for.
+///
+/// Rebuilt whole rather than diffed when the count changes: the passes are a handful, they only
+/// change when a style or a zoom adds or drops a heatmap, and a target that moved under a view
+/// that kept pointing at the old one is a class of bug not worth the saving.
+void syncOffscreen(State& shared, Slot& held) {
+  if (shared.engine == nullptr) {
+    return;
+  }
+  const auto& passes = held.map->renderer().offscreenPasses();
+  if (passes.size() == held.offscreenBuilt) {
+    return;
+  }
+  for (filament::View* view : held.offscreen) {
+    shared.engine->destroy(view);
+  }
+  held.offscreen.clear();
+  held.offscreenBits = 0;
+  held.offscreenBuilt = passes.size();
+  if (passes.empty() || held.view == nullptr) {
+    return;
+  }
+  for (const auto& pass : passes) {
+    filament::View* off = shared.engine->createView();
+    off->setScene(held.view->getScene());
+    // The map's own camera. The kernels are placed in the same clip space the rest of the map
+    // is, which is the whole reason a kernel that lands wrong on screen lands wrong in the
+    // target for the same reason.
+    off->setCamera(&held.view->getCamera());
+    off->setRenderTarget(pass.target);
+    off->setViewport({0, 0, pass.width, pass.height});
+    off->setVisibleLayers(0xFF, pass.layer);
+    off->setPostProcessingEnabled(false);
+    // Nothing that resamples, and no depth or stencil: the kernels are meant to overlap and sum.
+    off->setMultiSampleAntiAliasingOptions({.enabled = false, .sampleCount = 1});
+    off->setAntiAliasing(filament::View::AntiAliasing::NONE);
+    off->setDithering(filament::View::Dithering::NONE);
+    off->setStencilBufferEnabled(false);
+    held.offscreen.push_back(off);
+    held.offscreenBits = static_cast<std::uint8_t>(held.offscreenBits | pass.layer);
+  }
+  std::fprintf(stderr, "[tessella_fluorite] slot %u: %zu offscreen pass(es) on layers 0x%02x\n",
+               static_cast<unsigned>(&held - shared.slots.data()), passes.size(),
+               held.offscreenBits);
+}
+
+/// Draws this slot's offscreen passes into their targets, before fluorite draws the pane.
+///
+/// `renderStandaloneView` rather than a `beginFrame`/`endFrame` pair: it renders a view that has
+/// a render target and needs no swap chain, which is the only way this works here. A second
+/// chain is not an option -- fluorite's Vulkan backend builds its chains from the imported
+/// platform-view buffers and refuses a headless one outright, at any size, with
+/// `VulkanSwapChain: Unable to create swapchain`.
+///
+/// Filament requires the call to be outside a begun frame and on the engine's thread. Both hold:
+/// the extension's `frame` runs on the Filament API thread, inside the producer's strand, and
+/// before fluorite has begun the pane's frame.
+void renderOffscreen(State& shared, Slot& held) {
+  if (held.offscreen.empty() || shared.engine == nullptr) {
+    return;
+  }
+  if (shared.offscreenRenderer == nullptr) {
+    shared.offscreenRenderer = shared.engine->createRenderer();
+    if (shared.offscreenRenderer == nullptr) {
+      return;
+    }
+  }
+  for (filament::View* off : held.offscreen) {
+    shared.offscreenRenderer->renderStandaloneView(off);
+  }
 }
 
 void frame(void* /*user*/, std::uint32_t slot, double delta_s) {
@@ -284,9 +391,81 @@ void frame(void* /*user*/, std::uint32_t slot, double delta_s) {
     held.map->advance(delta_s * 1000.0);
   }
   held.map->tick();
+  // A tick that fails leaves the consumer holding the previous frame, and the map looks frozen
+  // while every counter above it keeps moving -- the camera advances, the producer renders, and
+  // nothing says why. Said once per slot, like the atlas mismatch, because a failure that
+  // repeats every frame repeats forever.
+  if (!held.reportedFailure) {
+    const tessella_result result = held.map->lastResult();
+    if (result != TESSELLA_OK) {
+      held.reportedFailure = true;
+      std::string why;
+      (void)held.map->readiness(&why);
+      std::fprintf(stderr,
+                   "[tessella_fluorite] slot %u: tick failed with result %d (%s); the frame is "
+                   "not published and the view holds the last one\n",
+                   slot, static_cast<int>(result), why.c_str());
+    }
+  }
+  // After the tick, which is what announces a target, and before fluorite begins the pane's
+  // frame, which is what reads it.
+  syncOffscreen(shared, held);
+  if (held.offscreenBits != 0 && held.view != nullptr) {
+    // Re-asserted every frame for the reason the camera above is: the pane's view is fluorite's
+    // and it narrows the visible layers on its own side. Only the offscreen bits are cleared;
+    // the rest are left as fluorite set them.
+    held.view->setVisibleLayers(held.offscreenBits, 0);
+  }
+  renderOffscreen(shared, held);
   // Said once per slot. A `texsize` that disagrees with the atlas bound for it draws every glyph
   // as a magnified corner of itself, and the only place that has been seen is here -- so the
   // report is here rather than in a probe that cannot reproduce it.
+  // TSF_DROP_EVERY=N reports the per-frame drop counters every N frames rather than once. The
+  // counters that matter under a turning camera are the ones that move from frame to frame, and
+  // a single sighting of the first nonzero frame says nothing about how often.
+  static const unsigned long dropEvery = std::getenv("TSF_DROP_EVERY") != nullptr
+                                             ? std::strtoul(std::getenv("TSF_DROP_EVERY"), nullptr, 10)
+                                             : 0;
+  held.frames++;
+  if (dropEvery != 0 && held.frames % dropEvery == 0) {
+    const auto& r = held.map->renderer();
+    std::fprintf(stderr,
+                 "[tessella_fluorite] slot %u frame %llu: unplaced=%llu no_uniforms=%llu "
+                 "no_block=%llu shared_slots=%llu draw_once_skipped=%llu redrawn=%llu "
+                 "unmasked=%llu masked=%llu glyphs=%llu/%llu placements=%zu\n",
+                 slot, (unsigned long long)held.frames, (unsigned long long)r.unplaced(),
+                 (unsigned long long)r.noUniforms(), (unsigned long long)r.noDrawableBlock(),
+                 (unsigned long long)r.sharedSlots(), (unsigned long long)r.drawOnceSkipped(),
+                 (unsigned long long)r.redrawn(), (unsigned long long)r.unmasked(),
+                 (unsigned long long)r.masked(), (unsigned long long)r.glyphsDrawn(),
+                 (unsigned long long)r.glyphsHidden(), r.placements());
+    // What the order actually issued this frame, by render pass. `glyphs` above counts a symbol
+    // geometry *arriving*, so it is zero on every frame whose labels did not change -- these are
+    // the numbers that say whether anything was drawn.
+    std::string byPass;
+    for (const auto& [pass, count] : r.passes()) {
+      byPass += " p" + std::to_string(pass) + "=" + std::to_string(count);
+    }
+    std::fprintf(stderr, "[tessella_fluorite] slot %u frame %llu: passes%s prims=%llu\n", slot,
+                 (unsigned long long)held.frames, byPass.c_str(),
+                 (unsigned long long)r.primitives());
+  }
+  if (!held.reportedDrops) {
+    const auto& r = held.map->renderer();
+    if (r.unplaced() + r.noUniforms() + r.noDrawableBlock() + r.sharedSlots() +
+            r.drawOnceSkipped() + r.redrawn() >
+        0) {
+      held.reportedDrops = true;
+      std::fprintf(stderr,
+                   "[tessella_fluorite] slot %u: drops unplaced=%llu no_uniforms=%llu "
+                   "no_block=%llu shared_slots=%llu draw_once_skipped=%llu redrawn=%llu "
+                   "glyphs=%llu/%llu\n",
+                   slot, (unsigned long long)r.unplaced(), (unsigned long long)r.noUniforms(),
+                   (unsigned long long)r.noDrawableBlock(), (unsigned long long)r.sharedSlots(),
+                   (unsigned long long)r.drawOnceSkipped(), (unsigned long long)r.redrawn(),
+                   (unsigned long long)r.glyphsDrawn(), (unsigned long long)r.glyphsHidden());
+    }
+  }
   if (!held.reportedMismatch && held.map->renderer().atlasMismatched() > 0) {
     held.reportedMismatch = true;
     std::fprintf(stderr, "[tessella_fluorite] slot %u: %llu drawables with a texsize the bound "
@@ -326,6 +505,14 @@ void detach(void* /*user*/, std::uint32_t slot) {
   // the map goes first. The camera stays: it is the slot's, not the view's, and
   // a view that comes back should come back where it was. A resize no longer
   // arrives here at all -- the view survives one and `resize` carries it.
+  if (shared.engine != nullptr) {
+    for (filament::View* off : shared.slots[slot].offscreen) {
+      shared.engine->destroy(off);
+    }
+  }
+  shared.slots[slot].offscreen.clear();
+  shared.slots[slot].offscreenBits = 0;
+  shared.slots[slot].offscreenBuilt = 0;
   shared.slots[slot].map.reset();
   shared.slots[slot].view = nullptr;
   shared.slots[slot].camera.applied = false;
@@ -388,6 +575,14 @@ extern "C" void tessella_fluorite_uninstall(void) {
   // maps are dropped here. Their views outlive them and draw the ECS content
   // alone, which is what a view with no extension has always done.
   for (Slot& held : shared.slots) {
+    if (shared.engine != nullptr) {
+      for (filament::View* off : held.offscreen) {
+        shared.engine->destroy(off);
+      }
+    }
+    held.offscreen.clear();
+    held.offscreenBits = 0;
+    held.offscreenBuilt = 0;
     held.map.reset();
     held.view = nullptr;
     held.camera.applied = false;
