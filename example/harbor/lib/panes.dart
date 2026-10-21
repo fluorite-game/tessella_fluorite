@@ -89,15 +89,6 @@ const List<Pane> kPanes = <Pane>[
     zoom: 13.8,
   ),
   Pane(
-    name: 'raster under vector',
-    style: 'raster.json',
-    latitude: 22.2820,
-    longitude: _harbourLon,
-    zoom: 13,
-    pitch: 30,
-    orbit: 24,
-  ),
-  Pane(
     name: 'patterns, dashes, icons',
     style: 'patterns.json',
     latitude: 22.2935,
@@ -106,6 +97,18 @@ const List<Pane> kPanes = <Pane>[
     bearing: 45,
     pitch: 22,
     orbit: 20,
+  ),
+  Pane(
+    name: 'terrain — the Peak',
+    style: 'terrain.json',
+    latitude: 22.2960,
+    longitude: _harbourLon,
+    // 14.6, not 13: the DEM is native to z14 here, and an overzoomed raster-dem does not draw.
+    // At 13 the near field came out blank and the hills that did draw spiked into needles.
+    zoom: 14.6,
+    bearing: 195,
+    pitch: 68,
+    orbit: 12,
   ),
   Pane(
     name: 'globe — Pearl River Delta',

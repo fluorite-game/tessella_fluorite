@@ -95,6 +95,10 @@ class _HarborAppState extends State<HarborApp> with SingleTickerProviderStateMix
 
   late final Ticker _ticker;
 
+  /// One poll for every HUD. See [MapHud.poll].
+  final ChangeNotifier _poll = ChangeNotifier();
+  Timer? _pollTimer;
+
   /// Panes whose view has been put in the tree. One at a time, because the next
   /// pane's style is installed only once the previous pane has read its own.
   int _mounted = 1;
@@ -121,11 +125,17 @@ class _HarborAppState extends State<HarborApp> with SingleTickerProviderStateMix
     // nothing, and nothing on screen says it is the focus rather than the app. This is the
     // whole window's keyboard, for as long as the app is up.
     HardwareKeyboard.instance.addHandler(_onKey);
+    _pollTimer = Timer.periodic(
+      const Duration(milliseconds: 500),
+      (final _) => _poll.notifyListeners(),
+    );
   }
 
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_onKey);
+    _pollTimer?.cancel();
+    _poll.dispose();
     _ticker.dispose();
     super.dispose();
   }
@@ -221,7 +231,12 @@ class _HarborAppState extends State<HarborApp> with SingleTickerProviderStateMix
                   Expanded(
                     child: Row(
                       children: <Widget>[
-                        for (int column = 0; column < across; column++) ...<Widget>[
+                        // Only the cells that exist. A short last row -- seven panes three
+                        // across -- would otherwise carry two `Expanded` blanks and leave the
+                        // pane on them at a third of the width with black beside it.
+                        for (int column = 0;
+                            column < across && row * across + column < shown;
+                            column++) ...<Widget>[
                           if (column > 0) const SizedBox(width: 2),
                           Expanded(child: _cell(row * across + column)),
                         ],
@@ -250,16 +265,22 @@ class _HarborAppState extends State<HarborApp> with SingleTickerProviderStateMix
         ),
       );
     }
-    return MapPane(engine: widget.engine, slot: slot);
+    return MapPane(engine: widget.engine, slot: slot, poll: _poll);
   }
 }
 
 /// One pane: a platform view with a map in it, and its style's name over it.
 class MapPane extends StatelessWidget {
-  const MapPane({super.key, required this.engine, required this.slot});
+  const MapPane({
+    super.key,
+    required this.engine,
+    required this.slot,
+    required this.poll,
+  });
 
   final FluoriteEngine engine;
   final int slot;
+  final Listenable poll;
 
   @override
   Widget build(final BuildContext context) => Stack(
@@ -269,7 +290,11 @@ class MapPane extends StatelessWidget {
           Positioned(
             left: 10,
             top: 8,
-            child: MapHud(slot: slot, name: activePanes[slot].name),
+            child: MapHud(
+              slot: slot,
+              name: activePanes[slot].name,
+              poll: poll,
+            ),
           ),
         ],
       );
