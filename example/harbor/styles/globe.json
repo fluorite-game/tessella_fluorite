@@ -8,6 +8,7 @@
   "layers": [
     { "id": "ocean", "type": "background", "paint": { "background-color": "#0d2b45" } },
     { "id": "earth", "type": "fill", "source": "hk", "source-layer": "earth",
+      "filter": ["==", ["geometry-type"], "Polygon"],
       "paint": { "fill-color": "#e6dec9" } },
     { "id": "landcover", "type": "fill", "source": "hk", "source-layer": "landcover",
       "paint": {
@@ -17,6 +18,7 @@
         "fill-opacity": 0.95
       } },
     { "id": "water", "type": "fill", "source": "hk", "source-layer": "water",
+      "filter": ["==", ["geometry-type"], "Polygon"],
       "paint": { "fill-color": "#2f6d96", "fill-outline-color": "#1d4c6e" } },
     { "id": "boundaries", "type": "line", "source": "hk", "source-layer": "boundaries",
       "paint": {

@@ -58,7 +58,7 @@ One orbit is twenty-five seconds. At ninety a pane turned about a third of a deg
 which is below the rate at which anything reads as motion -- the map looked stopped, and a real
 pause was indistinguishable from it.
 
-## Two things the styles do on purpose
+## Three things the styles do on purpose
 
 **Extrusions filter `kind == "building"`.** Protomaps carries `building_part` as well, and a part
 subdivides a building and shares its footprint -- two coincident solids in the depth buffer. At
@@ -66,6 +66,17 @@ rest one wins consistently; under rotation the winner flips per pixel and every 
 shimmers. Measured by coloring the kinds differently and counting pixels that change class
 between two frames 0.05 degrees apart: 5877 building-to-part flips, against 0 with parts
 excluded.
+
+**Every `fill` over `water` or `earth` filters `geometry-type`.** Protomaps puts linear and
+areal features in one source-layer: of the 35 features in `water` on 14/13387/7152, thirty are
+LineStrings -- Pokfulam Stream, the Aberdeen catchwaters, the nullahs off The Peak -- against
+four polygons and a point. A fill layer closes each of those polylines into a ring and earcuts
+it, and a sixty-point stream becomes a self-intersecting bowtie: blue spikes fanning down every
+hillside. On `day.json` at z14 over The Peak that was 12.4% of the frame, and water pixels went
+from 62,289 to 6,903 with the filter on, leaving the two Aberdeen reservoirs where they belong.
+mbgl draws the same spikes from the same tile, so this is the style's error and not a renderer's.
+`earth` mixes the same way -- its coastlines are LineStrings -- and is filtered for the same
+reason, though it shows nothing here because `water` is painted over it.
 
 **Place labels are ranked and filtered.** Nothing ranked them, so which won a contested spot came
 down to the offer order -- and that order rotates with the bearing, because `placement_tile_order`
@@ -79,13 +90,21 @@ swaps a second; the residue is mbgl's own behavior under a camera that never sto
 the water and roads from the vector source, and place labels -- with `terrain.exaggeration` at
 1.3. The DEM is AWS's open terrarium tiles, served locally like everything else.
 
-Two things it needs, and one defect it found:
+Three things it needs, and one defect it found:
 
 - **An overzoomed `raster-dem` does not draw.** With the source at `maxzoom` 12 and the pane at
   z14.6 the near field came out blank while the far field was fine, and a 90-second budget with
   `image_stable 1` ruled out starvation. Native z13 and z14 tiles for the pane's own area fixed
   it -- and fixed the spikes with it: at z13 the mesh could not resolve a 67 m hill and pulled
   one vertex into a needle. Keep the camera at or below the DEM's own maxzoom.
+- **The DEM extract ends before the horizon does.** The archive is z8-z14 over
+  113.203..114.961, 21.943..23.241, and only z13 and z14 near the harbor. The pane orbits at
+  pitch 68, which reaches past that: at bearing 195 the cover asks for three tiles south of
+  21.943 that do not exist, and with no DEM there is no color-relief and no hillshade, so the
+  background shows through the islands beyond Po Toi -- 4,220 pixels of it, against 0 at pitch
+  62 and below. Serving a flat sea-level terrarium tile for the 94 misses takes it to 2. This
+  style has no land fill under the relief, so any gap in the DEM reads as sky rather than as
+  unshaded ground.
 - **Terrarium carries bathymetry.** The sea floor runs to -208 m off Hong Kong, and left alone
   the shoreline is a cliff whose face the hillshade lights white. The tiles are clamped to zero
   below sea level.
