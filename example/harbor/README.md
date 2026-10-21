@@ -11,7 +11,7 @@ screen is decided by the style alone.
 | day | `styles/day.json` | fill, fill-outline, line, line-dash, fill-extrusion with real heights, circle, symbol on a line, rich text (bilingual) |
 | night | `styles/night.json` | the same geometry dark: a blurred glow pass under a core pass, a height ramp from steel to gold, blurred circles pitch-aligned to the map |
 | heatmap | `styles/heat.json` | heatmap over the `pois` layer, weighted by kind and ramped over density |
-| raster | `styles/raster.json` | raster under vector, with opacity, saturation, contrast, hue-rotate and the brightness clamp |
+| terrain | `styles/terrain.json` | a `raster-dem` source, color-relief and hillshade over real elevation, labels placed on the surface |
 | patterns | `styles/patterns.json` | background-pattern, fill-pattern, fill-extrusion-pattern, line-pattern, two dash arrays, sprite icons with offset labels |
 | globe | `styles/globe.json` | the same families on a sphere, over the Pearl River Delta |
 
@@ -73,9 +73,32 @@ rotates each tile's position. A `symbol-sort-key` makes the priority explicit, a
 drops the ranks a real style would not draw there. It took the churn from 2.69 to 1.81 label
 swaps a second; the residue is mbgl's own behavior under a camera that never stops turning.
 
+## Terrain
+
+`styles/terrain.json` drapes a `raster-dem` source over the harbor -- color-relief, hillshade,
+the water and roads from the vector source, and place labels -- with `terrain.exaggeration` at
+1.3. The DEM is AWS's open terrarium tiles, served locally like everything else.
+
+Two things it needs, and one defect it found:
+
+- **An overzoomed `raster-dem` does not draw.** With the source at `maxzoom` 12 and the pane at
+  z14.6 the near field came out blank while the far field was fine, and a 90-second budget with
+  `image_stable 1` ruled out starvation. Native z13 and z14 tiles for the pane's own area fixed
+  it -- and fixed the spikes with it: at z13 the mesh could not resolve a 67 m hill and pulled
+  one vertex into a needle. Keep the camera at or below the DEM's own maxzoom.
+- **Terrarium carries bathymetry.** The sea floor runs to -208 m off Hong Kong, and left alone
+  the shoreline is a cliff whose face the hillshade lights white. The tiles are clamped to zero
+  below sea level.
+- **The water and roads are vector layers again** as of the stencil fix. Before it, a
+  `color-relief` or `hillshade` layer clipped every draped fill and line away -- a water fill
+  painted 817 pixels of 336,000 with a relief layer present and 107,975 with the stencil
+  disabled -- so this style drew its sea from the elevation ramp instead and left the roads out.
+  Both are honest layers now, and the coastline is the water geometry rather than a threshold.
+
 ## What is not here
 
-Terrain and hillshade. Both are supported -- `terrain`, `hillshade` and `color_relief` are in the
-material set -- but they want a raster-dem source, and the only DEM this harness has is the
-procedural field in `tessella/tools/parity/scenes/dem.py`, which is nobody's data. Synthetic hills
-over a real harbour would be a worse picture than none.
+A seventh pane. The shell refuses past thirty-two timers and dies; seven platform views reach
+that even with one polling timer for the whole app, so the set is six and `raster.json` sits
+out. `styles/raster.json` is still here and still works -- raster under vector, with opacity,
+saturation, contrast, hue-rotate and the brightness clamp -- it is simply not in the default set.
+Point `TESSELLA_PANE_ONLY` at it, or swap it back into `kPanes`.

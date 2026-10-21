@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:tessella_fluorite/tessella_fluorite.dart';
 
@@ -12,34 +10,46 @@ import 'package:tessella_fluorite/tessella_fluorite.dart';
 /// same lock the render thread takes every frame -- which is a HUD that changes
 /// what it measures.
 class MapHud extends StatefulWidget {
-  const MapHud({super.key, required this.slot, required this.name});
+  const MapHud({
+    super.key,
+    required this.slot,
+    required this.name,
+    required this.poll,
+  });
 
   final int slot;
   final String name;
+
+  /// Ticks when it is time to read the stats again.
+  ///
+  /// One timer for every pane, owned by the app, rather than a `Timer.periodic`
+  /// each. The shell refuses past thirty-two timers and dies -- seven panes
+  /// reached it -- and a timer per HUD is the wrong shape anyway: they all want
+  /// the same half-second.
+  final Listenable poll;
 
   @override
   State<MapHud> createState() => _MapHudState();
 }
 
 class _MapHudState extends State<MapHud> {
-  static const Duration _interval = Duration(milliseconds: 500);
-
-  Timer? _timer;
   MapStats? _stats;
 
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(_interval, (final _) {
-      final MapStats? stats = TessellaMaps.statsFor(widget.slot);
-      if (mounted) setState(() => _stats = stats);
-    });
+    widget.poll.addListener(_read);
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    widget.poll.removeListener(_read);
     super.dispose();
+  }
+
+  void _read() {
+    final MapStats? stats = TessellaMaps.statsFor(widget.slot);
+    if (mounted) setState(() => _stats = stats);
   }
 
   @override
