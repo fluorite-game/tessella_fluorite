@@ -45,6 +45,7 @@
       "type": "fill",
       "source": "hk",
       "source-layer": "water",
+      "filter": ["==", ["geometry-type"], "Polygon"],
       "paint": {
         "fill-color": "#0f3350",
         "fill-opacity": 0.75

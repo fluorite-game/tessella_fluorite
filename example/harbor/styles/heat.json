@@ -21,6 +21,7 @@
       "type": "fill",
       "source": "hk",
       "source-layer": "earth",
+      "filter": ["==", ["geometry-type"], "Polygon"],
       "paint": {
         "fill-color": "#15171f"
       }
@@ -30,6 +31,7 @@
       "type": "fill",
       "source": "hk",
       "source-layer": "water",
+      "filter": ["==", ["geometry-type"], "Polygon"],
       "paint": {
         "fill-color": "#0b1522"
       }
