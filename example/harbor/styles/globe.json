@@ -3,7 +3,7 @@
   "name": "Pearl River Delta on a globe",
   "glyphs": "http://127.0.0.1:8081/glyphs/{fontstack}/{range}.pbf",
   "sources": {
-    "hk": { "type": "vector", "url": "http://127.0.0.1:8080/hongkong_z15.json" }
+    "hk": { "type": "vector", "url": "http://127.0.0.1:8086/cities.json" }
   },
   "layers": [
     { "id": "ocean", "type": "background", "paint": { "background-color": "#0d2b45" } },

@@ -122,6 +122,80 @@ const List<Pane> kPanes = <Pane>[
   ),
 ];
 
+/// A place the whole wall flies to, keeping every pane's style and framing.
+///
+/// "Same styles, different location": a pane carries a zoom, a pitch, a bearing and an orbit
+/// that were chosen to show its style off, and none of that is about Hong Kong. Only the center
+/// is. So a city is a center, and a pane's camera over it is that center plus the offset the
+/// pane already has from [kCities] `.first` -- which keeps `kPanes` readable as the absolute
+/// cameras they were written as, and keeps the six panes the same distance apart in every city.
+///
+/// The offsets are hundredths of a degree, so every pane lands inside the city it names. They
+/// are not landmarks: the terrain pane looks at The Peak in Hong Kong and at whatever is a
+/// kilometer south-west of the center elsewhere, which is what showing a *style* in three places
+/// means.
+class City {
+  const City({required this.name, required this.latitude, required this.longitude});
+
+  /// What the heartbeat and the HUD call it.
+  final String name;
+  final double latitude;
+  final double longitude;
+}
+
+/// Where the wall goes, in order, returning to the first after the last.
+///
+/// Each needs an archive behind it or its panes draw background: `tools/cities.py` routes one
+/// source over `hongkong_z15`, `tokyo_z15` and `sanfrancisco_z15`, and the README says how to
+/// cut another. A city with no archive is not an error anywhere -- the tiles simply 404 and the
+/// map draws nothing -- so the failure looks like an empty pane rather than a message.
+const List<City> kCities = <City>[
+  City(name: 'Hong Kong', latitude: _harbourLat, longitude: _harbourLon),
+  City(name: 'Tokyo', latitude: 35.6800, longitude: 139.7600),
+  City(name: 'San Francisco', latitude: 37.7800, longitude: -122.4200),
+];
+
+/// [pane]'s camera over [city]: its own framing, moved by the city's offset from the first.
+MapPosition cameraFor(final Pane pane, final City city, final double bearing) {
+  final City home = kCities.first;
+  return MapPosition(
+    latitude: pane.latitude + (city.latitude - home.latitude),
+    longitude: pane.longitude + (city.longitude - home.longitude),
+    zoom: pane.zoom,
+    bearing: bearing,
+    pitch: pane.pitch,
+  );
+}
+
+/// How long the wall stays in one city, from `TESSELLA_DWELL_S`.
+///
+/// Zero, or anything that does not parse, stays in [kCities] `.first` for ever -- which is what
+/// this demo did before cities existed, and what a parity capture or a single-pane investigation
+/// wants. Forty-five seconds by default: long enough for a pane to finish most of an orbit and
+/// for its tiles to settle, short enough that a passer-by sees the swap.
+Duration get dwell {
+  final double asked =
+      double.tryParse(Platform.environment['TESSELLA_DWELL_S'] ?? '') ?? 45.0;
+  if (!asked.isFinite || asked <= 0.0) return Duration.zero;
+  return Duration(microseconds: (asked * Duration.microsecondsPerSecond).round());
+}
+
+/// How long one orbit takes, from `TESSELLA_ORBIT_S`.
+///
+/// Twenty-five seconds by default, so the panes are visibly turning. At ninety a pane moved
+/// about a third of a degree a second, which is below the rate at which anything reads as
+/// motion -- the map looked stopped, and a real pause was indistinguishable from it. Faster also
+/// makes the residual label churn easier to judge, because the camera crosses more of the
+/// bearings where placement's tile order flips.
+///
+/// Clamped off zero rather than taken literally: an orbit of no duration divides by it.
+Duration get orbitPass {
+  final double asked =
+      double.tryParse(Platform.environment['TESSELLA_ORBIT_S'] ?? '') ?? 25.0;
+  final double seconds = (!asked.isFinite || asked <= 0.0) ? 25.0 : asked;
+  return Duration(microseconds: (seconds * Duration.microsecondsPerSecond).round());
+}
+
 /// Where the style files are, from `TESSELLA_STYLE_DIR`. The styles are host
 /// layout like the materials: the same app runs against a local archive and a
 /// remote one, and only the files say which.

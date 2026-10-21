@@ -34,16 +34,10 @@ void main() {
       for (int slot = 0; slot < panes.length; slot++) {
         final Pane pane = panes[slot];
         TessellaMaps.setProjection(slot, pane.projection);
-        TessellaMaps.setCamera(
-          slot,
-          MapPosition(
-            latitude: pane.latitude,
-            longitude: pane.longitude,
-            zoom: pane.zoom,
-            bearing: pane.bearing,
-            pitch: pane.pitch,
-          ),
-        );
+        // The first city, which is the pane's own camera: `cameraFor` offsets from
+        // `kCities.first`, so over that one it is the identity and `kPanes` still reads as the
+        // absolute cameras it is written as.
+        TessellaMaps.setCamera(slot, cameraFor(pane, kCities.first, pane.bearing));
       }
 
       // Only the first pane's style is installed here. The rest follow as each
@@ -79,14 +73,13 @@ class HarborApp extends StatefulWidget {
 }
 
 class _HarborAppState extends State<HarborApp> with SingleTickerProviderStateMixin {
-  /// How long one orbit takes.
+  /// How long one orbit takes, and how long the wall stays in one city.
   ///
-  /// Twenty-five seconds, so the panes are visibly turning. At ninety a pane moved about a third
-  /// of a degree a second, which is below the rate at which anything reads as motion -- the map
-  /// looked stopped, and a real pause was indistinguishable from it. Faster also makes the
-  /// residual label churn easier to judge, because the camera crosses more of the bearings where
-  /// placement's tile order flips.
-  static const Duration _pass = Duration(seconds: 25);
+  /// Both from the environment -- `TESSELLA_ORBIT_S` and `TESSELLA_DWELL_S`, read once here
+  /// rather than per frame -- and both documented where they are parsed. A dwell of zero is one
+  /// city for ever, which is what this was before cities existed.
+  final Duration _pass = orbitPass;
+  final Duration _dwell = dwell;
 
   /// How often readiness is polled while panes are still coming up. Not every
   /// frame: the answer changes on a network round trip, and the call takes the
@@ -111,6 +104,14 @@ class _HarborAppState extends State<HarborApp> with SingleTickerProviderStateMix
 
   /// Ticks since the orbit started, for the heartbeat above.
   int _ticks = 0;
+
+  /// Which of [kCities] the wall is over, and when it arrived.
+  ///
+  /// The clock is the ticker's own elapsed time rather than a wall clock, so a pause stops the
+  /// dwell with the orbit: pausing to read a pane and finding it in another city a moment later
+  /// is not what the pause is for.
+  int _city = 0;
+  Duration _held = Duration.zero;
   Duration? _advancedAt;
   bool _running = true;
 
@@ -164,30 +165,48 @@ class _HarborAppState extends State<HarborApp> with SingleTickerProviderStateMix
     _advancedAt = elapsed;
     if (previous == null || !_running) return;
     _phase += (elapsed - previous).inMicroseconds / _pass.inMicroseconds;
+    _held += elapsed - previous;
+
+    // The swap. Every pane moves, including the ones that do not orbit -- a still pane is still
+    // in a city -- which is why this is its own loop rather than a flag in the one below.
+    final bool swapped = _dwell > Duration.zero && _held >= _dwell && kCities.length > 1;
+    if (swapped) {
+      _held = Duration.zero;
+      _city = (_city + 1) % kCities.length;
+      for (int slot = 0; slot < activePanes.length; slot++) {
+        final Pane pane = activePanes[slot];
+        TessellaMaps.setCamera(
+          slot,
+          cameraFor(pane, kCities[_city], (pane.bearing + pane.orbit * _phase) % 360.0),
+        );
+      }
+      stdout.write('[harbor] city=${kCities[_city].name}\n');
+    }
     // Said once a second, so "it stopped" can be told from "it is turning slowly" without
     // guessing from tile traffic -- a cached cover asks for nothing however fast it turns.
     _ticks++;
     if (_ticks % 60 == 0) {
       final Pane first = activePanes.first;
-      stdout.write('[harbor] tick=$_ticks running=$_running phase='
-          '${_phase.toStringAsFixed(3)} bearing='
+      stdout.write('[harbor] tick=$_ticks running=$_running city=${kCities[_city].name} '
+          'phase=${_phase.toStringAsFixed(3)} bearing='
           '${((first.bearing + first.orbit * _phase) % 360.0).toStringAsFixed(2)}\n');
     }
 
     for (int slot = 0; slot < activePanes.length; slot++) {
       final Pane pane = activePanes[slot];
-      if (pane.orbit == 0.0) continue;
+      // A pane that does not orbit has nothing to say here: the swap above already moved it,
+      // and sending the same camera every frame is what a settled map asks not to be sent --
+      // every one of those is a published frame and a redraw of a picture that did not change.
+      if (pane.orbit == 0.0 || swapped) continue;
       TessellaMaps.setCamera(
         slot,
-        MapPosition(
-          latitude: pane.latitude,
-          longitude: pane.longitude,
-          zoom: pane.zoom,
+        cameraFor(
+          pane,
+          kCities[_city],
           // Wrapped rather than left to grow: the transform takes it modulo a
           // turn either way, but a bearing that counts up forever loses its
           // low bits, and this runs for as long as anybody watches it.
-          bearing: (pane.bearing + pane.orbit * _phase) % 360.0,
-          pitch: pane.pitch,
+          (pane.bearing + pane.orbit * _phase) % 360.0,
         ),
       );
     }

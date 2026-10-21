@@ -1,10 +1,14 @@
 # tessella_harbor
 
-Six styles over Victoria Harbour, six platform views, one engine, one tile store.
+Six styles over three cities, six platform views, one engine, one tile store.
 
-Every pane looks at the same water and reads the same archive. What differs is the style, which
+Every pane looks at the same place and reads the same source. What differs is the style, which
 is the point: the producer, the tile store and the consumer are shared, and what reaches the
 screen is decided by the style alone.
+
+The wall flies between Hong Kong, Tokyo and San Francisco on a dwell timer, and nothing about a
+pane changes when it does -- not its style, not its zoom, not its pitch, not its orbit. Only the
+center moves, which is the other half of the same point: a style is not about a place.
 
 | pane | style | what it exercises |
 | --- | --- | --- |
@@ -27,20 +31,35 @@ duplicate with nothing to say why.
 
 ## Running it
 
-Two servers, both from `maplibre-frontend/tileserver`:
+Four servers. Two are `maplibre-frontend/tileserver`'s and two are here:
 
-    ./serve.sh &            # hongkong_z15.pmtiles on 8080
-    python3 assets.py &     # glyphs, sprites and generated raster tiles on 8081
+    ./serve.sh &                 # the city archives on 8080
+    python3 assets.py &          # glyphs, sprites and generated raster tiles on 8081
+    python3 tools/cities.py &    # one source over those archives, on 8086
+    python3 tools/dem.py &       # terrarium, clamped and cached, on 8085
 
-The archive is `hongkong_z15.pmtiles`, 113.55,21.95 - 114.65,22.95, zooms 0-15. No pane goes past
-fifteen: above it a map draws overzoomed tiles, and the detail it appears to gain is the
-renderer's rather than the data's.
+The archives are `hongkong_z15.pmtiles` (113.55,21.95 - 114.65,22.95),
+`tokyo_z15.pmtiles` (139.30,35.30 - 140.30,36.00) and `sanfrancisco_z15.pmtiles`
+(-122.60,37.50 - -121.90,38.00), zooms 0-15. No pane goes past fifteen: above it a map draws
+overzoomed tiles, and the detail it appears to gain is the renderer's rather than the data's.
+
+Cut another the way the tileserver README does, and name it in `tools/cities.py`:
+
+    ./pmtiles extract https://build.protomaps.com/YYYYMMDD.pmtiles <name>_z15.pmtiles \
+        --bbox=<w,s,e,n> --maxzoom=15
+
+`tools/dem.py` wants Pillow and the network on a city's first visit; everything after that is
+its cache directory, `HARBOR_DEM_CACHE` or `~/.cache/harbor-dem`.
 
 Then bundle and run, per the quad example's notes:
 
     dart run bin/emb.dart bundle -a <this dir> -m debug -o <out> --build
     TESSELLA_STYLE_DIR=<this dir>/styles TESSELLA_MATERIALS=<filamat dir> \
     LD_LIBRARY_PATH=<out>/lib homescreen -b <out> --backend=wayland-vulkan -w 1920 --height 1150
+
+`TESSELLA_DWELL_S` is how long the wall stays in one city and `TESSELLA_ORBIT_S` is how long
+one orbit takes -- 45 and 25 seconds. A dwell of zero stays in the first city for ever, which is
+what this did before cities existed and what a capture or a single-pane investigation wants.
 
 `TESSELLA_PANES` seeds the count before any view exists. It is not a runtime control here, unlike
 the quad's: a slot is its view's creation order and the styles were installed against that order,
@@ -116,8 +135,15 @@ Three things it needs, and one defect it found:
 
 ## What is not here
 
-A seventh pane. The shell refuses past thirty-two timers and dies; seven platform views reach
-that even with one polling timer for the whole app, so the set is six and `raster.json` sits
-out. `styles/raster.json` is still here and still works -- raster under vector, with opacity,
+A seventh pane. Filament's Vulkan backend has a pool of **32 timer queries, process-wide** --
+`utils::bitset32` in `VulkanQueryManager` -- and on exhaustion `getNextQuery` returns an empty
+handle that `VulkanDriver::createTimerQueryS` takes unchecked, so the process dies rather than
+losing a frame's timing. Six platform views are six Filament renderers and sit just under it;
+seven do not, so the set is six and `raster.json` sits out.
+
+Six is not comfortable either: moving the window between outputs re-runs the dma-buf
+negotiation, and that has been enough to cross the ceiling and kill a running wall.
+toyota-connected/ivi-homescreen#815. An earlier note here blamed the shell's own timer handling
+-- `shell/timer.cc` has no such bound, and the message does not come from the shell at all. `styles/raster.json` is still here and still works -- raster under vector, with opacity,
 saturation, contrast, hue-rotate and the brightness clamp -- it is simply not in the default set.
 Point `TESSELLA_PANE_ONLY` at it, or swap it back into `kPanes`.
