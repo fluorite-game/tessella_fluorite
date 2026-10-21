@@ -2,6 +2,7 @@
 
 #include <tsf/map_view.h>
 
+#include <algorithm>
 #include <cstdlib>
 
 #include <filament/Camera.h>
@@ -51,7 +52,36 @@ std::unique_ptr<MapView> MapView::create(filament::Engine* engine,
   // Zero takes the producer's default, which is 64 MiB. The region holds the
   // geometry of everything on screen plus what compaction has not reclaimed;
   // liberty at 1920x1080 reaches 13.8 MiB of it, and the quad 3 to 10.
-  config.slab_capacity = 0;
+  // Scaled with the viewport, not left at the producer's 64 MiB default.
+  //
+  // The region holds the geometry of everything on screen, so it scales with the tiles the view
+  // covers -- `tessella.h` says as much, and that a region too small "shows as a map that will
+  // not finish drawing". It is worse than that: `TESSELLA_REGION_FULL` does not clear by
+  // draining, so once a frame is too big every later frame is refused too, and the view goes on
+  // compositing the last one it managed. The camera advances, the producer renders, every
+  // counter moves, and the picture is frozen. A full-screen z13 pane at 1920x1150 did exactly
+  // that after about twenty seconds.
+  //
+  // Sized from churn, not from the settled frame. A settled 1920x1150 pane at z13 holds only
+  // 31 MiB of geometry, but a camera that keeps turning retires tiles and allocates new ones
+  // above them, and the arena bump allocates -- dead space below the cursor is reclaimed only
+  // when compaction runs. Measured on that pane rotating continuously: 64 and 88 MiB both fill
+  // and then fail every frame forever, while 256 MiB and 512 MiB ran clean for 9,000 frames.
+  //
+  // One megabyte per 8k pixels, floored at the 64 MiB that was right for 1080p: a 1920x1150
+  // view asks for 276 MiB and the quad's 640x480 panes stay at the floor. `TSF_SLAB_MIB`
+  // overrides it, for the reason the other knobs here exist.
+  {
+    const std::size_t pixels = static_cast<std::size_t>(width) * height;
+    std::size_t mib = std::max<std::size_t>(64, pixels / 8000);
+    if (const char* asked = std::getenv("TSF_SLAB_MIB")) {
+      const long value = std::atol(asked);
+      if (value > 0) {
+        mib = static_cast<std::size_t>(value);
+      }
+    }
+    config.slab_capacity = mib << 20;
+  }
 
   std::unique_ptr<Host> host = Host::create(config, latitude, longitude, zoom, error);
   if (!host) {
