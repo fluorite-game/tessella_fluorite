@@ -1,0 +1,49 @@
+{
+  "version": 8,
+  "name": "Pearl River Delta on a globe",
+  "glyphs": "http://127.0.0.1:8081/glyphs/{fontstack}/{range}.pbf",
+  "sources": {
+    "hk": { "type": "vector", "url": "http://127.0.0.1:8080/hongkong_z15.json" }
+  },
+  "layers": [
+    { "id": "ocean", "type": "background", "paint": { "background-color": "#0d2b45" } },
+    { "id": "earth", "type": "fill", "source": "hk", "source-layer": "earth",
+      "paint": { "fill-color": "#e6dec9" } },
+    { "id": "landcover", "type": "fill", "source": "hk", "source-layer": "landcover",
+      "paint": {
+        "fill-color": ["match", ["get", "kind"],
+          "forest", "#8fb57a", "scrub", "#b3c48c", "grassland", "#c7d49a",
+          "urban_area", "#ded5c2", "farmland", "#d8d49c", "#dcd6c2"],
+        "fill-opacity": 0.95
+      } },
+    { "id": "water", "type": "fill", "source": "hk", "source-layer": "water",
+      "paint": { "fill-color": "#2f6d96", "fill-outline-color": "#1d4c6e" } },
+    { "id": "boundaries", "type": "line", "source": "hk", "source-layer": "boundaries",
+      "paint": {
+        "line-color": ["match", ["get", "kind"], "country", "#7a4f5a", "#9c8490"],
+        "line-width": ["match", ["get", "kind"], "country", 1.6, 0.9],
+        "line-dasharray": [3, 2]
+      } },
+    { "id": "trunk", "type": "line", "source": "hk", "source-layer": "roads",
+      "filter": ["match", ["get", "kind"], ["highway", "major_road"], true, false],
+      "paint": { "line-color": "#c98a4b", "line-width": 1.2, "line-opacity": 0.9 } },
+    { "id": "city-dots", "type": "circle", "source": "hk", "source-layer": "places",
+      "filter": ["match", ["get", "kind"], ["locality", "region"], true, false],
+      "paint": { "circle-radius": 4, "circle-color": "#ffffff",
+                 "circle-stroke-width": 1.4, "circle-stroke-color": "#1d3a4f" } },
+    { "id": "place-labels", "type": "symbol", "source": "hk", "source-layer": "places",
+      "filter": ["all", ["has", "name"],
+                 ["match", ["get", "kind"], ["locality", "region", "country"], true, false]],
+      "layout": {
+        "text-field": ["format",
+          ["coalesce", ["get", "name:en"], ["get", "name"]], { "font-scale": 1.0 },
+          "\n", {},
+          ["coalesce", ["get", "name:zh-Hant"], ["get", "name"]], { "font-scale": 0.85 }],
+        "text-font": ["Noto Sans Regular"],
+        "text-size": ["match", ["get", "kind"], "country", 18, "region", 15, 13],
+        "text-offset": [0, 0.9], "text-anchor": "top"
+      },
+      "paint": { "text-color": "#1b2430", "text-halo-color": "#f4efe2",
+                 "text-halo-width": 1.8 } }
+  ]
+}
