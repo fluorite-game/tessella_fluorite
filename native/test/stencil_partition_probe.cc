@@ -199,6 +199,39 @@ void one_place_at_two_drawn_zooms_shares_a_code() {
           "one canonical tile, one value");
 }
 
+/// One place named at two drawn zooms shares a code in the fallback too.
+///
+/// The partitioned path is keyed on the place for exactly this reason, and the fallback was
+/// keyed on the whole `TileID` -- so a raster-dem tile and a vector tile covering the same
+/// ground took different values. Both masks paint the same pixels, the later one wins, and the
+/// other group's geometry fails its test everywhere: a terrain pane lost its water and its roads
+/// the moment a `color-relief` layer was added, with nothing reported.
+void one_place_at_two_drawn_zooms_shares_a_code_in_the_fallback() {
+    // Two hundred places at one zoom: `bitsFor` wants eight bits and only seven are going, so
+    // this is the fallback rather than a partition.
+    std::set<TileID> tiles;
+    for (std::uint32_t x = 0; x < 20; ++x) {
+        for (std::uint32_t y = 0; y < 10; ++y) {
+            tiles.insert(tile(kFine, x, y));
+        }
+    }
+    const TileID stood = tile(kFine, 3, 3);
+    const TileID over = tile(kFine, 3, 3, kFine + 4);
+    tiles.insert(over);
+
+    const auto partition = tsf::partitionStencil(tiles, {{1, {stood}}, {2, {over}}});
+    check(!partition.partitioned, "two hundred places do not partition");
+    check(partition.tiles.at(stood).value == partition.tiles.at(over).value,
+          "one canonical tile, one value, in the fallback");
+
+    // And the pixels agree: both groups survive over the ground they share.
+    const Buffer buffer = paint(partition);
+    check(passesOver(partition, buffer, stood, stood),
+          "the tile drawn at its own zoom survives the fallback");
+    check(passesOver(partition, buffer, over, stood),
+          "the overscaled tile on the same ground survives the fallback");
+}
+
 /// The clip fields never take the bit a 3D layer's draw-once mask owns.
 ///
 /// The mask tests `NotEqual` against `kDrawOnceBit` and replaces on pass, over the whole frame.
@@ -258,6 +291,7 @@ int main() {
     too_many_tiles_fall_back();
     fields_that_overflow_fall_back();
     one_place_at_two_drawn_zooms_shares_a_code();
+    one_place_at_two_drawn_zooms_shares_a_code_in_the_fallback();
     the_fields_leave_the_draw_once_bit_alone();
     the_fallback_leaves_no_bit_for_the_mask();
     if (failures != 0) {

@@ -3,7 +3,9 @@
 #include <tsf/stencil_partition.h>
 
 #include <cstddef>
+#include <map>
 #include <tuple>
+#include <utility>
 
 namespace tsf {
 namespace {
@@ -57,14 +59,30 @@ StencilPartition partitionStencil(
     }
 
     if (!out.partitioned) {
-        // A value per tile in the whole byte, stopping short of 255 as the renderer always has.
-        // This spends `kDrawOnceBit` too, so a frame that lands here has no draw-once mask to
-        // give a 3D layer; `partitioned` is what the renderer reads to know that.
+        // A value per *place* in the whole byte, stopping short of 255 as the renderer always
+        // has. This spends `kDrawOnceBit` too, so a frame that lands here has no draw-once mask
+        // to give a 3D layer; `partitioned` is what the renderer reads to know that.
+        //
+        // Per place, not per `TileID`, for the reason the codes above are: two sources can name
+        // one canonical tile at different drawn zooms and they cover the same ground. Keyed on
+        // the whole id they took different values, both masks painted the same pixels, the later
+        // one won, and every fragment of the other group's geometry failed its test. What that
+        // looks like is a layer that vanishes completely the moment another source is added --
+        // a terrain pane losing its water and its roads to a `color-relief` layer, with nothing
+        // reported anywhere.
+        std::map<std::pair<std::uint8_t, Cell>, std::uint8_t> places;
         std::uint8_t next = 1;
         for (const TileID& tile : tiles) {
+            const std::pair<std::uint8_t, Cell> place{tile.z, Cell{tile.wrap, tile.x, tile.y}};
+            const auto found = places.find(place);
+            if (found != places.end()) {
+                out.tiles[tile] = StencilAssignment{found->second, 0xFF, 0xFF};
+                continue;
+            }
             if (next == 255) {
                 break;
             }
+            places.emplace(place, next);
             out.tiles[tile] = StencilAssignment{next++, 0xFF, 0xFF};
         }
         return out;
