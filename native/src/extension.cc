@@ -120,6 +120,19 @@ struct Slot {
   std::uint8_t offscreenBits = 0;
   /// How many passes `offscreen` was built for, so a style or a zoom that adds one is noticed.
   std::size_t offscreenBuilt = 0;
+  /// `records()` after the last tick, which is how a tick that changed nothing is recognized.
+  ///
+  /// The counter's own contract is that "a frame that changes nothing adds none", so the
+  /// difference between two ticks is exactly whether the producer published anything -- a
+  /// camera move, a tile landing, a fade stepping, a placement changing. Nothing else here has
+  /// to enumerate those.
+  std::uint64_t lastRecords = 0;
+  /// Whether this slot's picture differs from the one already on screen.
+  ///
+  /// True until the first frame has been drawn, and after anything that changes the view
+  /// without going through the producer -- an attach, a resize, a projection or camera applied
+  /// for the first time. See `needsRedraw`, which is what fluorite asks.
+  bool dirty = true;
 };
 
 struct State {
@@ -373,11 +386,13 @@ void frame(void* /*user*/, std::uint32_t slot, double delta_s) {
                                  ? TESSELLA_WORLD_COPIES_ONE
                                  : TESSELLA_WORLD_COPIES_REPEATED);
     held.projection.applied = true;
+    held.dirty = true;
   }
   if (!held.camera.applied) {
     held.map->setCamera(held.camera.latitude, held.camera.longitude, held.camera.zoom,
                         held.camera.bearing, held.camera.pitch);
     held.camera.applied = true;
+    held.dirty = true;
   }
   // Before the tick, so this frame's fades are stepped by the time this frame took. Without it a
   // fade completes in one step and a label that stops being placed at one anchor and starts at
@@ -391,6 +406,19 @@ void frame(void* /*user*/, std::uint32_t slot, double delta_s) {
     held.map->advance(delta_s * 1000.0);
   }
   held.map->tick();
+  // What the tick changed, which is the whole of the redraw decision. `records()` counts what
+  // the renderer read, and a frame that changes nothing adds none -- so a tick that leaves it
+  // where it was leaves the Filament scene exactly as the last render drew it, and drawing it
+  // again can only produce the same picture. Or very nearly: a heatmap sums its kernels into a
+  // half-float target and float addition is not associative, so the same scene rendered twice
+  // differs in the low bits -- 8,737 pixels of 1,024,000 on every frame of a map held still,
+  // which is a shimmer over every label and icon standing on it. Not drawing is what fixes
+  // that, and it is also six fewer GPU renders a frame on a six-pane wall.
+  const std::uint64_t records = held.map->records();
+  if (records != held.lastRecords) {
+    held.dirty = true;
+    held.lastRecords = records;
+  }
   // A tick that fails leaves the consumer holding the previous frame, and the map looks frozen
   // while every counter above it keeps moving -- the camera advances, the producer renders, and
   // nothing says why. Said once per slot, like the atlas mismatch, because a failure that
@@ -416,7 +444,11 @@ void frame(void* /*user*/, std::uint32_t slot, double delta_s) {
     // the rest are left as fluorite set them.
     held.view->setVisibleLayers(held.offscreenBits, 0);
   }
-  renderOffscreen(shared, held);
+  // Only when something changed, for the reason above: these are the kernels whose sum is not
+  // reproducible, so re-running them over an unchanged map is what the shimmer was.
+  if (held.dirty) {
+    renderOffscreen(shared, held);
+  }
   // Said once per slot. A `texsize` that disagrees with the atlas bound for it draws every glyph
   // as a magnified corner of itself, and the only place that has been seen is here -- so the
   // report is here rather than in a probe that cannot reproduce it.
@@ -476,6 +508,30 @@ void frame(void* /*user*/, std::uint32_t slot, double delta_s) {
                       static_cast<double>(held.map->drainNs()) / 1.0e6, delta_s);
 }
 
+/// Whether this slot has anything new to show, which fluorite asks after `frame`.
+///
+/// Zero is a promise that drawing this view again would produce the picture already on screen,
+/// and fluorite takes it by skipping the render and the submit. The promise is only ours to
+/// make because the extension owns these views: the harbor example puts no ECS content in
+/// them, and an app that does has to leave this unanswered. See `FluoriteViewExtension`.
+///
+/// Cleared here rather than in `frame`, because `frame` is what sets it and this is the last
+/// word before the render that consumes it.
+int needs_redraw(void* /*user*/, const std::uint32_t slot) {
+  State& shared = state();
+  const std::lock_guard<std::mutex> lock(shared.mutex);
+  if (slot >= shared.slots.size()) {
+    return 1;
+  }
+  Slot& held = shared.slots[slot];
+  if (!held.map) {
+    return 1;
+  }
+  const bool draw = held.dirty;
+  held.dirty = false;
+  return draw ? 1 : 0;
+}
+
 void resize(void* /*user*/,
             std::uint32_t slot,
             std::uint32_t width,
@@ -493,6 +549,9 @@ void resize(void* /*user*/,
     return;
   }
   held.map->setViewport(width, height);
+  // The viewport is not the producer's to publish, so a resize can leave `records()` where it
+  // was while the picture has to be drawn again at the new size.
+  held.dirty = true;
 }
 
 void detach(void* /*user*/, std::uint32_t slot) {
@@ -558,6 +617,7 @@ extern "C" int32_t tessella_fluorite_install(void) {
       .frame = frame,
       .detach = detach,
       .resize = resize,
+      .needs_redraw = needs_redraw,
   };
   fluorite_set_view_extension(&extension);
   // The other half of the pair above: from here on, a view the host attaches
