@@ -152,7 +152,13 @@ class City {
 const List<City> kCities = <City>[
   City(name: 'Hong Kong', latitude: _harbourLat, longitude: _harbourLon),
   City(name: 'Tokyo', latitude: 35.6800, longitude: 139.7600),
-  City(name: 'San Francisco', latitude: 37.7800, longitude: -122.4200),
+  // The north shore rather than downtown: Fort Mason to the east, the Presidio to the west and
+  // the Golden Gate off the north-west corner. Downtown is a street grid, which the day and
+  // night panes already have in Hong Kong and Tokyo; this is the one city of the three with a
+  // bridge, a headland and a waterfront in one frame, and the terrain pane has something to
+  // climb. Every pane's offset stays inside the archive from here -- the globe pane reaches
+  // furthest, to -122.545, against a cut that starts at -122.60.
+  City(name: 'San Francisco', latitude: 37.8060, longitude: -122.4550),
 ];
 
 /// [pane]'s camera over [city]: its own framing, moved by the city's offset from the first.

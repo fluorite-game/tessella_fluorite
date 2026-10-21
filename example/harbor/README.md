@@ -54,8 +54,19 @@ its cache directory, `HARBOR_DEM_CACHE` or `~/.cache/harbor-dem`.
 Then bundle and run, per the quad example's notes:
 
     dart run bin/emb.dart bundle -a <this dir> -m debug -o <out> --build
-    TESSELLA_STYLE_DIR=<this dir>/styles TESSELLA_MATERIALS=<filamat dir> \
+    TESSELLA_STYLE_DIR=<this dir>/styles TESSELLA_MATERIALS=<filamat dir> TSF_SLAB_MIB=256 \
     LD_LIBRARY_PATH=<out>/lib homescreen -b <out> --backend=wayland-vulkan -w 1920 --height 1150
+
+`TSF_SLAB_MIB` is not optional once the wall is flying. A pane of this wall is about 640x575, so
+`map_view.cc` gives it the 64 MiB floor -- a number chosen for a map that stays where it is. A
+camera that crosses the planet every dwell keeps one city's geometry in the slab while the next
+is being built, and the day pane, which is the heaviest (z15, 3D buildings, bilingual labels),
+saturates: 63.4 of 63.5 MiB, and it stays there.
+
+What that looks like is worth knowing, because nothing says it. The pane keeps rendering, the
+HUD keeps counting frames, `pending` is 0 and `state` is `ready` -- and the picture is the last
+city it managed to build, while the camera flies on without it. At 256 MiB the same pane runs
+between 42 and 104 MiB live over a full round and never sticks.
 
 `TESSELLA_DWELL_S` is how long the wall stays in one city and `TESSELLA_ORBIT_S` is how long
 one orbit takes -- 45 and 25 seconds. A dwell of zero stays in the first city for ever, which is
