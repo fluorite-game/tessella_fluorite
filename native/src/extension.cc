@@ -341,6 +341,18 @@ void renderOffscreen(State& shared, Slot& held) {
     if (shared.offscreenRenderer == nullptr) {
       return;
     }
+    // Cleared every pass, to nothing. Filament's default is `clear = false`, which for a target
+    // that is *summed into* means this frame's kernels land on the last frame's and the one
+    // before it, for as long as the app runs. A heatmap with a hundred frames behind it is a
+    // field whose every lit pixel is far past the ramp's top stop, so what it draws is a flat
+    // disc of the last color with a one-pixel rim where the kernel finally falls below it --
+    // which is exactly what the harbor demo showed and what `render_probe` does not, because a
+    // probe captures two frames in and sets this on its own renderer.
+    //
+    // Transparent black rather than opaque: the density *is* the color here, and a target
+    // cleared to alpha one starts every pixel at the top of the ramp.
+    shared.offscreenRenderer->setClearOptions(
+        {.clearColor = {0.0f, 0.0f, 0.0f, 0.0f}, .clear = true});
   }
   for (filament::View* off : held.offscreen) {
     shared.offscreenRenderer->renderStandaloneView(off);
