@@ -108,6 +108,17 @@ mbgl draws the same spikes from the same tile, so this is the style's error and 
 `earth` mixes the same way -- its coastlines are LineStrings -- and is filtered for the same
 reason, though it shows nothing here because `water` is painted over it.
 
+**And `water` names the kinds it means.** Geometry type is not the whole of it: of 373 polygon
+features in `water` across 99 z14 tiles here, 102 are swimming pools, 25 are fountains and 11
+are reefs -- a third of them, painted the same color as Victoria Harbour. The pools are the ones
+that read as a renderer fault rather than as data, because a pool is a rectangle and the
+terrarium DSM puts Kowloon's podiums on hillsides that do not exist, so they sit on slopes.
+
+An allow-list -- `ocean`, `water`, `lake`, `river`, `dock` -- rather than dropping the two kinds
+that were noticed. A deny-list would have left `reef` painted as sea and would let in whatever
+Protomaps adds next; the layer is a schema this tree does not control. `earth` needs none: it
+carries one kind.
+
 **Place labels are ranked and filtered.** Nothing ranked them, so which won a contested spot came
 down to the offer order -- and that order rotates with the bearing, because `placement_tile_order`
 rotates each tile's position. A `symbol-sort-key` makes the priority explicit, and the z13 pane
