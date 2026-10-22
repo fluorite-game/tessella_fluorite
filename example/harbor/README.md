@@ -161,14 +161,23 @@ Three things it needs, and one defect it found:
 ## What is not here
 
 A seventh pane. Filament's Vulkan backend has a pool of **32 timer queries, process-wide** --
-`utils::bitset32` in `VulkanQueryManager` -- and on exhaustion `getNextQuery` returns an empty
-handle that `VulkanDriver::createTimerQueryS` takes unchecked, so the process dies rather than
-losing a frame's timing. Six platform views are six Filament renderers and sit just under it;
-seven do not, so the set is six and `raster.json` sits out.
+`utils::bitset32` in `VulkanQueryManager` -- and six platform views are six Filament renderers,
+which sits just under it. Seven does not, so the set is six and `raster.json` sits out.
 
-Six is not comfortable either: moving the window between outputs re-runs the dma-buf
-negotiation, and that has been enough to cross the ceiling and kill a running wall.
-toyota-connected/ivi-homescreen#815. An earlier note here blamed the shell's own timer handling
--- `shell/timer.cc` has no such bound, and the message does not come from the shell at all. `styles/raster.json` is still here and still works -- raster under vector, with opacity,
+Past the pool `getNextQuery` returns an empty handle. `VulkanDriver::createTimerQueryS` took it
+unchecked and the process died rather than losing a frame's timing; fluorite patch 0027 checks
+it, and it is filed upstream as google/filament#10659. **A build from this tree does not have
+that yet** -- the `fluorite` path dependency points at a checkout from before the patch, and the
+Filament it links is a staged build from before it as well. Both have to be refreshed.
+
+The cap itself is unchanged and is not configurable, so six is still the limit either way, and
+the fix only means a frame loses its timing instead of taking the process down. Moving the
+window between outputs re-runs the dma-buf negotiation, which is enough to push the outstanding
+count past the ceiling. toyota-connected/ivi-homescreen#815.
+
+An earlier note here blamed the shell's own timer handling -- `shell/timer.cc` has no such
+bound, and the message does not come from the shell at all.
+
+`styles/raster.json` is still here and still works -- raster under vector, with opacity,
 saturation, contrast, hue-rotate and the brightness clamp -- it is simply not in the default set.
 Point `TESSELLA_PANE_ONLY` at it, or swap it back into `kPanes`.
