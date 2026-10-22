@@ -98,8 +98,8 @@ struct Slot {
   filament::View* view = nullptr;
   /// Whether the atlas mismatch has already been reported for this slot.
   bool reportedMismatch = false;
-  /// Whether a failing tick has already been reported for this slot.
-  bool reportedFailure = false;
+  /// The tick result this slot last reported, so a change is what gets said.
+  tessella_result reportedResult = TESSELLA_OK;
   /// Frames this slot has been ticked, for the periodic report below.
   std::uint64_t frames = 0;
   /// Whether the per-frame drop counters have been reported for this slot.
@@ -372,6 +372,9 @@ void renderOffscreen(State& shared, Slot& held) {
   }
 }
 
+/// A `tessella_result` by name. Defined below, beside the table it reads.
+const char* result_name(tessella_result result);
+
 void frame(void* /*user*/, std::uint32_t slot, double delta_s) {
   State& shared = state();
   const std::lock_guard<std::mutex> lock(shared.mutex);
@@ -435,16 +438,27 @@ void frame(void* /*user*/, std::uint32_t slot, double delta_s) {
   // while every counter above it keeps moving -- the camera advances, the producer renders, and
   // nothing says why. Said once per slot, like the atlas mismatch, because a failure that
   // repeats every frame repeats forever.
-  if (!held.reportedFailure) {
+  // Said on every *change* of result rather than once. A tick that fails leaves the consumer
+  // holding the previous frame, and the map looks frozen while every counter above it keeps
+  // moving -- the camera advances, the producer renders, and nothing says why. Said once was
+  // right for a failure that repeats for ever; it is wrong for one that comes and goes, because
+  // the second kind reports its first stumble and then never mentions the hour it spent stuck.
+  {
     const tessella_result result = held.map->lastResult();
-    if (result != TESSELLA_OK) {
-      held.reportedFailure = true;
-      std::string why;
-      (void)held.map->readiness(&why);
-      std::fprintf(stderr,
-                   "[tessella_fluorite] slot %u: tick failed with result %d (%s); the frame is "
-                   "not published and the view holds the last one\n",
-                   slot, static_cast<int>(result), why.c_str());
+    if (result != held.reportedResult) {
+      held.reportedResult = result;
+      if (result == TESSELLA_OK) {
+        std::fprintf(stderr, "[tessella_fluorite] slot %u: publishing again\n", slot);
+      } else {
+        std::fprintf(stderr,
+                     "[tessella_fluorite] slot %u: tick failed with %s; the frame is not "
+                     "published and the view holds the last one%s\n",
+                     slot, result_name(result),
+                     result == TESSELLA_REGION_FULL
+                         ? " -- the slab region is full after a whole compaction, so raise"
+                           " TSF_SLAB_MIB"
+                         : "");
+      }
     }
   }
   // After the tick, which is what announces a target, and before fluorite begins the pane's
@@ -527,6 +541,37 @@ void frame(void* /*user*/, std::uint32_t slot, double delta_s) {
 /// have is the error this exists to avoid.
 template <class Extension>
 void install_needs_redraw(Extension& ext);
+
+/// A `tessella_result` by name, for a message a reader can act on.
+///
+/// The number alone was what this printed, beside a reason taken from `readiness` -- which
+/// answers how far the *sources* are and so explained a full slab region with a list of tiles
+/// that failed to fetch. Two true statements about different things, read as one.
+const char* result_name(const tessella_result result) {
+  switch (result) {
+    case TESSELLA_OK: return "TESSELLA_OK";
+    case TESSELLA_NULL_ARGUMENT: return "TESSELLA_NULL_ARGUMENT";
+    case TESSELLA_NO_SUCH_MAP: return "TESSELLA_NO_SUCH_MAP";
+    case TESSELLA_NOT_UTF8: return "TESSELLA_NOT_UTF8";
+    case TESSELLA_BAD_STYLE: return "TESSELLA_BAD_STYLE";
+    case TESSELLA_RING_FULL: return "TESSELLA_RING_FULL";
+    case TESSELLA_FAILED: return "TESSELLA_FAILED";
+    case TESSELLA_REGION_FULL: return "TESSELLA_REGION_FULL";
+    case TESSELLA_NOT_HOSTED: return "TESSELLA_NOT_HOSTED";
+    case TESSELLA_BAD_ANNOTATIONS: return "TESSELLA_BAD_ANNOTATIONS";
+    case TESSELLA_NO_SUCH_SOURCE: return "TESSELLA_NO_SUCH_SOURCE";
+    case TESSELLA_BAD_GEOJSON: return "TESSELLA_BAD_GEOJSON";
+    case TESSELLA_NOT_RESOLVED: return "TESSELLA_NOT_RESOLVED";
+    case TESSELLA_BAD_IMAGE: return "TESSELLA_BAD_IMAGE";
+    case TESSELLA_OFF_THE_MAP: return "TESSELLA_OFF_THE_MAP";
+    case TESSELLA_NO_CACHE: return "TESSELLA_NO_CACHE";
+    case TESSELLA_NO_SUCH_REGION: return "TESSELLA_NO_SUCH_REGION";
+    case TESSELLA_ALREADY_RUNNING: return "TESSELLA_ALREADY_RUNNING";
+    case TESSELLA_BAD_FEATURE_STATE: return "TESSELLA_BAD_FEATURE_STATE";
+    case TESSELLA_TOO_SMALL: return "TESSELLA_TOO_SMALL";
+  }
+  return "an unnamed tessella_result";
+}
 
 /// Whether this slot has anything new to show, which fluorite asks after `frame`.
 ///
@@ -784,6 +829,7 @@ extern "C" int32_t tessella_fluorite_stats_of(uint32_t slot, tessella_fluorite_s
   out->bearing = held.camera.bearing;
   out->pitch = held.camera.pitch;
   out->readiness = static_cast<int32_t>(held.map->readiness());
+  out->last_result = static_cast<int32_t>(held.map->lastResult());
   return 0;
 }
 

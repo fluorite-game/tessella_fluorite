@@ -61,6 +61,7 @@ class MapStats {
     required this.ringPeakMib,
     required this.position,
     required this.readiness,
+    required this.lastResult,
   });
 
   /// Frames this pane has been ticked, and its rate over the recent window.
@@ -97,6 +98,14 @@ class MapStats {
   final MapPosition position;
 
   final MapReadiness readiness;
+
+  /// `tessella_result` from the most recent tick: 0 is a tick that published.
+  ///
+  /// Not the same question as [readiness], which is how far the *sources* are.
+  /// A pane whose slab region is full reads `ready` there for ever -- its tiles
+  /// arrived and the frame they would have made has nowhere to go -- and 7,
+  /// `TESSELLA_REGION_FULL`, here.
+  final int lastResult;
 
   /// Total frame cost on the last tick.
   double get tickMs => produceMs + drainMs;
@@ -269,6 +278,7 @@ abstract final class TessellaMaps {
           pitch: s.pitch,
         ),
         readiness: _readinessOf(s.readiness),
+        lastResult: s.lastResult,
       );
     } finally {
       calloc.free(buffer);

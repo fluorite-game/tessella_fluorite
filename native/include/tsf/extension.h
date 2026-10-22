@@ -115,7 +115,23 @@ typedef struct tessella_fluorite_stats {
     double bearing;
     double pitch;
     /// `tessella_readiness`, or -1 when nothing is attached.
+    ///
+    /// How far the *sources* are, which is not the same question as whether the
+    /// map can publish. A pane whose slab region is full reads `ready` here for
+    /// ever: its tiles arrived, its glyphs arrived, and the frame they would
+    /// have made has nowhere to go. See `last_result`.
     int32_t readiness;
+    /// `tessella_result` from the most recent tick, or -1 when nothing is
+    /// attached.
+    ///
+    /// `TESSELLA_OK` on a tick that published. Anything else is a frame that
+    /// did not, and the one worth naming is `TESSELLA_REGION_FULL`: the slab
+    /// has been compacted whole and the frame still does not fit, so the
+    /// consumer keeps the last picture it was given while the camera moves on
+    /// without it. Nothing else in these numbers says that -- `fps` keeps
+    /// counting, `pending` is zero, `readiness` is `ready`, and `slab_mib`
+    /// sits at its capacity for anyone who thinks to compare the two.
+    int32_t last_result;
 } tessella_fluorite_stats;
 
 /// Fills `out` for slot `slot`. Returns 0, or -1 when nothing is attached or

@@ -76,6 +76,9 @@ final class TessellaStats extends Struct {
   external double pitch;
   @Int32()
   external int readiness;
+
+  @Int32()
+  external int lastResult;
 }
 
 @Native<Int32 Function(Uint32, Pointer<TessellaStats>)>()
