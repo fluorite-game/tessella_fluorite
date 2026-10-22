@@ -63,10 +63,13 @@ camera that crosses the planet every dwell keeps one city's geometry in the slab
 is being built, and the day pane, which is the heaviest (z15, 3D buildings, bilingual labels),
 saturates: 63.4 of 63.5 MiB, and it stays there.
 
-What that looks like is worth knowing, because nothing says it. The pane keeps rendering, the
-HUD keeps counting frames, `pending` is 0 and `state` is `ready` -- and the picture is the last
-city it managed to build, while the camera flies on without it. At 256 MiB the same pane runs
-between 42 and 104 MiB live over a full round and never sticks.
+What that looks like is worth knowing. The pane keeps rendering, the HUD keeps counting frames,
+`pending` is 0 -- and the picture is the last city it managed to build, while the camera flies on
+without it. The HUD's `state` says so now: `ready · region full`, readiness and the last tick's
+result side by side, because they answer different questions and this is the gap between them.
+It said only `ready` when this was first hit, which is how it went unnoticed for an afternoon.
+
+At 256 MiB the same pane runs between 42 and 104 MiB live over a full round and never sticks.
 
 `TESSELLA_DWELL_S` is how long the wall stays in one city and `TESSELLA_ORBIT_S` is how long
 one orbit takes -- 45 and 25 seconds. A dwell of zero stays in the first city for ever, which is

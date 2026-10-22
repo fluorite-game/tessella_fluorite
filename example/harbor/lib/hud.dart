@@ -97,7 +97,18 @@ class _MapHudState extends State<MapHud> {
                     '${stats.slabMib.toStringAsFixed(1)} MiB',
               ),
               _row('ring', '${stats.ringPeakMib.toStringAsFixed(2)} MiB'),
-              _row('state', stats.readiness.name),
+              // Readiness and the last tick's result, because they answer different questions
+              // and the gap between them is where a frozen pane hides: a slab region that is
+              // full leaves the sources `ready` for ever while nothing can be published.
+              _row(
+                'state',
+                stats.lastResult == 0
+                    ? stats.readiness.name
+                    : '${stats.readiness.name} \u00b7 '
+                        // 7 is `TESSELLA_REGION_FULL`, which is the one worth a name: it is
+                        // the one that looks like nothing is wrong.
+                        '${stats.lastResult == 7 ? 'region full' : 'result ${stats.lastResult}'}',
+              ),
             ],
           ],
         ),
