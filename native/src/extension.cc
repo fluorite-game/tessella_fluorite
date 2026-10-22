@@ -520,6 +520,14 @@ void frame(void* /*user*/, std::uint32_t slot, double delta_s) {
                       static_cast<double>(held.map->drainNs()) / 1.0e6, delta_s);
 }
 
+/// Sets `needs_redraw` on `ext` where the fluorite being built against declares one.
+///
+/// A template so that `if constexpr` can discard the assignment without checking it: outside a
+/// template both branches are still checked, and the one naming a field an older header does not
+/// have is the error this exists to avoid.
+template <class Extension>
+void install_needs_redraw(Extension& ext);
+
 /// Whether this slot has anything new to show, which fluorite asks after `frame`.
 ///
 /// Zero is a promise that drawing this view again would produce the picture already on screen,
@@ -529,7 +537,10 @@ void frame(void* /*user*/, std::uint32_t slot, double delta_s) {
 ///
 /// Cleared here rather than in `frame`, because `frame` is what sets it and this is the last
 /// word before the render that consumes it.
-int needs_redraw(void* /*user*/, const std::uint32_t slot) {
+// `maybe_unused` because `install_needs_redraw` discards its only call against a fluorite whose
+// header has no such field, and this file is compiled with `-Werror`: an internal function with
+// no remaining caller is "not needed and will not be emitted", which is true and is the point.
+[[maybe_unused]] int needs_redraw(void* /*user*/, const std::uint32_t slot) {
   State& shared = state();
   const std::lock_guard<std::mutex> lock(shared.mutex);
   if (slot >= shared.slots.size()) {
@@ -542,6 +553,13 @@ int needs_redraw(void* /*user*/, const std::uint32_t slot) {
   const bool draw = held.dirty;
   held.dirty = false;
   return draw ? 1 : 0;
+}
+
+template <class Extension>
+void install_needs_redraw(Extension& ext) {
+  if constexpr (requires { ext.needs_redraw; }) {
+    ext.needs_redraw = needs_redraw;
+  }
 }
 
 void resize(void* /*user*/,
@@ -623,14 +641,30 @@ extern "C" int32_t tessella_fluorite_install(void) {
   }
   // Outside the lock: fluorite copies the struct under its own, and holding
   // both at once is an ordering nothing else needs.
-  const FluoriteViewExtension extension{
-      .user = nullptr,
-      .attach = attach,
-      .frame = frame,
-      .detach = detach,
-      .resize = resize,
-      .needs_redraw = needs_redraw,
-  };
+  // Value-initialized and then assigned, rather than a designated initializer list. The list
+  // has to name every field or `-Wmissing-designated-field-initializers` fails the build, and
+  // naming one an older header does not have fails it the other way -- so a list cannot be
+  // written that compiles against both, and this is the shape that can.
+  FluoriteViewExtension extension{};
+  extension.user = nullptr;
+  extension.attach = attach;
+  extension.frame = frame;
+  extension.detach = detach;
+  extension.resize = resize;
+  // `needs_redraw` is newer than some fluorite this may be built against, and this package
+  // pins none: `tessella_fluorite: fluorite_include` is whatever host layout points at. A
+  // designated initializer naming a field the header does not have is a hard error -- "field
+  // designator 'needs_redraw' does not refer to any field" -- and that is a build this tree
+  // cannot fix from here, so it is asked for rather than assumed.
+  //
+  // Assigned rather than initialized because a designated initializer cannot be conditional,
+  // and through a template because `if constexpr` only leaves its discarded branch
+  // uninstantiated inside one -- in a plain function both halves are still checked, which is
+  // the same hard error moved three lines.
+  //
+  // An older fluorite then gets exactly what it got before: a struct with no such field, and a
+  // producer that draws every frame.
+  install_needs_redraw(extension);
   fluorite_set_view_extension(&extension);
   // The other half of the pair above: from here on, a view the host attaches
   // reaches `attach`. Silence after this line means the host never called it.
