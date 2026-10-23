@@ -23,9 +23,12 @@ class MapHud extends StatefulWidget {
   /// Ticks when it is time to read the stats again.
   ///
   /// One timer for every pane, owned by the app, rather than a `Timer.periodic`
-  /// each. The shell refuses past thirty-two timers and dies -- seven panes
-  /// reached it -- and a timer per HUD is the wrong shape anyway: they all want
-  /// the same half-second.
+  /// each: they all want the same half-second, so one tick serves them all.
+  ///
+  /// An earlier note here said the shell dies past thirty-two timers and that
+  /// seven panes reached it. Neither is true. `shell/timer.cc` puts a timerfd
+  /// per timer on one epoll set with no ceiling, and the thirty-two is
+  /// Filament's Vulkan timer-query pool -- nothing a Dart timer touches.
   final Listenable poll;
 
   @override

@@ -182,19 +182,22 @@ One thing it needs, one defect it found, and two findings that were not defects:
 ## What is not here
 
 A seventh pane. Filament's Vulkan backend has a pool of **32 timer queries, process-wide** --
-`utils::bitset32` in `VulkanQueryManager` -- and six platform views are six Filament renderers,
-which sits just under it. Seven does not, so the set is six and `raster.json` sits out.
+`utils::bitset32` in `VulkanQueryManager` -- and a `filament::Renderer` takes **four** of them
+for as long as it lives, for the `FrameInfoManager` it holds. The ceiling is therefore eight
+renderers, and six panes plus the extension's own renderer is seven, or 28 of 32. A seventh pane
+is the whole pool, so the set is six and `raster.json` sits out.
 
-Past the pool `getNextQuery` returns an empty handle. `VulkanDriver::createTimerQueryS` took it
-unchecked and the process died rather than losing a frame's timing; fluorite patch 0027 checks
-it, and it is filed upstream as google/filament#10659. **A build from this tree does not have
-that yet** -- the `fluorite` path dependency points at a checkout from before the patch, and the
-Filament it links is a staged build from before it as well. Both have to be refreshed.
+Past the pool `getNextQuery` returns an empty handle, and `VulkanDriver::createTimerQueryS` took
+it unchecked: the process died rather than losing a frame's timing. fluorite patch 0027 checks
+it, and **a build from this tree has it** -- the guard is in the overlay's `libbackend.a` and in
+the bundle's `libfluorite_core_ffi.so`. Upstream it is google/filament#10666, approved, not yet
+merged. Moving the window between outputs re-runs the dma-buf negotiation, which is what pushed
+the outstanding count past the ceiling; it no longer takes the shell down.
 
-The cap itself is unchanged and is not configurable, so six is still the limit either way, and
-the fix only means a frame loses its timing instead of taking the process down. Moving the
-window between outputs re-runs the dma-buf negotiation, which is enough to push the outstanding
-count past the ceiling. toyota-connected/ivi-homescreen#815.
+The cap itself is unchanged and is not configurable, so six panes is still the shape of this
+demo. What changed is the failure past it: a frame loses its timing instead of the process
+dying, and a capture no longer spends four of the queries on a renderer of its own
+(fluorite#659). toyota-connected/ivi-homescreen#815.
 
 An earlier note here blamed the shell's own timer handling -- `shell/timer.cc` has no such
 bound, and the message does not come from the shell at all.
