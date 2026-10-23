@@ -134,7 +134,7 @@ swaps a second; the residue is mbgl's own behavior under a camera that never sto
 the water and roads from the vector source, and place labels -- with `terrain.exaggeration` at
 1.3. The DEM is AWS's open terrarium tiles, served locally like everything else.
 
-Two things it needs, one defect it found, and one that was not a defect:
+One thing it needs, one defect it found, and two findings that were not defects:
 
 - **An overzoomed `raster-dem` draws. This bullet used to say it does not** -- that the near
   field came out blank with the source at `maxzoom` 12 and the pane at z14.6, that a 90-second
@@ -159,14 +159,17 @@ Two things it needs, one defect it found, and one that was not a defect:
 
   The spikes are a separate finding and stand: at z13 the mesh could not resolve a 67 m hill and
   pulled one vertex into a needle, which native tiles under the camera fixed.
-- **The DEM extract ends before the horizon does.** The archive is z8-z14 over
-  113.203..114.961, 21.943..23.241, and only z13 and z14 near the harbor. The pane orbits at
-  pitch 68, which reaches past that: at bearing 195 the cover asks for three tiles south of
-  21.943 that do not exist, and with no DEM there is no color-relief and no hillshade, so the
-  background shows through the islands beyond Po Toi -- 4,220 pixels of it, against 0 at pitch
-  62 and below. Serving a flat sea-level terrarium tile for the 94 misses takes it to 2. This
-  style has no land fill under the relief, so any gap in the DEM reads as sky rather than as
-  unshaded ground.
+- **A gap in the DEM reads as sky.** This style has no land fill under the relief, so where
+  there is no elevation there is no color-relief and no hillshade and the background shows
+  through -- not unshaded ground, which is what a style with a land fill would give.
+
+  It used to be reachable, and that is the only reason this bullet is still here. The DEM was a
+  bounded extract, z8-z14 over 113.203..114.961, 21.943..23.241, and the pane's pitch 68 at
+  bearing 195 asked for three tiles south of its southern edge: 4,220 pixels of background
+  through the islands beyond Po Toi, against 0 at pitch 62 and below, and down to 2 when a flat
+  sea-level tile stood in for the 94 misses. `tools/dem.py` fetches any z/x/y from upstream and
+  caches it, so there is no edge left to orbit past -- the pane's z13 camera against the
+  declared `maxzoom` 14 draws 635 primitives with no sky at all.
 - **Terrarium carries bathymetry.** The sea floor runs to -208 m off Hong Kong, and left alone
   the shoreline is a cliff whose face the hillshade lights white. The tiles are clamped to zero
   below sea level.
