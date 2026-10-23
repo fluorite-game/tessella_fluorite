@@ -134,13 +134,31 @@ swaps a second; the residue is mbgl's own behavior under a camera that never sto
 the water and roads from the vector source, and place labels -- with `terrain.exaggeration` at
 1.3. The DEM is AWS's open terrarium tiles, served locally like everything else.
 
-Three things it needs, and one defect it found:
+Two things it needs, one defect it found, and one that was not a defect:
 
-- **An overzoomed `raster-dem` does not draw.** With the source at `maxzoom` 12 and the pane at
-  z14.6 the near field came out blank while the far field was fine, and a 90-second budget with
-  `image_stable 1` ruled out starvation. Native z13 and z14 tiles for the pane's own area fixed
-  it -- and fixed the spikes with it: at z13 the mesh could not resolve a 67 m hill and pulled
-  one vertex into a needle. Keep the camera at or below the DEM's own maxzoom.
+- **An overzoomed `raster-dem` draws. This bullet used to say it does not** -- that the near
+  field came out blank with the source at `maxzoom` 12 and the pane at z14.6, that a 90-second
+  budget with `image_stable 1` ruled out starvation, and that the camera had to stay at or below
+  the DEM's own maxzoom. It does not reproduce, and the camera is back at z13.
+
+  Measured over four declared maxzooms at the pane's own camera: 15, 14, 13 and 12 leave 5, 2, 0
+  and 0 sky pixels of 1,024,000, every frame fully lit. At Berlin, where the renderer's own
+  `terrain_cover_p` is held against a magenta background, all four read zero holes at z14 p0 and
+  at z16 p45, and the `maxzoom` 12 frame is **0** gross pixels from the `maxzoom` 15 one at the
+  48 threshold -- a smoothed version of the same ground, which is what a coarser DEM gives. The
+  drawable count does fall, 652 / 424 / 260 / 194 for 15 / 14 / 13 / 12, and that is one coarse
+  tile standing in for sixteen rather than anything missing.
+
+  What the blank was, as far as it can be reconstructed: the measurement ran against a
+  hand-built archive, before `tools/dem.py` was in the tree, and that archive held **only z13
+  and z14 near the harbor** -- the next bullet says so about the same archive. At `maxzoom` 12
+  every near-field request is for a z12 tile it did not have, so the near field had no DEM while
+  the far field, where its z8-z12 did reach, was fine. That is the symptom exactly, and it is
+  why native z13 and z14 tiles for the pane's area fixed it. `tools/dem.py` answers for anywhere
+  it is asked, so the gap is not there to fall into.
+
+  The spikes are a separate finding and stand: at z13 the mesh could not resolve a 67 m hill and
+  pulled one vertex into a needle, which native tiles under the camera fixed.
 - **The DEM extract ends before the horizon does.** The archive is z8-z14 over
   113.203..114.961, 21.943..23.241, and only z13 and z14 near the harbor. The pane orbits at
   pitch 68, which reaches past that: at bearing 195 the cover asks for three tiles south of

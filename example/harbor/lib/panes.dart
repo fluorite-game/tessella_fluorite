@@ -103,9 +103,20 @@ const List<Pane> kPanes = <Pane>[
     style: 'terrain.json',
     latitude: 22.2960,
     longitude: _harbourLon,
-    // 14.6, not 13: the DEM is native to z14 here, and an overzoomed raster-dem does not draw.
-    // At 13 the near field came out blank and the hills that did draw spiked into needles.
-    zoom: 14.6,
+    // 13, and an overzoomed raster-dem draws: past its maxzoom the ground is built from the
+    // coarser tile standing in for it. At this camera, declaring the DEM's maxzoom 15, 14, 13
+    // and 12 leaves 5, 2, 0 and 0 sky pixels of 1,024,000 with every frame fully lit, and z13
+    // over the native z14 source draws 635 primitives with no sky and no needles.
+    //
+    // The 14.6 that stood here was a workaround for a blank that does not reproduce. The
+    // needles it also blamed were real, and were the mesh at a zoom with no native tiles under
+    // it -- `tools/dem.py` answers for anywhere it is asked.
+    //
+    // It is not free: z13 covers far more ground for the one producer the six panes share, and
+    // the whole wall reads about 41 fps here against 51 at 14.6 -- interleaved A/B on an idle
+    // host, three pairs at the same point in the orbit. Worth it for the view, and worth
+    // knowing before blaming a frame rate on something else.
+    zoom: 13,
     bearing: 195,
     pitch: 68,
     orbit: 12,
